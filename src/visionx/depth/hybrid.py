@@ -11,8 +11,9 @@ B4 es el control clave del trabajo: ya combina las dos fuentes. Si Fusion mejora
 no B4, no se demostró que aprender la combinación agregue algo.
 
 Las anclas de la alineación son los píxeles válidos de la variante estéreo elegida en la
-config (`depth.b4.estereo`, B1 de inicio: B2 rellena con WLS y esos valores rellenados no son
-medidas independientes). Cuál variante queda se congela con validación (T05 PR 3).
+config (`depth.b4.estereo`). Se partió de B1 por prudencia (B2 rellena con WLS y esos valores
+no son medidas independientes), pero en InStereo2K val B2 dio mejor B4 (acierto-2 72,0 contra
+68,8) y quedó congelada B2 (T05 PR 3, BITACORA 2026-11-14).
 """
 
 from __future__ import annotations
