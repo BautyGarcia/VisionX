@@ -15,6 +15,7 @@ dependencies = [
 ml = [
     "torch>=2.4",
     "torchvision>=0.19",
+    "transformers>=4.45",
 ]
 # Detección y segmentación (T06): YOLO-seg y ByteTrack de Ultralytics. Licencia AGPL-3.0.
 # Trae torch; en Windows sin NVIDIA corre en CPU. Los pesos se descargan aparte, nunca en tests.
