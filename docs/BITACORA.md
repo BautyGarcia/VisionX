@@ -40,6 +40,87 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-14 — T06: detector YOLO-seg, IDs con ByteTrack, catálogo en español y CLI (sin cámara)
+
+**Tarea:** T06. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/T06-deteccion` (local, desde
+`origin/main` `15700df`). La ELP no estaba conectada y la grabación de prueba todavía no llegó.
+
+**Hecho.** Paquete nuevo `src/visionx/detection/`:
+- `YoloDetector`: YOLO-seg de Ultralytics detrás de `Detector`, sobre el ojo izquierdo, con
+  máscaras a la resolución de la imagen y `model_id` = modelo@hash de los pesos. Sin pesos, sin
+  el extra o con el modelo caído lanza `EstimatorError`; un frame sin `geometry_id`, `InvalidInput`.
+- `ByteTrackIds`: IDs temporales sin alterar las detecciones (ver problemas).
+- `FakeDetector` (guion fijo, máscara elíptica, caídas simuladas) para T07/T09/T11; es el fake
+  de detector que T01 pedía.
+- `ClassCatalog`: las 80 clases COCO con nombres en español, plurales, artículos y tildes.
+  «llaves» no se resuelve: COCO no la tiene.
+- CLI `python -m visionx.detection descargar | clases | detectar | medir`.
+- Config `detection` en `configs/default.yaml`, extra `deteccion` (ultralytics 8.4.212, lap
+  0.5.14; torch 2.15.0+cpu) y lock actualizado. TECNICO T06 y README.
+
+**Problemas y decisiones.**
+- **opencv:** Ultralytics pide `opencv-python`, que pisaría el `cv2` de `opencv-contrib-python`
+  (ArUco y WLS). Se excluyó con `override-dependencies` de uv. Verificado: cv2 5.0.0 conserva
+  `aruco` y `ximgproc` con el extra instalado.
+- **Red y privacidad:** Ultralytics manda estadísticas de uso y autoinstala dependencias que
+  faltan. El adaptador define `YOLO_OFFLINE=1`. Al probarlo intentó instalar `lap` solo y no
+  pudo (quedó offline); se agregó `lap` al extra de forma explícita.
+- **`model.track()` descartado:** oculta un objeto nuevo hasta que ByteTrack lo confirma en el
+  frame siguiente. En la imagen de prueba `zidane.jpg` como segundo frame informaba 1 objeto de 3.
+  También reemplaza la caja por la del filtro de Kalman y deja la máscara del detector. Ahora se
+  predice todo y ByteTrack solo agrega IDs; lo no confirmado sale con track `None`. Mismo caso
+  después del cambio: 3 objetos `(None, 3, None)` y luego `(6, 3, 7)`. El reinicio por sesión se
+  verificó (`frame_id` interno de 3 a 1).
+- **Hilos:** al importarse, Ultralytics fija `OMP_NUM_THREADS=1`, pero en su primera predicción
+  pone torch en núcleos−1 (7 en esta PC). Se deja así por defecto; `detection.threads` lo pisa.
+  La primera versión de este cambio forzaba 8 por un diagnóstico incompleto y se corrigió.
+
+**Evidencia.** Windows 11 (10.0.26200), Intel 8 hilos lógicos (Family 6 Model 142), sin GPU
+NVIDIA, Python 3.11.18.
+- Tests: `uv run --extra deteccion python -m pytest` da 312 aprobados (38 en
+  `tests/test_detection.py`). En un entorno aparte igual a CI (`uv sync --locked`, sin extra):
+  310 aprobados y 2 salteados (ByteTrack sin ultralytics). `ruff format --check` y `ruff check`
+  correctos.
+- Pesos bajados del release `ultralytics/assets` v8.4.0 a `weights/` (no versionado):
+  - `yolo26n-seg.pt`: 6 719 965 B, SHA-256
+    `361fbfabab285c3237700b6bb91d7ecfa602cd945fffda8dbe1242829b71e73f`.
+  - `yolo11n-seg.pt`: 6 182 636 B, SHA-256
+    `55ed65c56c91713d23e8402371c6c49a6fd84f257f7dce452e8d70e41dcbe152`.
+- `detectar` sobre `bus.jpg` y `zidane.jpg`: máscaras alineadas con las personas al revisarlas
+  a ojo. El primer frame tarda 2,2–2,8 s porque incluye la inicialización.
+- **Latencia CPU (solo orientativa):** `medir` sobre esas 2 imágenes llevadas a 1920×1080, 25
+  repeticiones, sin tracking, 7 hilos. Total = preproceso + red + máscaras a 1080p.
+
+  | imgsz | YOLO26n-seg: total mediana / p90 / red | YOLO11n-seg: total mediana / p90 / red |
+  |---|---|---|
+  | 640 | 188,7 / 227,1 / 123,6 ms | 168,8 / 219,4 / 104,2 ms |
+  | 480 | 140,2 / 214,9 / 78,8 ms | 139,9 / 167,6 / 74,3 ms |
+  | 320 | 114,7 / 139,1 / 53,0 ms | 119,1 / 139,8 / 52,0 ms |
+
+  **No es estable:** una corrida anterior igual, con 10 repeticiones, dio a 640 96,9 ms
+  (YOLO26) y 137,4 ms (YOLO11). No se registró si la notebook estaba enchufada ni su carga.
+  **No permite elegir modelo.** Las dos imágenes tampoco dicen nada de calidad: ambos modelos
+  promediaron 3,5 objetos.
+
+**Límites.** Ninguna prueba con la ELP ni con escenas propias. No se midió precisión, objetos
+chicos, pérdidas/reapariciones ni YOLOE (vocabulario abierto). Tampoco la latencia en la Mac
+de demo (MPS), que es la que decide. Los CSV quedaron en `outputs/deteccion/` local, sin
+publicar. La licencia AGPL-3.0 de Ultralytics queda anotada para la entrega; no se evaluó su
+impacto más allá del uso académico.
+
+**Pendiente cuando haya ELP o grabación (además de lo de T02 del 13/11):**
+1. `detectar <grabación> --rectificar --imagenes`: revisar que las máscaras caigan sobre los
+   objetos en la imagen rectificada de 1920×1080 y que `check_detection_frame` acepte frame y
+   detección (misma calibración/geometría).
+2. `medir` YOLO26n-seg contra YOLO11n-seg con frames ELP, en Windows y en la Mac (`device: mps`),
+   con la notebook enchufada. Repetir 3 veces para ver la variación.
+3. Grabar 3 clips de objetos de la casa (taza, botella, celular, control, silla), anotar ≥100
+   frames y contar 10 pérdidas/reapariciones. Con eso se fijan `conf` y el `track_buffer` en
+   segundos, y se decide qué clases del catálogo quedan aceptadas.
+
+**Próximo paso.** Sin cámara: publicar esta rama por PR cuando Tomás lo pida, y después seguir
+con T08 (voz) o T07 (ejecución) usando `FakeDetector`. Con la grabación: los puntos 1–3.
+
 ## 2026-11-13 — T02: captura USB, grabación, replay y rectificación (sin cámara)
 
 **Tarea:** T02. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/T02-captura` (local, apilada

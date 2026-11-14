@@ -21,6 +21,18 @@ depth:
     num_disparities: 96     # mínimo ~0,25 m a 720p
     block_size: 5
 
+detection:
+  model: yolo26n-seg        # yolo26n-seg | yolo11n-seg (referencia); comparar con `python -m visionx.detection medir`
+  weights_dir: weights      # carpeta local, ignorada por Git; `python -m visionx.detection descargar` deja ahí el .pt
+  device: cpu               # cpu | mps (Mac) | cuda:0 | auto
+  imgsz: 640                # lado mayor de la imagen que entra a la red, px (la salida vuelve a la resolución original)
+  conf: 0.25                # score mínimo para informar un objeto, en [0, 1]; candidato, falta fijarlo con clips anotados
+  iou: 0.7                  # solapamiento del NMS (YOLO26 no usa NMS y lo ignora)
+  threads: null             # hilos de torch en CPU; null = lo que elige Ultralytics (núcleos lógicos - 1)
+  track: true               # IDs temporales con ByteTrack
+  tracker: bytetrack.yaml   # config de Ultralytics; su búfer de pérdida está en frames, no en segundos
+  classes: null             # lista de clases del modelo a conservar (ej. [cup, bottle]); null = todas
+
 calibration:
   board: charuco
   squares: [11, 8]

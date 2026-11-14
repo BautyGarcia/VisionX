@@ -411,6 +411,41 @@ distinto a 3 y a 30 FPS. Medir persistencia temporal, falsos avisos y tiempo al 
 Con varios objetos iguales se pide elección. Si se pierde el elegido, suspender guía;
 no asignar su identidad al primero parecido ni inventar posición fuera de cuadro.
 
+**Implementación (`src/visionx/detection/`, BITACORA 2026-11-14).** Dos detectores con la
+interfaz `Detector`, intercambiables:
+
+| Pieza | Qué hace | Si falla |
+|---|---|---|
+| `YoloDetector` | YOLO-seg de Ultralytics sobre el ojo izquierdo; máscaras a la resolución de esa imagen (`retina_masks`), `model_id` = modelo@12 primeros del SHA-256 de los pesos | Pesos ausentes, extra no instalado o error del modelo: `EstimatorError`. Frame sin `geometry_id`: `InvalidInput`. Cero objetos: `Detection` vacía |
+| `ByteTrackIds` | Asigna un ID temporal a cada detección que ByteTrack confirmó; las nuevas se informan con track `None` hasta confirmarse. Se reinicia al cambiar de sesión | Otro tracker (BoT-SORT con ReID baja un modelo): `ValueError` |
+| `FakeDetector` | Guion fijo frame→objetos, cajas en fracciones de la imagen y máscara elíptica; puede simular caídas | Frames en `fail_on`: `EstimatorError`. No es evidencia de detección |
+| `ClassCatalog` | Nombres en español ↔ clases del modelo, con plurales, artículos y tildes; solo resuelve clases que el modelo tiene | Alias que apunta a dos clases: `ValueError` |
+
+No se usa `model.track()` de Ultralytics: oculta un objeto nuevo hasta el frame siguiente y
+reemplaza la caja del detector por la del filtro de Kalman sin mover la máscara. El búfer de
+pérdida de ByteTrack cuenta llamadas, no segundos: depende de los FPS reales del detector.
+
+Dependencia opcional `uv sync --extra deteccion` (ultralytics, AGPL-3.0, y lap). Ultralytics
+pide `opencv-python`; `pyproject.toml` lo excluye para que no pise `opencv-contrib-python`.
+El adaptador define `YOLO_OFFLINE=1` antes de importarlo: sin estadísticas de uso, sin
+consultas de red ni instalaciones automáticas. Los pesos se bajan solo con `descargar`, a
+`weights/` (ignorada por Git). Los hilos de CPU los fija Ultralytics en núcleos−1 salvo que
+`detection.threads` indique otro número.
+
+```text
+uv run python -m visionx.detection descargar --modelo yolo26n-seg yolo11n-seg
+uv run python -m visionx.detection clases "las tazas"      # qué clase entiende
+uv run python -m visionx.detection detectar recordings/escena --rectificar --imagenes
+uv run python -m visionx.detection medir carpeta --modelos yolo26n-seg yolo11n-seg --csv X
+```
+
+`detectar` acepta una imagen, una carpeta de imágenes o una grabación T02 y escribe
+`detecciones.jsonl` (sin máscaras; con área de máscara en px), `resumen.yaml` (pesos, config,
+equipo, primer frame aparte y latencia mediana/p90) e imágenes anotadas opcionales. Sin
+`--rectificar`, una grabación se rotula `sin-rectificar-WxH`; las imágenes sueltas,
+`imagen-WxH`. Esas cajas no se combinan con profundidad rectificada. `medir` compara modelos sin
+tracking, con los frames ya en memoria y calentamiento descartado.
+
 ### Buscar y distancia — T09
 
 Buscar empieza con orden/clase y detecciones recientes: bip cuando corresponde, luego dirección
@@ -880,14 +915,16 @@ vacías repartidas ahora. El consumidor comprueba hash y registra recepción en 
 ### Comandos disponibles y comprobaciones futuras
 
 Hoy la CLI publicada ofrece doctor, log y novedades. Los dos últimos aún apuntan al esquema
-documental viejo: no usarlos como bitácora/tablero vigentes. No hay CLI de cámara/modelos/modos
-terminada; cualquier comando nuevo se documentará al implementarlo, no se inventa aquí.
+documental viejo: no usarlos como bitácora/tablero vigentes. Cámara (T02) y detección (T06)
+tienen sus comandos `python -m visionx.camera` y `python -m visionx.detection`, descriptos en
+sus secciones. No hay CLI de modos terminada; se documentará al implementarla.
 
 Para preparar o comprobar una futura implementación (no ejecutar por leer este manual):
 
 ```text
 uv sync --locked
 uv sync --locked --extra ml
+uv sync --locked --extra deteccion
 uv run ruff format --check .
 uv run ruff check .
 uv run pytest

@@ -16,9 +16,21 @@ ml = [
     "torch>=2.4",
     "torchvision>=0.19",
 ]
+# Detección y segmentación (T06): YOLO-seg y ByteTrack de Ultralytics. Licencia AGPL-3.0.
+# Trae torch; en Windows sin NVIDIA corre en CPU. Los pesos se descargan aparte, nunca en tests.
+deteccion = [
+    "ultralytics>=8.4",
+    "lap>=0.5.12",  # asignación lineal de ByteTrack; Ultralytics lo instalaría solo en tiempo de uso
+]
 
 [project.scripts]
 visionx = "visionx.cli:main"
+
+[tool.uv]
+# Ultralytics pide opencv-python, pero el proyecto usa opencv-contrib-python (ArUco/ChArUco y
+# WLS de ximgproc). Ambos instalan el mismo módulo cv2 y uno pisaría al otro: se excluye
+# opencv-python con un marcador que nunca se cumple. contrib ya provee todo lo que usa YOLO.
+override-dependencies = ["opencv-python; sys_platform == 'never'"]
 
 [dependency-groups]
 dev = [
