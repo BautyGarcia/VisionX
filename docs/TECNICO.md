@@ -221,6 +221,15 @@ Congelar cuál variante estéreo aporta B4 y sus umbrales con validación, antes
   la geometría con `num_disparities_for(geometry, Z_min)`. Un 96 fijo deja ciegos los cercanos.
 - **Ajuste y test:** se ajusta con InStereo2K val; el evaluador rechaza el grupo test salvo con
   `--test-congelado` (decidido 14/11).
+- **Cómo se ajusta (`tuning.py`, `python -m visionx.depth ajustar`):** objetivo único
+  **acierto-2** (% de los píxeles con GT respondidos con error ≤ 2 px, media por muestra), que
+  junta cobertura y error. Cuatro etapas, cada una con lo anterior fijo: base SGBM con B0;
+  filtros de B1 × alineación juzgados por B4; WLS con B2; alineación con anclas B2. Grillas en
+  `configs/ajuste-t05.yaml`. Los mejores B4 se repiten en pares de train solo para avisar si el
+  orden cambia. La propuesta se copia a mano a `depth` y se registra en BITACORA.
+- **Latencia (`latency.py`, `python -m visionx.depth latencia <clip>`):** componente de
+  profundidad sobre pares ya rectificados (sin captura ni JPEG), 50 de calentamiento + 300
+  medidos, P50/P95 por etapa y rango desde `range_m[0]` en cada resolución.
 **B4 es el control clave:** ya combina ambas fuentes; si Fusion mejora SGBM pero no B4,
 no habremos demostrado que aprender la combinación agrega valor.
 
