@@ -213,6 +213,14 @@ medir cobertura/error; conservar parámetros elegidos en desarrollo.
 | B4 | Regla fija: estéreo donde es fiable, monocular alineado en el resto, sin valor donde fallan ambos |
 
 Congelar cuál variante estéreo aporta B4 y sus umbrales con validación, antes del test.
+
+**Implementado (`src/visionx/depth/stereo.py`, `metrics.py`, `python -m visionx.depth evaluar`).**
+- B0–B2 con `SgbmMatcher` (núcleo offline) y `SgbmEstimator` (`DepthEstimator` de la app,
+  con `compute_size` opcional). Parámetros en `depth.sgbm`, provisorios hasta el ajuste.
+- **Rango de búsqueda:** por dataset (`depth.evaluacion.rango_busqueda`) y, en la ELP, desde
+  la geometría con `num_disparities_for(geometry, Z_min)`. Un 96 fijo deja ciegos los cercanos.
+- **Ajuste y test:** se ajusta con InStereo2K val; el evaluador rechaza el grupo test salvo con
+  `--test-congelado` (decidido 14/11).
 **B4 es el control clave:** ya combina ambas fuentes; si Fusion mejora SGBM pero no B4,
 no habremos demostrado que aprender la combinación agrega valor.
 
@@ -226,6 +234,11 @@ verificar paridad cuando cambie. [Fuente oficial](https://github.com/DepthAnythi
 La versión métrica es un experimento adicional, con su propio origen de pesos y evaluación
 del dominio. No afirmar que metros emitidos por una red monocular eliminan la necesidad de
 validación física. No descargar pesos al recibir la primera orden de la demo.
+
+**Implementado (`src/visionx/depth/mono.py`).** Port de `transformers`
+`depth-anything/Depth-Anything-V2-Small-hf`, revisión y SHA-256 fijados en `depth.mono`.
+Los pesos se bajan una vez con `python -m visionx.depth bajar-mono`; después solo se usa la
+caché local. Necesita `--extra ml`; el núcleo no importa torch.
 
 ### Alineación robusta
 
@@ -247,6 +260,13 @@ Anclas reservadas siguen siendo medidas de estéreo, no GT independiente. Si no 
 métrico fiable, no anunciar que la escala monocular está validada. Fallback: conservar estéreo
 válido y dejar huecos/abstención. No arrastrar escala del frame anterior sin comprobar movimiento
 y vigencia. Registrar el coste total de estéreo + monocular + ajuste.
+
+**Implementado (`align.py`, `hybrid.py`).** RANSAC con pendiente positiva y reajuste sobre los
+inliers. El diagnóstico va en `Alignment`: anclas, grilla, rango, inliers, celdas reservadas
+y residuos P50/P95, con un motivo cuando se rechaza. B3/B4 en `HybridMatcher` (offline) y en
+`HybridEstimator` (app). Las anclas salen de B1 (`depth.b4.estereo`). Sin alineación
+aceptada, B4 queda solo estéreo (PARTIAL) y B3 no responde. Umbrales provisorios en
+`depth.alineacion`.
 
 ## Entradas y CNN Fusion
 
