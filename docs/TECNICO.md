@@ -504,6 +504,34 @@ aceleración propia. La nube de puntos se genera por frame, sin SLAM acumulado.
 El reloj es monotónico local para duraciones; replay usa reloj de reproducción. No restar relojes
 monotónicos de Pi y PC sin sincronización y error conocido.
 
+**Implementación (`src/visionx/app/`, BITACORA 2026-11-14).**
+
+| Pieza | Qué hace | Garantía que se prueba |
+|---|---|---|
+| `Pipeline` | Hilo de captura que nunca espera a los modelos; buzón de un lugar (`LatestMailbox`) por modelo; caché acotada. El detector toma el último frame capturado; la profundidad, el último frame **ya detectado** | Colas de tamaño fijo bajo sobrecarga; frames salteados contados; un `EstimatorError` cuenta y sigue; `SourceError` detiene con `error` |
+| `ResultBoard` + `Joint` | Últimos resultados por `FrameKey`; cada detección guarda su frame. La unión es el frame más nuevo con detección y profundidad propias, y nunca retrocede | `check_same_frame` sobre frame, detección, profundidad y objetos de cada unión |
+| `Controller` | Frase → `Interpretation` → `Command` con `request_id` y vigencia por modo; la orden nueva cancela el audio de la anterior; cancelar corta todo; aclarar no interrumpe; repetir. Los modos son `ModeHandler` (T09–T11); sin uno, dice que no está disponible | Vencimiento con `ManualClock`, cancelación con audio en curso |
+| `dashboard.render` | Ojo izquierdo con detecciones, profundidad del **mismo frame** con escala fija `depth.range_m`, vista de arriba de la nube del frame (con la geometría real; sin ella no se dibuja), edad/latencia/FPS/errores, salteados y colas | Solo dibuja resultados ya calculados |
+| `science.compare` | Todos los métodos sobre todos los pares, en orden fijo y sin descartes; CSV por frame y método con tiempo y estado; los fallos quedan como filas | 12 frames × 2 métodos = 24 filas, con un fallo registrado |
+| `TraceWriter` | JSONL de eventos (frames, resultados con latencia y edad, uniones, órdenes, audio, resumen) | Seguro entre hilos |
+| `fakes.py` | `SyntheticStereoSource` (par rectificado con el ojo derecho corrido según Z), `ScriptedDetector`, `FakeDepthEstimator`, `FakeSpatialEstimator`. Todos con `model_id` `fake-…` | No miden nada: sustituyen la ELP y lo que entrega A (T05, T09/T13) |
+
+Por qué la profundidad sigue al detector: si cada modelo tomara su propio último frame, con la
+cámara más rápida que ambos casi nunca coincidirían y no habría unión del mismo frame. El costo
+es que la edad de la profundidad incluye la del detector; el detector puede avisar presencia sin
+esperar metros. Si A necesita otra política (por ejemplo, profundidad primero), se cambia acá.
+
+```text
+uv run python -m visionx.app ejecutar                       # sintética + fakes, con ventana
+uv run python -m visionx.app ejecutar --sin-ventana --segundos 600 --retraso-detector 80     --retraso-profundidad 150 --ordenes X.jsonl --traza X.jsonl   # sobrecarga
+uv run python -m visionx.app ejecutar --fuente recordings/escena --detector yolo --voz
+uv run python -m visionx.app comparar --frames 100 --csv X.csv
+```
+
+Con `--fuente` grabación o `usb` se rectifica con `camera.calibration`; la profundidad sigue
+siendo `fake` hasta que T05 entregue un `DepthEstimator`. Teclas: c cancelar, espacio hablar
+(con `--voz`), q salir. `--consola` acepta órdenes escritas.
+
 ### Audio USB y voz — T08
 
 Ruta inicial: micrófono de computadora/USB → captura de muestras → VAD/botón → STT → reglas →

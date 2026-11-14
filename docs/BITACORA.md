@@ -40,6 +40,71 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-14 — T07: ejecución interactiva, controlador, dashboard y comparación (con sustitutos)
+
+**Tarea:** T07. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/T07-ejecucion`, apilada sobre
+`b/T08-voz` porque el controlador usa las reglas y la salida de audio de T08.
+
+**Hecho.** Paquete nuevo `src/visionx/app/`:
+- `Pipeline`: captura en su hilo; un buzón de un lugar por modelo; el detector toma el último
+  frame capturado y la profundidad, el último ya detectado. La unión es por `FrameKey`, con
+  estado por módulo (edad, latencia, FPS, errores) y frames salteados contados.
+- `Controller`: request_id, vigencia por modo, la orden nueva invalida la anterior, cancelar,
+  repetir y aclarar sin interrumpir. Los modos se enchufan como `ModeHandler` (T09–T11); sin
+  uno, dice que la función no está disponible.
+- `dashboard.render`, `science.compare` (sin descartes) y `TraceWriter` (JSONL).
+- Sustitutos rotulados `fake-…`: fuente sintética rectificada, detector con guion, profundidad
+  y ubicación espacial provisorias.
+- CLI `python -m visionx.app ejecutar | comparar`. TECNICO T07.
+
+**Problemas y decisiones.**
+- **Unión imposible con modelos independientes:** con la cámara a 200 FPS, detector y
+  profundidad tomaban cada uno su último frame y casi nunca coincidían; un test lo mostró. Ahora
+  la profundidad procesa el último frame ya detectado. Costo: la edad de la profundidad incluye
+  la del detector. Decisión de B; **avisar a Bauty**, porque afecta cómo se mide la latencia
+  de T05.
+- **Caché medida en frames:** a muchos FPS, 10 frames duran 50 ms y se perdían antes de unirlos.
+  Ahora cada detección guarda su frame. También se corrigió una carrera al terminar la fuente,
+  que cerraba la profundidad antes de recibir el último frame detectado.
+- La primera versión del dashboard usaba una focal "típica" para la vista de arriba: era un
+  dato inventado. Ahora usa la geometría real o no dibuja esa vista.
+- Edades negativas en el dashboard (reloj de 15,6 ms y lectura entre hilos): se muestran como 0.
+
+**Evidencia.** Windows, misma notebook. 17 tests en `tests/test_app.py`, estables en 6 corridas
+seguidas. Cubren: colas acotadas bajo sobrecarga (cámara a 200 FPS, detector a 20 ms,
+profundidad a 35 ms) y `check_same_frame` sobre cada unión observada; uniones que no
+retroceden; fallos de modelo y de fuente; orden nueva, aclaración, cancelación con audio en
+curso, vencimiento y repetir; dashboard; `compare` sin descartes; traza entre hilos; CLI sin
+ventana con órdenes guionadas. Captura del dashboard revisada a ojo: objetos a 1,2 y 2,4 m en
+el panel y en la vista de arriba.
+
+**Sobrecarga de 10 min por CLI** (14/11 20:39–20:49, misma notebook, base `c9b0130` más T07 sin
+commitear; fuente sintética a 60 fps, detector fake +80 ms, profundidad fake +150 ms, 12 órdenes
+guionadas):
+
+| Medida | Resultado |
+|---|---|
+| Frames capturados | 36 003 en 600,1 s |
+| Detector | 7291 procesados, 28 711 salteados, 0 errores; latencia mediana 81 ms (máx. 98); edad mediana 94 ms (máx. 125) |
+| Profundidad | 3128 procesadas, 4162 salteadas, 0 errores; latencia mediana 178 ms (máx. 242); edad mediana 312 ms (máx. 391) |
+| Colas | Máximo 30 en las cuatro (el tope de la caché); no crecen |
+| Uniones | 3128 frames distintos, ninguna retrocede; 0 errores espaciales |
+| Órdenes / audio | 12 órdenes, 3 cancelaciones, 20 audios reproducidos (salida impresa, sin parlantes) |
+
+Detector + salteados = frames capturados − 1, y profundidad + salteadas = detecciones − 1: no se
+pierde nada sin contarlo. La traza (50 034 eventos, SHA-256 `31ac3c39c692bd49…`) quedó en el
+scratchpad, no en Git. Apareció un detalle: la traza anotaba 440 veces una unión ya publicada
+(dos hilos armaban la misma). Se corrigió para que la anote solo quien la publica, y el test de
+CLI ahora lo controla. No cambia ninguna de las cifras de arriba.
+
+**Límites.** Todo con sustitutos: no hay ELP, ni profundidad real (T05), ni ubicación espacial de
+A. No hay FPS ni latencias reales (M1/M9), ni modos funcionales: buscar, distancia, leer y
+describir son T09–T11. La ventana del dashboard no se abrió en esta sesión (se revisó un PNG).
+No se probó `--voz` con micrófono ni `--fuente usb`.
+
+**Próximo paso.** Con la grabación de hoy: `ejecutar --fuente <grabación> --detector yolo` para
+ver el dashboard con frames reales. Después, T09 (buscar y distancia) como `ModeHandler`.
+
 ## 2026-11-14 — T08: reglas de voz, salida con prioridad y cancelación, Piper y Whisper (sin micrófono)
 
 **Tarea:** T08. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/T08-voz`, apilada sobre
