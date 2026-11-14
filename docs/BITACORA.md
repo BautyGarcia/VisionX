@@ -40,6 +40,99 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-14 — T02: prueba M2 con la ELP en la Mac y grabaciones de desarrollo
+
+**Tarea:** T02 (pedido de Tomás). **Persona/agente:** Bauty / Claude Code. **Rama:**
+`a/T02-grabaciones` (solo documentación).
+
+**Objetivo.** Probar la captura de T02 con la ELP real (prueba M2 de aceptación) y grabar clips de
+desarrollo para reproducir sin cámara.
+
+**Contexto.**
+- Equipo: MacBook Pro M2 Max (macOS 15.7.3), `main` en `15700df`.
+- `configs/local.yaml` (ignorado por Git): `device: 1`, `backend: avfoundation`, `fps: 60`.
+- Calibración configurada: `elp-1920x1080-rational-6114e3eef3`.
+- Precalentamiento: 40 min con `ver`, de 14:30 a 15:10. El primer intento (13:34) se cortó: la ELP
+  dejó de entregar cuadros, `SourceError` después de 3 reintentos, y volvió recién al desenchufarla
+  y enchufarla de nuevo.
+
+**Hallazgos.**
+- **`fps: 30` de `configs/default.yaml` limita la ELP a 30 fps en la Mac.** `modos` midió 29,9 fps en
+  3840×1080. Pidiendo 60 da 58,7 fps, como el 12/11. Se resolvió en el override local; Tomás decide
+  si cambia el default.
+- **Índice:** con un iPhone cerca, Continuity Camera ocupa un índice y la ELP pasó al 1 (el iPhone
+  al 2).
+- **Orden de los ojos:** correcto (tapar el lente izquierdo oscurece el panel IZQUIERDO), así que
+  no hace falta `swap_eyes`.
+- **Reconexión:** cuando la ELP se trabó del lado USB, abría pero devolvía 0 cuadros. Los 3
+  reintentos de `UsbStereoSource` no la recuperaron. Solo se recuperó desenchufándola.
+
+**M2: 10 min a ritmo completo** (`--cada 1`, JPEG 95, cola 8, cámara quieta).
+
+| Medida | Resultado |
+|---|---|
+| `verificar` | 31 256 de 31 256 pares con hash correcto; estado `cerrada` |
+| Leídos | 32 127 pares a 53,54 fps; 0 fallos de lectura, 0 reconexiones |
+| Guardados | 31 256 a 52,09 fps (`tiempos.fps_efectivo`) |
+| Descartados por cola llena | 871 (2,7 %) |
+| `intervalo_max_ms` / `huecos` | 392 ms / 4883 (lectura: 4778, o sea que vienen de la cámara, no del disco) |
+| Memoria del proceso (RSS, muestreo cada 5 s) | 500–780 MB, estable, sin crecimiento |
+| Tamaño en disco | 19 GB (~0,6 MB por par; Tomás estimaba ~40 GB) |
+
+**Clips de desarrollo** (`--cada 4`; todos `cerrada`, sin descartes ni fallos de lectura):
+
+| Clip | Pares | fps guardados | Tamaño | Contenido |
+|---|---|---|---|---|
+| `dev-1114-distancias` | 274 | 13,65 | 156 MB | Vaso 0,5 m; botella y taza 1 m; caja 1,5 m; bolso 3 m (cinta, profundidad axial) |
+| `dev-1114-lectura` | 2035 | 13,65 | 963 MB | TITA, Ashwa y Fusion a 0,25 / 0,5 / 1 m; `segmentos.csv` y `textos.txt` |
+| `dev-1114-lectura-b` | 611 | 13,61 | 275 MB | Fusion a 0,5 y 1 m (faltaron en el clip anterior, ver problemas) |
+| `dev-1114-iguales` | 527 | 13,61 | 239 MB | Dos tazas iguales a 0,5 y 0,8 m: 5 s quieta y 25 s de paneo (`fases.csv`) |
+| `dev-1114-escenas` | 3019 | 13,84 | 1,8 GB | Cuarto, baño, living, cocina, jardín y lavadero, 10 s quieta cada uno (`fases.csv`) |
+| `dev-1114-buscar-a/b/c` | 944 / 948 / 948 | ~13,7 | 0,55–0,6 GB c/u | Botella, taza y bolso entrando y saliendo de cuadro con cámara en mano |
+| `dev-1114-acercarse-1/2/3` | 401 / 401 / 389 | ~13,6 | 0,23–0,27 GB c/u | Caminata hacia silla, puerta y pared lisa |
+
+- Los clips se grabaron con una guía por voz (`say`) que también escribe `segmentos.csv` o
+  `fases.csv` con `time.monotonic_ns()`, el mismo reloj que `received_ns`. Así cada toma se ubica
+  sin adivinar.
+- Revisión a ojo de cuadros de cada clip: sin personas, ni siquiera reflejadas en espejos; la
+  pantalla de la laptop y el cartel de wifi no son legibles o están vacíos.
+- **Primer dato de lectura:** a 0,5 m solo se lee el texto más grande (≈75 px de ancho para el pote
+  Fusion); a 0,25 m se leen los octógonos de TITA. La ELP gran angular limita el OCR a muy corta
+  distancia.
+
+**Problemas.**
+- **Primer intento de `lectura`:** la duración fija calculada no alcanzó para la guía por voz, y no
+  quedaron grabadas Fusion a 0,5 y 1 m. Se grabaron aparte en `lectura-b`, y la guía pasó a cortar
+  `grabar` con SIGINT al terminar.
+- **Primer intento de `iguales`:** la guía no habló y la cámara quedó quieta. Se borró y se repitió
+  con una guía que avisa por voz si la cámara no arranca en 15 s.
+- **Distancias:** el clip arrancó 9 s más tarde de lo anunciado; no afecta, porque la cámara estaba
+  quieta.
+
+**Decisión: se dan de baja los clips «difíciles»** (poca luz, contraluz, movimiento). Bauty decidió
+no grabarlos: para la demo del TP no hace falta ese nivel, y no tenía cómo oscurecer un ambiente ni
+una fuente de contraluz suficiente. Quedan sin ejemplos propios de la ELP para ajustar la abstención
+con poca luz, contraluz o desenfoque.
+
+**Límites.**
+- Un solo equipo y una sola sesión.
+- La ELP en Windows sigue sin probarse.
+- El material es de desarrollo, no test, y no es el banco ELP de T04.
+- Las distancias del clip de distancias se midieron con cinta, con una precisión de ±1–2 cm.
+
+**Entrega.**
+- Drive `VisionX-artefactos/grabaciones/`: los 11 clips de desarrollo completos (~5,9 GB) y,
+  de `dev-1114-m2`, solo `manifest.yaml` y `frames.jsonl`.
+- Nada de esto va a Git.
+
+**Próximo paso:** Tomás verifica los SHA-256 con `verificar` desde su PC. Bauty sigue con T05
+usando `dev-1114-distancias`.
+
+**Estado de T04 en el ROADMAP (mismo PR).** El PR #16 ya integró los datos públicos, pero la
+tabla seguía en «En curso» con la reserva de `a/T04-datos`. Pasa a **Parcial** y se libera la
+reserva: falta el banco ELP (escenas separadas por sesión y test físico reservado), que no se
+cubre con los clips de desarrollo de arriba. Sin pruebas de software; revisión de diff.
+
 ## 2026-11-13 — T02: captura USB, grabación, replay y rectificación (sin cámara)
 
 **Tarea:** T02. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/T02-captura` (local, apilada
