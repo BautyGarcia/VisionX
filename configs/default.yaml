@@ -41,4 +41,26 @@ calibration:
   dictionary: DICT_5X5_100
 
 audio:
-  speech_rate: 1.0
+  speech_rate: 1.0          # velocidad de la voz; 1.0 = la de la voz de Piper, >1 más rápido
+  input_device: null        # micrófono (índice o nombre de `python -m visionx.voice dispositivos`); null = el del sistema
+  output_device: null       # parlantes/auriculares; null = los del sistema
+  block_ms: 20              # bloque de reproducción, ms: demora máxima de un cancelar antes del búfer del dispositivo
+  max_record_s: 8           # tope de una orden con el botón, s
+  deadlines_s:              # vigencia de cada orden, s; vencida, su respuesta ya no se dice (candidatos, sin medir)
+    search: 30
+    distance: 5
+    read: 30
+    describe: 20
+    choose: 10
+    control: 2
+  tts:
+    voice: es_AR-daniela-high   # voz de Piper (v1.0.0); otras: es_MX-claude-high, es_ES-davefx-medium
+    voices_dir: weights/piper
+    preload: ["No entendí.", "Cancelado.", "Leo.", "Describo.", "Mido la distancia."]
+  stt:
+    model: small            # faster-whisper: tiny | base | small | medium; comparar con `bucle`
+    models_dir: weights/whisper
+    device: cpu             # cpu | cuda (CTranslate2 no tiene backend MPS)
+    compute_type: int8      # int8 en CPU; float16 en CUDA
+    beam_size: 1            # 1 = greedy, lo más rápido; subir solo si mejora las frases medidas
+    initial_prompt: "Buscá la taza. ¿A qué distancia está? Leé. Describí. Cancelar."  # orienta vocabulario y puntuación

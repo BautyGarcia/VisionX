@@ -1,0 +1,66 @@
+frase,modo,objetivo
+# Frases de referencia para las reglas de T08: texto como lo entrega Whisper, modo esperado
+# (Mode o "aclarar" si hay que preguntar) y objetivo (clase COCO, opción o control).
+# Escritas a mano por el equipo; no son frases medidas de usuarios reales (M10 pendiente).
+Buscá la taza.,search,cup
+buscame el celular,search,cell phone
+¿Dónde está mi celular?,search,cell phone
+¿Dónde quedó el control remoto?,search,remote
+Encontrá la botella.,search,bottle
+Buscá las tazas.,search,cup
+Ubicá la silla.,search,chair
+¿Hay una persona?,search,person
+"Che, buscá la mochila, por favor.",search,backpack
+Buscá el teclado.,search,keyboard
+¿Dónde dejé las tijeras?,search,scissors
+Llevame a la silla.,search,chair
+Guiame hasta la mesa.,search,dining table
+Buscá el libro.,search,book
+Buscá un vaso.,search,cup
+Buscá la heladera.,search,refrigerator
+¿Dónde está el control?,search,remote
+VisionX buscá la notebook.,search,laptop
+La taza.,search,cup
+Buscá las llaves.,aclarar,
+Buscá la billetera.,aclarar,
+Buscá.,aclarar,
+¿A qué distancia está la taza?,distance,cup
+¿Qué tan lejos está la puerta?,aclarar,
+¿Qué tan lejos está la silla?,distance,chair
+¿A cuánto está la botella?,distance,bottle
+Distancia.,distance,
+¿Cuántos metros hay hasta la mesa?,distance,dining table
+¿Qué tan cerca está la persona?,distance,person
+¿A qué distancia está?,distance,
+Leé.,read,
+Leeme esto.,read,
+¿Qué dice el cartel?,read,
+¿Qué dice acá?,read,
+Leé la etiqueta.,read,
+¿Qué está escrito?,read,
+Describí.,describe,
+Describime lo que hay.,describe,
+¿Qué hay adelante?,describe,
+¿Qué hay en la mesa?,describe,
+¿Qué ves?,describe,
+Contame qué tengo enfrente.,describe,
+¿Qué tengo adelante?,describe,
+Cancelar.,control,cancelar
+"Pará, pará.",control,cancelar
+Basta.,control,cancelar
+Silencio.,control,cancelar
+Callate.,control,cancelar
+Stop.,control,cancelar
+Dejá.,control,cancelar
+Repetí.,control,repetir
+¿Qué dijiste?,control,repetir
+Otra vez.,control,repetir
+La de la izquierda.,choose,izquierda
+El de la derecha.,choose,derecha
+La del medio.,choose,centro
+La más cercana.,choose,cerca
+La de la derecha.,choose,derecha
+Hola.,aclarar,
+Hacé algo.,aclarar,
+¿Qué hora es?,aclarar,
+,aclarar,

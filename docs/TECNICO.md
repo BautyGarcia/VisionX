@@ -532,6 +532,35 @@ Probar AirPods/Bluetooth como salida y después su micrófono; los perfiles/disp
 cambiar calidad y latencia al usarlos simultáneamente. No dar full duplex por resuelto sin
 medirlo. Si falla, usar micrófono separado y registrar límite; no bloquea desarrollar los modos.
 
+**Implementación (`src/visionx/voice/`, BITACORA 2026-11-14).**
+
+| Pieza | Qué hace | Si falla |
+|---|---|---|
+| `CommandParser` | Reglas en español: cancelar/repetir, distancia, leer, describir, buscar/guiar y elegir (izquierda, derecha, centro, cerca). Normaliza signos, tildes y muletillas; busca el nombre de objeto más largo con el catálogo de T06 | Objeto desconocido o frase sin regla: `Interpretation` con `reply` de aclaración; no se crea `Command` |
+| `AudioOutput` | `AudioSink` con un hilo: prioridad y luego llegada, corte por prioridad mayor si lo actual es cancelable, `cancel`/`cancel_all`, vencimiento antes y después de sintetizar, cola acotada. Cada evento deja un `PlaybackRecord` con resultado y espera | Síntesis o dispositivo fallido: resultado `error`, la salida sigue. Lo cortado no se retoma |
+| `sonido:<nombre>` | Tonos generados (bip, ok, error, cancelado) sin pasar por TTS | Nombre desconocido: `InvalidInput` |
+| `PiperSynth` + `CachedSynth` | Voz de Piper en CPU; las frases de `audio.tts.preload` y las recientes no se recalculan | Voz ausente o extra sin instalar: `EstimatorError` |
+| `WhisperTranscriber` | faster-whisper local en español, sin timestamps ni contexto previo | Modelo ausente: `EstimatorError` |
+| `PushToTalk` | Botón: el callback solo copia bloques a una cola; si el micrófono no acepta 16 kHz graba a su frecuencia y remuestrea (FFT, sin aliasing) | Micrófono que no abre: `SourceError` |
+| `SoundDevicePlayer` | Escribe bloques de `audio.block_ms` y mira el pedido de corte entre bloques; al cortar usa `abort()` para descartar el búfer | Errores de PortAudio: resultado `error` |
+
+Whisper procesa siempre una ventana de 30 s: su tiempo casi no depende del largo de la orden.
+`initial_prompt` puede hacer que Whisper "complete" una orden corta con palabras del prompt;
+se mide con y sin prompt antes de dejarlo. Cancelar tiene que tener un botón: con voz
+sintética, ni «pará» ni «basta» se transcribieron bien de forma consistente.
+
+```text
+uv run python -m visionx.voice descargar --voz es_AR-daniela-high --whisper base small
+uv run python -m visionx.voice orden "¿A qué distancia está la taza?"   # solo reglas
+uv run python -m visionx.voice frases                  # reglas contra tests/fixtures/voz-frases.csv
+uv run python -m visionx.voice bucle --whisper base small --csv X   # Piper -> Whisper -> reglas
+uv run python -m visionx.voice decir "Busco la taza." [--wav X]     # parlantes o archivo
+uv run python -m visionx.voice escuchar                # micrófono: Enter habla, Enter termina
+```
+
+`bucle` usa voz sintética: sirve para comparar modelos y detectar errores de reglas, no
+reemplaza frases dichas por personas, con su acento, ruido y micrófono (M10 pendiente).
+
 ### Audio y video portátil — T19
 
 En la primera versión portátil, Pi captura cámara/mic y maneja reproducción/control. La Mac

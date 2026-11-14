@@ -22,6 +22,13 @@ deteccion = [
     "ultralytics>=8.4",
     "lap>=0.5.12",  # asignación lineal de ByteTrack; Ultralytics lo instalaría solo en tiempo de uso
 ]
+# Voz (T08): micrófono/parlantes (sounddevice, MIT), STT local (faster-whisper, MIT; CPU en
+# Windows y Mac) y TTS local (Piper, GPL-3.0). Modelos y voces se bajan aparte, nunca en tests.
+voz = [
+    "sounddevice>=0.5",
+    "faster-whisper>=1.2",
+    "piper-tts>=1.8",
+]
 
 [project.scripts]
 visionx = "visionx.cli:main"

@@ -169,7 +169,7 @@ si hay código integrado pero falta recepción, escribir ambos hechos sin oculta
 | T05 | Estéreo, monocular, alineación y B0–B4 | A | Pendiente | Ninguna |
 | T06 | Detección, máscaras y seguimiento | B | En curso: YOLO-seg, IDs ByteTrack, fake, catálogo en español y CLI implementados con tests sin cámara; latencia CPU no concluyente (BITACORA 2026-11-14); falta ELP: máscaras en par rectificado, comparación 26 vs 11 en Mac, 3 clips anotados y pérdidas/reapariciones | Tomás / Claude Code, rama `b/T06-deteccion`, `src/visionx/detection/`, `tests/test_detection.py`, sección `detection` de `configs/default.yaml`, extra `deteccion` en `pyproject.toml`/`uv.lock`; CPU, sin cámara |
 | T07 | Ejecución interactiva/científica y dashboard | B | Pendiente | Ninguna |
-| T08 | Voz, audio y cancelación | B | Pendiente | Ninguna |
+| T08 | Voz, audio y cancelación | B | En curso: reglas (62/62 frases escritas), salida con prioridad/cancelación, Piper, faster-whisper y botón implementados con tests sin dispositivos; bucle con voz sintética 24–38/61 (BITACORA 2026-11-14); falta micrófono/parlantes: frases dichas por personas, latencia y cancelación audibles, AirPods | Tomás / Claude Code, rama `b/T08-voz` (apilada sobre `b/T06-deteccion`), `src/visionx/voice/`, `tests/test_voice.py`, sección `audio` de `configs/default.yaml`, extra `voz`; parlantes/micrófono de la notebook solo con aviso |
 | T09 | Buscar/guiar y medir distancia | B con espacial A | Pendiente | Ninguna |
 | T10 | Leer texto | B | Pendiente | Ninguna |
 | T11 | Describir escenas | B | Pendiente | Ninguna |
