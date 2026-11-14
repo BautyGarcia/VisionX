@@ -2,7 +2,9 @@
 
     uv run python -m visionx.depth evaluar B1 instereo2k --grupo val
     uv run python -m visionx.depth evaluar B2 instereo2k --grupo val --limite 20
+    uv run python -m visionx.depth evaluar B4 instereo2k --grupo val      # necesita --extra ml
     uv run python -m visionx.depth evaluar B1 middeval3 --grupo test --test-congelado
+    uv run python -m visionx.depth bajar-mono   # una vez: pesos de DA V2 Small con hash
 
 **El test público no elige nada.** MiddEval3 y ETH3D son test (TECNICO T04). Los parámetros
 se ajustan con la validación de InStereo2K; recién con todo congelado en la config se corre
@@ -28,13 +30,19 @@ from typing import Any
 import numpy as np
 import yaml
 
+from visionx.depth.align import AlignParams
 from visionx.depth.datasets import middlebury
 from visionx.depth.datasets.catalog import CATALOG
 from visionx.depth.datasets.sample import StereoSample
+from visionx.depth.hybrid import HYBRID_VARIANTS, HybridMatcher
 from visionx.depth.metrics import aggregate, disparity_metrics
+from visionx.depth.mono import DepthAnythingV2, MonoConfig, MonoModel
+from visionx.depth.mono import download as download_mono
 from visionx.depth.stereo import VARIANTS, SgbmMatcher, SgbmParams, round_up_16
 from visionx.shared.config import ROOT, load_config
-from visionx.shared.errors import InvalidInput
+from visionx.shared.errors import EstimatorError, InvalidInput
+
+METHODS = VARIANTS + HYBRID_VARIANTS
 
 TEST_GROUPS = {"test"}
 
@@ -58,12 +66,42 @@ def search_range(sample: StereoSample, rule: Any, data_root: Path) -> int:
     raise InvalidInput(f"regla de rango {rule!r}: se esperaba 'calib' o un entero")
 
 
-def evaluate_sample(sample: StereoSample, variant: str, params: SgbmParams) -> list[dict[str, Any]]:
-    matcher = SgbmMatcher(variant, params)
+def make_matcher(
+    method: str, params: SgbmParams, depth_cfg: dict[str, Any], mono: MonoModel | None
+) -> SgbmMatcher | HybridMatcher:
+    if method in VARIANTS:
+        return SgbmMatcher(method, params)
+    if mono is None:
+        raise InvalidInput(f"{method} necesita el modelo monocular")
+    stereo_variant = depth_cfg["b4"]["estereo"]
+    align_params = AlignParams.from_config(depth_cfg["alineacion"])
+    return HybridMatcher(method, stereo_variant, params, mono, align_params)
+
+
+def evaluate_sample(
+    sample: StereoSample, matcher: SgbmMatcher | HybridMatcher, num_disparities: int
+) -> list[dict[str, Any]]:
     doffs = sample.geometry.doffs if sample.geometry else 0.0
     start = time.perf_counter()
     out = matcher.compute(sample.left, sample.right, doffs)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
+    extra: dict[str, Any] = {}
+    alignment = getattr(out, "alignment", None)
+    if alignment is not None:
+        # Diagnóstico de B3/B4. Como floats se promedian en el resumen (p. ej. tasa de
+        # alineaciones aceptadas); el motivo queda como texto en el CSV.
+        extra = {
+            "alin_aceptada": float(alignment.accepted),
+            "alin_motivo": alignment.reason or "",
+            "alin_s": alignment.scale,
+            "alin_t": alignment.offset,
+            "alin_grilla": alignment.grid_coverage,
+            "alin_inliers": alignment.inlier_ratio,
+            "alin_reservadas": alignment.holdout_inlier_ratio,
+            "alin_reservadas_p50_px": alignment.holdout_p50_px,
+            "fraccion_mono": out.stats["fraccion_mono"],
+            "ms_mono": out.stats["ms_mono"],
+        }
     regions = {"all": sample.valid}
     if sample.nonoccluded is not None:
         regions["noc"] = sample.nonoccluded
@@ -72,8 +110,8 @@ def evaluate_sample(sample: StereoSample, variant: str, params: SgbmParams) -> l
         m = disparity_metrics(out.disparity_px, out.valid, sample.disparity, mask,
                               geometry=sample.geometry)  # fmt: skip
         rows.append({"muestra": sample.sample_id, "escena": sample.scene_id, "region": region,
-                     "num_disparities": float(params.num_disparities), "ms": elapsed_ms,
-                     **m})  # fmt: skip
+                     "num_disparities": float(num_disparities), "ms": elapsed_ms,
+                     **m, **extra})  # fmt: skip
     return rows
 
 
@@ -121,6 +159,10 @@ def _evaluate(args: argparse.Namespace) -> int:
         refs = [refs[i] for i in sorted(set(idx.tolist()))]
 
     rule = depth_cfg["evaluacion"]["rango_busqueda"][info.name]
+    mono = None
+    if args.metodo in HYBRID_VARIANTS:
+        mono = DepthAnythingV2(MonoConfig.from_config(depth_cfg["mono"]))
+        print(f"monocular: {mono.model_id} en {mono.device}")
     base = SgbmParams.from_config(depth_cfg["sgbm"])
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = Path(args.salida) / f"{stamp}-{args.metodo}-{info.name}-{args.grupo}"
@@ -129,9 +171,10 @@ def _evaluate(args: argparse.Namespace) -> int:
     rows: list[dict[str, Any]] = []
     for i, ref in enumerate(refs, 1):
         sample = ref.load()
-        params = SgbmParams.from_config(depth_cfg["sgbm"], num_disparities=search_range(
-            sample, rule, data_root))  # fmt: skip
-        sample_rows = evaluate_sample(sample, args.metodo, params)
+        ndisp = search_range(sample, rule, data_root)
+        params = SgbmParams.from_config(depth_cfg["sgbm"], num_disparities=ndisp)
+        matcher = make_matcher(args.metodo, params, depth_cfg, mono)
+        sample_rows = evaluate_sample(sample, matcher, ndisp)
         rows.extend(sample_rows)
         first = sample_rows[0]
         print(f"[{i}/{len(refs)}] {ref.sample_id}: EPE {first['epe']:.2f} px, "
@@ -151,6 +194,13 @@ def _evaluate(args: argparse.Namespace) -> int:
         "comando": " ".join(sys.argv),
         "rango_busqueda": rule,
         "parametros": asdict(base),
+        "hibrido": None
+        if mono is None
+        else {
+            "monocular": mono.model_id,
+            "estereo_anclas": depth_cfg["b4"]["estereo"],
+            "alineacion": asdict(AlignParams.from_config(depth_cfg["alineacion"])),
+        },
         "regiones": {
             region: _jsonable(aggregate(r for r in rows if r["region"] == region))
             for region in sorted({r["region"] for r in rows})
@@ -176,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="comando", required=True)
     ev = sub.add_parser("evaluar", help="correr un método sobre un dataset y medir")
-    ev.add_argument("metodo", choices=VARIANTS)
+    ev.add_argument("metodo", choices=METHODS)
     ev.add_argument("dataset")
     ev.add_argument("--grupo", default="val", help="grupo de la partición (val, train, test)")
     ev.add_argument("--limite", type=int, default=0, help="evaluar solo N muestras repartidas")
@@ -188,10 +238,15 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("--config", default=None, help="override YAML explícito")
     ev.add_argument("--datos", default=str(ROOT / "data" / "raw"))
     ev.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
+    sub.add_parser("bajar-mono", help="bajar una vez los pesos fijados de DA V2 Small")
     args = parser.parse_args(argv)
     try:
+        if args.comando == "bajar-mono":
+            cfg = MonoConfig.from_config(load_config(None)["depth"]["mono"])
+            print(f"pesos verificados (SHA-256 {cfg.weights_sha256[:12]}…): {download_mono(cfg)}")
+            return 0
         return _evaluate(args)
-    except InvalidInput as exc:
+    except (InvalidInput, EstimatorError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

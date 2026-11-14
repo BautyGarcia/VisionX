@@ -246,6 +246,79 @@ def _finish(
     return StereoOutput(disp, valid, stats)
 
 
+def compute_geometry(
+    geometry: StereoGeometry, compute_size: tuple[int, int] | None
+) -> StereoGeometry:
+    """Geometría en la que se calcula: la de captura o su versión reescalada."""
+    width, height = compute_size or geometry.size
+    return geometry if (width, height) == geometry.size else geometry.resized(width, height)
+
+
+def prepare_pair(
+    frame: StereoFrame, capture: StereoGeometry, target: StereoGeometry, model_id: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Controla que el par sea el esperado y lo lleva a la resolución de cómputo."""
+    if not frame.rectified:
+        raise InvalidInput(f"frame {frame.frame_id}: {model_id} necesita el par rectificado")
+    if frame.geometry_id != capture.geometry_id:
+        raise IdentityMismatch(
+            f"frame en geometría {frame.geometry_id!r}, {model_id} espera {capture.geometry_id!r}"
+        )
+    capture.require_size(frame.left, "left")
+    left, right = frame.left, frame.right
+    if target is not capture:
+        # INTER_AREA promedia los píxeles que se juntan: reduce sin aliasing. Se aplica
+        # a las imágenes, no a mapas de disparidad (esos van por resize_disparity).
+        left = cv2.resize(left, target.size, interpolation=cv2.INTER_AREA)
+        right = cv2.resize(right, target.size, interpolation=cv2.INTER_AREA)
+    return left, right
+
+
+def build_result(
+    frame: StereoFrame,
+    model_id: str,
+    geometry: StereoGeometry,
+    disparity_px: np.ndarray,
+    valid: np.ndarray,
+    elapsed_ms: float,
+    min_coverage: float,
+    reason_if_partial: str | None = None,
+) -> DepthResult:
+    """Arma el DepthResult: metros desde la geometría, NaN afuera y status con su motivo.
+
+    `reason_if_partial` declara un fallback (p. ej. B4 sin monocular): el resultado sale
+    PARTIAL aunque la cobertura alcance, para que quien lo consume lo sepa.
+    """
+    depth, depth_ok = geometry.disparity_to_depth(disparity_px, valid)
+    valid = valid & depth_ok
+    coverage = float(valid.mean())
+    if not valid.any():
+        status = DepthStatus.UNMEASURABLE
+        reason = reason_if_partial or f"{model_id} sin píxeles válidos"
+    elif reason_if_partial is not None:
+        status, reason = DepthStatus.PARTIAL, reason_if_partial
+    elif coverage < min_coverage:
+        status, reason = DepthStatus.PARTIAL, f"cobertura {coverage:.0%} < {min_coverage:.0%}"
+    else:
+        status, reason = DepthStatus.VALID, None
+    disparity = disparity_px.astype(np.float32, copy=True)
+    disparity[~valid] = np.nan
+    depth[~valid] = np.nan
+    return DepthResult(
+        session_id=frame.session_id,
+        frame_id=frame.frame_id,
+        model_id=model_id,
+        geometry_id=geometry.geometry_id,
+        disparity_px=disparity,
+        valid_mask=valid,
+        status=status,
+        reason=reason,
+        inference_ms=elapsed_ms,
+        depth_m=depth,
+        doffs=geometry.doffs,
+    )
+
+
 class SgbmEstimator:
     """DepthEstimator de la aplicación: StereoFrame rectificado -> DepthResult.
 
@@ -263,66 +336,23 @@ class SgbmEstimator:
         min_coverage: float = 0.0,
     ) -> None:
         self.capture_geometry = geometry
-        width, height = compute_size or geometry.size
-        self.geometry = (
-            geometry if (width, height) == geometry.size else geometry.resized(width, height)
-        )
+        self.geometry = compute_geometry(geometry, compute_size)
         self.matcher = SgbmMatcher(variant, params)
         self.min_coverage = v.finite("min_coverage", min_coverage, low=0.0)
         self.model_id = f"sgbm-{variant.lower()}"
 
     def predict(self, frame: StereoFrame) -> DepthResult:
-        if not frame.rectified:
-            raise InvalidInput(f"frame {frame.frame_id}: SGBM necesita el par rectificado")
-        if frame.geometry_id != self.capture_geometry.geometry_id:
-            raise IdentityMismatch(
-                f"frame en geometría {frame.geometry_id!r}, el estimador espera "
-                f"{self.capture_geometry.geometry_id!r}"
-            )
-        self.capture_geometry.require_size(frame.left, "left")
         start = time.perf_counter()
-        left, right = frame.left, frame.right
-        if self.geometry is not self.capture_geometry:
-            size = self.geometry.size
-            # INTER_AREA promedia los píxeles que se juntan: reduce sin aliasing. Se aplica
-            # a las imágenes, no a mapas de disparidad (esos van por resize_disparity).
-            left = cv2.resize(left, size, interpolation=cv2.INTER_AREA)
-            right = cv2.resize(right, size, interpolation=cv2.INTER_AREA)
+        left, right = prepare_pair(frame, self.capture_geometry, self.geometry, self.model_id)
         try:
             out = self.matcher.compute(left, right, self.geometry.doffs)
-            depth, depth_ok = self.geometry.disparity_to_depth(out.disparity_px, out.valid)
         except cv2.error as exc:  # fallo del algoritmo, no "no se pudo medir"
             raise EstimatorError(
                 f"{self.model_id}: OpenCV falló en frame {frame.frame_id}"
             ) from exc
-        valid = out.valid & depth_ok
         elapsed_ms = (time.perf_counter() - start) * 1000.0
-        coverage = float(valid.mean())
-        if not valid.any():
-            status, reason = DepthStatus.UNMEASURABLE, "SGBM sin píxeles válidos"
-        elif coverage < self.min_coverage:
-            status, reason = (
-                DepthStatus.PARTIAL,
-                f"cobertura {coverage:.0%} < {self.min_coverage:.0%}",
-            )
-        else:
-            status, reason = DepthStatus.VALID, None
-        disparity = out.disparity_px.copy()
-        disparity[~valid] = np.nan
-        depth[~valid] = np.nan
-        return DepthResult(
-            session_id=frame.session_id,
-            frame_id=frame.frame_id,
-            model_id=self.model_id,
-            geometry_id=self.geometry.geometry_id,
-            disparity_px=disparity,
-            valid_mask=valid,
-            status=status,
-            reason=reason,
-            inference_ms=elapsed_ms,
-            depth_m=depth,
-            doffs=self.geometry.doffs,
-        )
+        return build_result(frame, self.model_id, self.geometry, out.disparity_px, out.valid,
+                            elapsed_ms, self.min_coverage)  # fmt: skip
 
     def close(self) -> None:
         """Sin recursos externos que liberar."""
