@@ -6,6 +6,7 @@
     uv run python -m visionx.depth evaluar B1 middeval3 --grupo test --test-congelado
     uv run python -m visionx.depth bajar-mono   # una vez: pesos de DA V2 Small con hash
     uv run --extra ml python -m visionx.depth ajustar   # T05 PR 3: elige con InStereo2K val
+    uv run --extra ml python -m visionx.depth latencia recordings/dev-1114-distancias  # M9
 
 **El test público no elige nada.** MiddEval3 y ETH3D son test (TECNICO T04). Los parámetros
 se ajustan con la validación de InStereo2K; recién con todo congelado en la config se corre
@@ -42,7 +43,7 @@ from visionx.depth.mono import download as download_mono
 from visionx.depth.stereo import VARIANTS, SgbmMatcher, SgbmParams, round_up_16
 from visionx.depth.tuning import Pair
 from visionx.shared.config import ROOT, load_config
-from visionx.shared.errors import EstimatorError, InvalidInput
+from visionx.shared.errors import EstimatorError, InvalidInput, SourceError
 
 METHODS = VARIANTS + HYBRID_VARIANTS
 
@@ -315,6 +316,103 @@ def _tune(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_size(text: str) -> tuple[int, int]:
+    try:
+        w, h = (int(x) for x in text.lower().split("x"))
+    except ValueError as exc:
+        raise InvalidInput(f"resolución {text!r}: se esperaba ANCHOxALTO") from exc
+    return w, h
+
+
+def _latency(args: argparse.Namespace) -> int:
+    import platform
+
+    from visionx.calibration import StereoCalibration
+    from visionx.camera.rectified import RectifiedSource
+    from visionx.camera.replay import ReplaySource
+    from visionx.depth import latency
+    from visionx.depth.hybrid import HybridEstimator
+    from visionx.depth.stereo import SgbmEstimator, compute_geometry, num_disparities_for
+
+    cfg = load_config(args.config)
+    depth_cfg = cfg["depth"]
+    calib_path = ROOT / cfg["camera"]["calibration"]
+    source = RectifiedSource(ReplaySource(args.clip), StereoCalibration.load(calib_path))
+    frames = []
+    while (frame := source.read()) is not None and len(frames) < args.pares:
+        frames.append(frame)
+    source.close()
+    capture = source.geometry
+    print(f"{len(frames)} pares rectificados de {args.clip} ({capture.size[0]}x{capture.size[1]})")
+
+    mono = None
+    if args.metodo in HYBRID_VARIANTS:
+        mono = DepthAnythingV2(MonoConfig.from_config(depth_cfg["mono"]))
+        print(f"monocular: {mono.model_id} en {mono.device}")
+    min_depth = float(depth_cfg["range_m"][0])
+    results: dict[str, Any] = {}
+    for text in args.resoluciones:
+        size = _parse_size(text)
+        geom = compute_geometry(capture, size)
+        ndisp = num_disparities_for(geom, min_depth)  # ver desde range_m[0] a esa resolución
+        params = SgbmParams.from_config(depth_cfg["sgbm"], num_disparities=ndisp)
+        if mono is None:
+            est = SgbmEstimator(args.metodo, params, capture, size)
+
+            def run(frame: Any, est: Any = est) -> dict[str, float]:
+                result = est.predict(frame)
+                return {"total_ms": result.inference_ms,
+                        "cobertura": float(result.valid_mask.mean())}  # fmt: skip
+        else:
+            matcher = make_matcher(args.metodo, params, depth_cfg, mono)
+            est = HybridEstimator(matcher, capture, size)
+
+            def run(frame: Any, est: Any = est) -> dict[str, float]:
+                result, out = est.predict_detailed(frame)
+                return {"total_ms": result.inference_ms, "estereo_ms": out.stats["ms_estereo"],
+                        "mono_ms": out.stats["ms_mono"],
+                        "alineacion_ms": out.stats["ms_alineacion"],
+                        "alin_aceptada": float(out.alignment.accepted),
+                        "cobertura": out.stats["cobertura"],
+                        "fraccion_mono": out.stats["fraccion_mono"]}  # fmt: skip
+
+        print(f"{text}: rango {ndisp} px, {args.calentamiento} de calentamiento + "
+              f"{args.medidos} medidos…")  # fmt: skip
+        stats = latency.measure(frames, run, args.calentamiento, args.medidos)
+        results[text] = {"num_disparities": ndisp, **stats}
+        t = stats["total_ms"]
+        print(f"  total P50 {t['p50']:.0f} ms, P95 {t['p95']:.0f} ms "
+              f"(~{1000 / t['p50']:.1f} pares/s)")  # fmt: skip
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = Path(args.salida) / f"{stamp}-latencia-{args.metodo}-{Path(args.clip).name}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report = {
+        "metodo": args.metodo,
+        "clip": str(args.clip),
+        "session_id": frames[0].session_id if frames else None,
+        "pares_distintos": len(frames),
+        "calibracion": cfg["camera"]["calibration"],
+        "commit": _git_commit(),
+        "comando": " ".join(sys.argv),
+        "equipo": {
+            "sistema": platform.platform(),
+            "procesador": platform.processor(),
+            "python": platform.python_version(),
+            "dispositivo_mono": getattr(mono, "device", None),
+        },  # fmt: skip
+        "parametros": asdict(SgbmParams.from_config(depth_cfg["sgbm"])),
+        "alineacion": depth_cfg["alineacion"] if mono else None,
+        "anclas": depth_cfg["b4"]["estereo"] if mono else None,
+        "memoria_pico_mb": latency.peak_rss_mb(),
+        "resoluciones": results,
+    }
+    with (out_dir / "latencia.yaml").open("w", encoding="utf-8") as f:
+        yaml.safe_dump(report, f, allow_unicode=True, sort_keys=False)
+    print(f"resultados en {out_dir}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m visionx.depth",
@@ -342,6 +440,15 @@ def main(argv: list[str] | None = None) -> int:
     aj.add_argument("--config", default=None, help="override YAML explícito")
     aj.add_argument("--datos", default=str(ROOT / "data" / "raw"))
     aj.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
+    la = sub.add_parser("latencia", help="latencia M9 de un método sobre un clip ELP")
+    la.add_argument("clip", help="carpeta de una grabación sin rectificar (T02)")
+    la.add_argument("--metodo", choices=METHODS, default="B4")
+    la.add_argument("--resoluciones", nargs="+", default=["640x360", "960x540", "1280x720"])
+    la.add_argument("--calentamiento", type=int, default=50)
+    la.add_argument("--medidos", type=int, default=300)
+    la.add_argument("--pares", type=int, default=100, help="pares distintos en memoria")
+    la.add_argument("--config", default=None, help="override YAML explícito")
+    la.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
     args = parser.parse_args(argv)
     try:
         if args.comando == "bajar-mono":
@@ -350,8 +457,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.comando == "ajustar":
             return _tune(args)
+        if args.comando == "latencia":
+            return _latency(args)
         return _evaluate(args)
-    except (InvalidInput, EstimatorError) as exc:
+    except (InvalidInput, EstimatorError, SourceError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
