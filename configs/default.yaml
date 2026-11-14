@@ -35,6 +35,30 @@ depth:
     wls_lambda: 8000.0      # B2
     wls_sigma: 1.5          # B2
     wls_min_confidence: 128.0  # B2, escala 0-255 del mapa de confianza
+  # Monocular preentrenada y congelada (src/visionx/depth/mono.py). Necesita --extra ml y bajar
+  # los pesos una vez: `python -m visionx.depth bajar-mono`. Solo Small (Apache 2.0).
+  mono:
+    repo: depth-anything/Depth-Anything-V2-Small-hf
+    revision: 5426e4f0f36572d16453bbda7a8389317b1bef99   # commit fijo del repo de pesos
+    weights_sha256: 3152477ce0d8d6978d76b995120de97cb5b928701fd0f817769f59e249a16b70
+    device: auto              # auto | mps | cuda | cpu
+  # Alineación d ≈ s·m + t con anclas estéreo (src/visionx/depth/align.py). PROVISORIOS: los
+  # umbrales en px dependen de la resolución y se ajustan con InStereo2K val (T05 PR 3).
+  alineacion:
+    grid_cols: 8
+    grid_rows: 6
+    min_anchors_per_cell: 20
+    min_grid_coverage: 0.25         # fracción de celdas con anclas
+    holdout_fraction: 0.2           # celdas reservadas para comprobar el ajuste
+    max_fit_anchors: 5000
+    ransac_iterations: 200
+    inlier_threshold_px: 1.0
+    min_inlier_ratio: 0.5
+    min_holdout_inlier_ratio: 0.5
+    min_disparity_spread_px: 2.0    # P95 - P5 de las anclas
+    seed: 0
+  b4:
+    estereo: B1               # variante que aporta anclas y estéreo a B3/B4 (B2 rellena: no son anclas)
   evaluacion:
     # Rango de búsqueda por dataset, en px (redondeado a múltiplo de 16). Sale de lo que publica
     # cada dataset, no de un número único: con 96 fijo, SGBM no puede ver la mitad de la escena.

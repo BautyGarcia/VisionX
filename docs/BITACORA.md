@@ -40,6 +40,72 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-14 — T05: Depth Anything V2, alineación, B3 y B4 (PR 2 de 3)
+
+**Tarea:** T05. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T05-profundidad`, sobre
+`main` con el PR #21 (parte 1) ya integrado.
+
+**Qué se hizo.**
+- **Dependencia:** se agrega `transformers>=4.45` al extra `ml` y se actualiza `uv.lock`. El
+  núcleo y el CI no cambian: torch y transformers se importan recién al crear el modelo.
+- `src/visionx/depth/mono.py`: DA V2 Small con el port oficial de Hugging Face.
+  - Revisión fija `5426e4f0` y SHA-256 de `model.safetensors` controlado antes de usarlo.
+  - Sin `bajar-mono` solo usa la caché local: la demo no baja pesos.
+  - Convierte BGR a RGB y vuelve al tamaño original con el post-proceso del propio processor.
+  - Corre en MPS en la Mac.
+- `src/visionx/depth/align.py`: `d ≈ s·m + t` con RANSAC (pares al azar, pendiente > 0) y
+  reajuste por mínimos cuadrados sobre los inliers. El diagnóstico va en su propio resultado
+  (`Alignment`, fuera del schema 3):
+  - anclas, cobertura de grilla y rango de disparidad;
+  - inliers y residuos P50/P95;
+  - **celdas reservadas:** se apartan celdas enteras antes de ajustar, no píxeles sueltos.
+  - Se rechaza con motivo si las anclas están concentradas, si no tienen variación (la
+    escala no queda determinada), si hay poco consenso o si el ajuste no generaliza.
+- `src/visionx/depth/hybrid.py`: B3 (monocular alineado) y B4 (estéreo donde es válido,
+  monocular alineado en el resto).
+  - Sin alineación aceptada, B3 no responde y B4 queda solo estéreo, PARTIAL con el motivo.
+  - `HybridEstimator` cumple `DepthEstimator`, y `predict_detailed` agrega el mapa de fuente
+    (estéreo o mono) y la alineación.
+  - `alignment_quality` queda en None a propósito.
+- Las anclas salen de B1 (`depth.b4.estereo`): B2 rellena con WLS, y esos valores no son
+  medidas independientes.
+- `stereo.py`: la preparación del par y el armado del `DepthResult` pasan a funciones
+  compartidas (`prepare_pair` y `build_result`).
+- Evaluador: acepta B3/B4 y anota en el CSV, por muestra, si la alineación se aceptó, el
+  motivo, s, t, la grilla, los inliers, las celdas reservadas y el tiempo del monocular.
+  Comando nuevo `bajar-mono`.
+
+**Evidencia.**
+- `uv run pytest`: 305 aprobados (13 nuevos en `tests/test_depth_hybrid.py`, con un
+  monocular falso). Con `uv sync --locked` (sin torch, como el CI) también 305. `ruff`
+  correcto.
+- DA V2 en MPS: unos 40 ms por imagen de 1080×860 después del primer cuadro (el primero tardó
+  1,8 s).
+- Control previo en un par de InStereo2K val: su salida es afín a la GT (correlación 0,96).
+- Humo en InStereo2K val (10 pares, parámetros provisorios, región all, media por escena):
+
+| Método | EPE (px) | bad-2 (%) | Cobertura |
+|---|---|---|---|
+| B1 | 1,77 | 9,4 | 46 % |
+| B3 | 1,60 | 18,8 | 17 % |
+| B4 | 1,88 | 11,3 | 55 % |
+
+**Problema.**
+- La alineación se aceptó en 3 de 10 pares. Los otros 7 fallaron por poco consenso: entre 28 y
+  49 % de inliers con un umbral de 1 px, contra un mínimo de 50 %.
+- A 1080 px de ancho, 1 px es demasiado exigente para una relación que no es exactamente
+  afín. Por eso B3 cubre tan poco y B4 casi siempre queda en solo estéreo.
+- No se corrigió acá: los umbrales se eligen en el PR 3 con los 102 pares de validación, no
+  mirando estos 10.
+
+**Límites.**
+- No se corrió nada sobre MiddEval3, ETH3D ni la ELP.
+- Falta la latencia del pipeline completo en la ELP (PR 3).
+
+**Próximo paso:** PR 3. Barrido de SGBM y alineación en InStereo2K val, comparación a igual
+cobertura, congelado en la config, tabla única sobre el test público y latencia M9 en la Mac
+con `dev-1114-distancias`.
+
 ## 2026-11-14 — T05: plan, estéreo clásico B0–B2 y métricas (PR 1 de 3)
 
 **Tarea:** T05. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T05-profundidad`.
