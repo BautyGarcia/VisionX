@@ -17,6 +17,7 @@ from __future__ import annotations
 import heapq
 import itertools
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -342,14 +343,14 @@ class FakePlayer:
         self.started.set()
         completed = True
         if self.realtime:
+            # Plazo con reloj real: sumar block_ms por vuelta subestima el tiempo cuando
+            # Event.wait se pasa (pasa en CI de macOS cargado) y el audio "duraba" de más.
             duration_s = len(samples) / sample_rate / self.speed
-            block_s = self.block_ms / 1000
-            elapsed = 0.0
-            while elapsed < duration_s:
-                if stop.wait(block_s):
+            deadline = time.monotonic() + duration_s
+            while (left := deadline - time.monotonic()) > 0:
+                if stop.wait(min(self.block_ms / 1000, left)):
                     completed = False
                     break
-                elapsed += block_s
         elif stop.is_set():
             completed = False
         self.played.append((len(samples), sample_rate, completed))

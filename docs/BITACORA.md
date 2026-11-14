@@ -105,6 +105,225 @@ No se probó `--voz` con micrófono ni `--fuente usb`.
 **Próximo paso.** Con la grabación de hoy: `ejecutar --fuente <grabación> --detector yolo` para
 ver el dashboard con frames reales. Después, T09 (buscar y distancia) como `ModeHandler`.
 
+## 2026-11-14 — T05: Depth Anything V2, alineación, B3 y B4 (PR 2 de 3)
+
+**Tarea:** T05. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T05-profundidad`, sobre
+`main` con el PR #21 (parte 1) ya integrado.
+
+**Qué se hizo.**
+- **Dependencia:** se agrega `transformers>=4.45` al extra `ml` y se actualiza `uv.lock`. El
+  núcleo y el CI no cambian: torch y transformers se importan recién al crear el modelo.
+- `src/visionx/depth/mono.py`: DA V2 Small con el port oficial de Hugging Face.
+  - Revisión fija `5426e4f0` y SHA-256 de `model.safetensors` controlado antes de usarlo.
+  - Sin `bajar-mono` solo usa la caché local: la demo no baja pesos.
+  - Convierte BGR a RGB y vuelve al tamaño original con el post-proceso del propio processor.
+  - Corre en MPS en la Mac.
+- `src/visionx/depth/align.py`: `d ≈ s·m + t` con RANSAC (pares al azar, pendiente > 0) y
+  reajuste por mínimos cuadrados sobre los inliers. El diagnóstico va en su propio resultado
+  (`Alignment`, fuera del schema 3):
+  - anclas, cobertura de grilla y rango de disparidad;
+  - inliers y residuos P50/P95;
+  - **celdas reservadas:** se apartan celdas enteras antes de ajustar, no píxeles sueltos.
+  - Se rechaza con motivo si las anclas están concentradas, si no tienen variación (la
+    escala no queda determinada), si hay poco consenso o si el ajuste no generaliza.
+- `src/visionx/depth/hybrid.py`: B3 (monocular alineado) y B4 (estéreo donde es válido,
+  monocular alineado en el resto).
+  - Sin alineación aceptada, B3 no responde y B4 queda solo estéreo, PARTIAL con el motivo.
+  - `HybridEstimator` cumple `DepthEstimator`, y `predict_detailed` agrega el mapa de fuente
+    (estéreo o mono) y la alineación.
+  - `alignment_quality` queda en None a propósito.
+- Las anclas salen de B1 (`depth.b4.estereo`): B2 rellena con WLS, y esos valores no son
+  medidas independientes.
+- `stereo.py`: la preparación del par y el armado del `DepthResult` pasan a funciones
+  compartidas (`prepare_pair` y `build_result`).
+- Evaluador: acepta B3/B4 y anota en el CSV, por muestra, si la alineación se aceptó, el
+  motivo, s, t, la grilla, los inliers, las celdas reservadas y el tiempo del monocular.
+  Comando nuevo `bajar-mono`.
+
+**Evidencia.**
+- `uv run pytest`: 305 aprobados (13 nuevos en `tests/test_depth_hybrid.py`, con un
+  monocular falso). Con `uv sync --locked` (sin torch, como el CI) también 305. `ruff`
+  correcto.
+- DA V2 en MPS: unos 40 ms por imagen de 1080×860 después del primer cuadro (el primero tardó
+  1,8 s).
+- Control previo en un par de InStereo2K val: su salida es afín a la GT (correlación 0,96).
+- Humo en InStereo2K val (10 pares, parámetros provisorios, región all, media por escena):
+
+| Método | EPE (px) | bad-2 (%) | Cobertura |
+|---|---|---|---|
+| B1 | 1,77 | 9,4 | 46 % |
+| B3 | 1,60 | 18,8 | 17 % |
+| B4 | 1,88 | 11,3 | 55 % |
+
+**Problema.**
+- La alineación se aceptó en 3 de 10 pares. Los otros 7 fallaron por poco consenso: entre 28 y
+  49 % de inliers con un umbral de 1 px, contra un mínimo de 50 %.
+- A 1080 px de ancho, 1 px es demasiado exigente para una relación que no es exactamente
+  afín. Por eso B3 cubre tan poco y B4 casi siempre queda en solo estéreo.
+- No se corrigió acá: los umbrales se eligen en el PR 3 con los 102 pares de validación, no
+  mirando estos 10.
+
+**Límites.**
+- No se corrió nada sobre MiddEval3, ETH3D ni la ELP.
+- Falta la latencia del pipeline completo en la ELP (PR 3).
+
+**Próximo paso:** PR 3. Barrido de SGBM y alineación en InStereo2K val, comparación a igual
+cobertura, congelado en la config, tabla única sobre el test público y latencia M9 en la Mac
+con `dev-1114-distancias`.
+
+## 2026-11-14 — T05: plan, estéreo clásico B0–B2 y métricas (PR 1 de 3)
+
+**Tarea:** T05. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T05-profundidad`.
+
+**Plan acordado en 3 PRs.**
+1. Estéreo clásico B0–B2, métricas y evaluador (este paso).
+2. Depth Anything V2 Small, alineación `d ≈ s·m + t` con RANSAC y diagnóstico propio, B3 y B4.
+3. Ajuste con InStereo2K val, congelado en la config, tabla única sobre el test público y
+   latencia en la Mac (M9) a 640×360, 960×540 y 1280×720 por ojo.
+
+**Decisiones.**
+- **Con qué datos se ajusta.** La entrada de T04 decía «T05 sobre MiddEval3/ETH3D», pero esos
+  son test (TECNICO T04). Bauty decidió ajustar todo con la validación de InStereo2K (102 pares)
+  y correr MiddEval3/ETH3D una sola vez con los parámetros congelados. El evaluador rechaza el
+  grupo test salvo con `--test-congelado`.
+- **Rango de búsqueda por dataset, no 96 fijo.** Con 96, SGBM no puede ver disparidades de
+  InStereo2K (hasta ~265 px) ni de MiddEval3-H (`ndisp` de 120 a 380). Regla: lo que publica
+  cada dataset, redondeado a múltiplo de 16. MiddEval3 usa el `ndisp` de cada `calib.txt`.
+  ETH3D trae `ndisp` = ancho (es relleno), así que se usa 64, por el máximo de su GT en la
+  auditoría de T04 (61,3 px). InStereo2K usa 272. Para la ELP, `num_disparities_for` lo
+  calcula con la geometría y la distancia mínima.
+- **DA V2 (para el PR 2):** se carga con `transformers` (`Depth-Anything-V2-Small-hf`), solo
+  la versión Small (Apache 2.0). Bauty delegó la elección.
+
+**Qué se hizo.**
+- `src/visionx/depth/stereo.py`:
+  - `SgbmMatcher` calcula B0 (SGBM base), B1 (unicidad, manchas y L/R propio) y B2 (WLS con
+    máscara por confianza).
+  - `SgbmEstimator` cumple `DepthEstimator`: recibe un `StereoFrame` rectificado, comprueba
+    la geometría, puede reducir a `compute_size` (trabaja en `geometry.resized`) y devuelve un
+    `DepthResult` con `depth_m`.
+  - Convenciones probadas: división por 16, inválido de SGBM ≠ disparidad 0, matcher derecho
+    con signo negativo pasado a positivo, y L/R leyendo en `x − d`.
+- `src/visionx/depth/metrics.py`: EPE, bad-1/2/3, cobertura y, con geometría, AbsRel, MAE_Z,
+  sesgo y P95. El agregado es por escena (principal) y por píxel. No responder da cobertura 0
+  y error NaN, nunca EPE 0.
+- `python -m visionx.depth evaluar <B0|B1|B2> <dataset> --grupo val`: escribe `muestras.csv` y
+  `resumen.yaml` (commit, comando y parámetros) en `outputs/profundidad/`.
+- `configs/default.yaml`: parámetros de SGBM, B1 y B2 **provisorios** y rangos por dataset.
+
+**Evidencia.**
+- `uv run pytest`: 292 aprobados (18 nuevos en `tests/test_depth_stereo.py`). `ruff check` y
+  `ruff format --check` correctos.
+- Prueba de humo con parámetros provisorios, InStereo2K val, 10 muestras repartidas (`--limite
+  10`), región all, media por escena:
+
+| Método | EPE (px) | bad-2 (%) | Cobertura |
+|---|---|---|---|
+| B0 | 5,90 | 23,4 | 74 % |
+| B1 | 1,77 | 9,4 | 46 % |
+| B2 | 0,63 | 4,5 | 53 % |
+
+**Límites.**
+- Son 10 de 102 pares y parámetros sin ajustar: sirven para ver que el pipeline funciona, no
+  como resultado. La comparación honesta es a igual cobertura (PR 3).
+- No se corrió nada sobre MiddEval3, ETH3D ni la ELP.
+- No se midió la latencia en el pipeline real.
+
+**Próximo paso:** PR 2 (DA V2, alineación, B3 y B4).
+
+## 2026-11-14 — T02: prueba M2 con la ELP en la Mac y grabaciones de desarrollo
+
+**Tarea:** T02 (pedido de Tomás). **Persona/agente:** Bauty / Claude Code. **Rama:**
+`a/T02-grabaciones` (solo documentación).
+
+**Objetivo.** Probar la captura de T02 con la ELP real (prueba M2 de aceptación) y grabar clips de
+desarrollo para reproducir sin cámara.
+
+**Contexto.**
+- Equipo: MacBook Pro M2 Max (macOS 15.7.3), `main` en `15700df`.
+- `configs/local.yaml` (ignorado por Git): `device: 1`, `backend: avfoundation`, `fps: 60`.
+- Calibración configurada: `elp-1920x1080-rational-6114e3eef3`.
+- Precalentamiento: 40 min con `ver`, de 14:30 a 15:10. El primer intento (13:34) se cortó: la ELP
+  dejó de entregar cuadros, `SourceError` después de 3 reintentos, y volvió recién al desenchufarla
+  y enchufarla de nuevo.
+
+**Hallazgos.**
+- **`fps: 30` de `configs/default.yaml` limita la ELP a 30 fps en la Mac.** `modos` midió 29,9 fps en
+  3840×1080. Pidiendo 60 da 58,7 fps, como el 12/11. Se resolvió en el override local; Tomás decide
+  si cambia el default.
+- **Índice:** con un iPhone cerca, Continuity Camera ocupa un índice y la ELP pasó al 1 (el iPhone
+  al 2).
+- **Orden de los ojos:** correcto (tapar el lente izquierdo oscurece el panel IZQUIERDO), así que
+  no hace falta `swap_eyes`.
+- **Reconexión:** cuando la ELP se trabó del lado USB, abría pero devolvía 0 cuadros. Los 3
+  reintentos de `UsbStereoSource` no la recuperaron. Solo se recuperó desenchufándola.
+
+**M2: 10 min a ritmo completo** (`--cada 1`, JPEG 95, cola 8, cámara quieta).
+
+| Medida | Resultado |
+|---|---|
+| `verificar` | 31 256 de 31 256 pares con hash correcto; estado `cerrada` |
+| Leídos | 32 127 pares a 53,54 fps; 0 fallos de lectura, 0 reconexiones |
+| Guardados | 31 256 a 52,09 fps (`tiempos.fps_efectivo`) |
+| Descartados por cola llena | 871 (2,7 %) |
+| `intervalo_max_ms` / `huecos` | 392 ms / 4883 (lectura: 4778, o sea que vienen de la cámara, no del disco) |
+| Memoria del proceso (RSS, muestreo cada 5 s) | 500–780 MB, estable, sin crecimiento |
+| Tamaño en disco | 19 GB (~0,6 MB por par; Tomás estimaba ~40 GB) |
+
+**Clips de desarrollo** (`--cada 4`; todos `cerrada`, sin descartes ni fallos de lectura):
+
+| Clip | Pares | fps guardados | Tamaño | Contenido |
+|---|---|---|---|---|
+| `dev-1114-distancias` | 274 | 13,65 | 156 MB | Vaso 0,5 m; botella y taza 1 m; caja 1,5 m; bolso 3 m (cinta, profundidad axial) |
+| `dev-1114-lectura` | 2035 | 13,65 | 963 MB | TITA, Ashwa y Fusion a 0,25 / 0,5 / 1 m; `segmentos.csv` y `textos.txt` |
+| `dev-1114-lectura-b` | 611 | 13,61 | 275 MB | Fusion a 0,5 y 1 m (faltaron en el clip anterior, ver problemas) |
+| `dev-1114-iguales` | 527 | 13,61 | 239 MB | Dos tazas iguales a 0,5 y 0,8 m: 5 s quieta y 25 s de paneo (`fases.csv`) |
+| `dev-1114-escenas` | 3019 | 13,84 | 1,8 GB | Cuarto, baño, living, cocina, jardín y lavadero, 10 s quieta cada uno (`fases.csv`) |
+| `dev-1114-buscar-a/b/c` | 944 / 948 / 948 | ~13,7 | 0,55–0,6 GB c/u | Botella, taza y bolso entrando y saliendo de cuadro con cámara en mano |
+| `dev-1114-acercarse-1/2/3` | 401 / 401 / 389 | ~13,6 | 0,23–0,27 GB c/u | Caminata hacia silla, puerta y pared lisa |
+
+- Los clips se grabaron con una guía por voz (`say`) que también escribe `segmentos.csv` o
+  `fases.csv` con `time.monotonic_ns()`, el mismo reloj que `received_ns`. Así cada toma se ubica
+  sin adivinar.
+- Revisión a ojo de cuadros de cada clip: sin personas, ni siquiera reflejadas en espejos; la
+  pantalla de la laptop y el cartel de wifi no son legibles o están vacíos.
+- **Primer dato de lectura:** a 0,5 m solo se lee el texto más grande (≈75 px de ancho para el pote
+  Fusion); a 0,25 m se leen los octógonos de TITA. La ELP gran angular limita el OCR a muy corta
+  distancia.
+
+**Problemas.**
+- **Primer intento de `lectura`:** la duración fija calculada no alcanzó para la guía por voz, y no
+  quedaron grabadas Fusion a 0,5 y 1 m. Se grabaron aparte en `lectura-b`, y la guía pasó a cortar
+  `grabar` con SIGINT al terminar.
+- **Primer intento de `iguales`:** la guía no habló y la cámara quedó quieta. Se borró y se repitió
+  con una guía que avisa por voz si la cámara no arranca en 15 s.
+- **Distancias:** el clip arrancó 9 s más tarde de lo anunciado; no afecta, porque la cámara estaba
+  quieta.
+
+**Decisión: se dan de baja los clips «difíciles»** (poca luz, contraluz, movimiento). Bauty decidió
+no grabarlos: para la demo del TP no hace falta ese nivel, y no tenía cómo oscurecer un ambiente ni
+una fuente de contraluz suficiente. Quedan sin ejemplos propios de la ELP para ajustar la abstención
+con poca luz, contraluz o desenfoque.
+
+**Límites.**
+- Un solo equipo y una sola sesión.
+- La ELP en Windows sigue sin probarse.
+- El material es de desarrollo, no test, y no es el banco ELP de T04.
+- Las distancias del clip de distancias se midieron con cinta, con una precisión de ±1–2 cm.
+
+**Entrega.**
+- Drive `VisionX-artefactos/grabaciones/`: los 11 clips de desarrollo completos (~5,9 GB) y,
+  de `dev-1114-m2`, solo `manifest.yaml` y `frames.jsonl`.
+- Nada de esto va a Git.
+
+**Próximo paso:** Tomás verifica los SHA-256 con `verificar` desde su PC. Bauty sigue con T05
+usando `dev-1114-distancias`.
+
+**Estado de T04 en el ROADMAP (mismo PR).** El PR #16 ya integró los datos públicos, pero la
+tabla seguía en «En curso» con la reserva de `a/T04-datos`. Pasa a **Parcial** y se libera la
+reserva: falta el banco ELP (escenas separadas por sesión y test físico reservado), que no se
+cubre con los clips de desarrollo de arriba. Sin pruebas de software; revisión de diff.
+
 ## 2026-11-14 — T08: reglas de voz, salida con prioridad y cancelación, Piper y Whisper (sin micrófono)
 
 **Tarea:** T08. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/T08-voz`, apilada sobre

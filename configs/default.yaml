@@ -17,9 +17,55 @@ camera:
 depth:
   compute: [1280, 720]      # resolución por ojo para profundidad
   range_m: [0.5, 3.0]       # rango donde se anuncian metros
+  min_coverage: 0.0         # bajo esto el DepthResult sale PARTIAL; provisorio hasta T05 PR 3
+  # SGBM y filtros de B0-B2 (src/visionx/depth/stereo.py). PROVISORIOS: se ajustan con la
+  # validación de InStereo2K y se congelan antes de correr el test público (T05 PR 3).
   sgbm:
-    num_disparities: 96     # mínimo ~0,25 m a 720p
-    block_size: 5
+    num_disparities: 96     # ELP a 1280x720 (fx ~404 px, B ~59 mm): d ~48 px a 0,5 m. Al cambiar
+                            # de resolución, recalcular con stereo.num_disparities_for
+    min_disparity: 0
+    block_size: 5           # px, impar
+    p1_factor: 8            # P1 = 8 * 3 canales * block_size²
+    p2_factor: 32           # P2 = 32 * 3 canales * block_size²
+    mode: sgbm_3way         # sgbm | sgbm_3way | hh
+    uniqueness_ratio: 10    # B1/B2, %
+    speckle_window: 100     # B1/B2, px
+    speckle_range: 2        # B1/B2, px
+    lr_max_diff_px: 1.0     # B1, px
+    wls_lambda: 8000.0      # B2
+    wls_sigma: 1.5          # B2
+    wls_min_confidence: 128.0  # B2, escala 0-255 del mapa de confianza
+  # Monocular preentrenada y congelada (src/visionx/depth/mono.py). Necesita --extra ml y bajar
+  # los pesos una vez: `python -m visionx.depth bajar-mono`. Solo Small (Apache 2.0).
+  mono:
+    repo: depth-anything/Depth-Anything-V2-Small-hf
+    revision: 5426e4f0f36572d16453bbda7a8389317b1bef99   # commit fijo del repo de pesos
+    weights_sha256: 3152477ce0d8d6978d76b995120de97cb5b928701fd0f817769f59e249a16b70
+    device: auto              # auto | mps | cuda | cpu
+  # Alineación d ≈ s·m + t con anclas estéreo (src/visionx/depth/align.py). PROVISORIOS: los
+  # umbrales en px dependen de la resolución y se ajustan con InStereo2K val (T05 PR 3).
+  alineacion:
+    grid_cols: 8
+    grid_rows: 6
+    min_anchors_per_cell: 20
+    min_grid_coverage: 0.25         # fracción de celdas con anclas
+    holdout_fraction: 0.2           # celdas reservadas para comprobar el ajuste
+    max_fit_anchors: 5000
+    ransac_iterations: 200
+    inlier_threshold_px: 1.0
+    min_inlier_ratio: 0.5
+    min_holdout_inlier_ratio: 0.5
+    min_disparity_spread_px: 2.0    # P95 - P5 de las anclas
+    seed: 0
+  b4:
+    estereo: B1               # variante que aporta anclas y estéreo a B3/B4 (B2 rellena: no son anclas)
+  evaluacion:
+    # Rango de búsqueda por dataset, en px (redondeado a múltiplo de 16). Sale de lo que publica
+    # cada dataset, no de un número único: con 96 fijo, SGBM no puede ver la mitad de la escena.
+    rango_busqueda:
+      middeval3: calib      # ndisp de calib.txt por escena (120-380 px en H)
+      eth3d: 64             # calib.txt trae ndisp = ancho (relleno); máx. GT de T04: 61,3 px
+      instereo2k: 272       # README y auditoría T04: disparidad 20-265 px
 
 detection:
   model: yolo26n-seg        # yolo26n-seg | yolo11n-seg (referencia); comparar con `python -m visionx.detection medir`
