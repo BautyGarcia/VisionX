@@ -213,6 +213,14 @@ medir cobertura/error; conservar parámetros elegidos en desarrollo.
 | B4 | Regla fija: estéreo donde es fiable, monocular alineado en el resto, sin valor donde fallan ambos |
 
 Congelar cuál variante estéreo aporta B4 y sus umbrales con validación, antes del test.
+
+**Implementado (`src/visionx/depth/stereo.py`, `metrics.py`, `python -m visionx.depth evaluar`).**
+- B0–B2 con `SgbmMatcher` (núcleo offline) y `SgbmEstimator` (`DepthEstimator` de la app,
+  con `compute_size` opcional). Parámetros en `depth.sgbm`, provisorios hasta el ajuste.
+- **Rango de búsqueda:** por dataset (`depth.evaluacion.rango_busqueda`) y, en la ELP, desde
+  la geometría con `num_disparities_for(geometry, Z_min)`. Un 96 fijo deja ciegos los cercanos.
+- **Ajuste y test:** se ajusta con InStereo2K val; el evaluador rechaza el grupo test salvo con
+  `--test-congelado` (decidido 14/11).
 **B4 es el control clave:** ya combina ambas fuentes; si Fusion mejora SGBM pero no B4,
 no habremos demostrado que aprender la combinación agrega valor.
 

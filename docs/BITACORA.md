@@ -40,6 +40,66 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-14 — T05: plan, estéreo clásico B0–B2 y métricas (PR 1 de 3)
+
+**Tarea:** T05. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T05-profundidad`.
+
+**Plan acordado en 3 PRs.**
+1. Estéreo clásico B0–B2, métricas y evaluador (este paso).
+2. Depth Anything V2 Small, alineación `d ≈ s·m + t` con RANSAC y diagnóstico propio, B3 y B4.
+3. Ajuste con InStereo2K val, congelado en la config, tabla única sobre el test público y
+   latencia en la Mac (M9) a 640×360, 960×540 y 1280×720 por ojo.
+
+**Decisiones.**
+- **Con qué datos se ajusta.** La entrada de T04 decía «T05 sobre MiddEval3/ETH3D», pero esos
+  son test (TECNICO T04). Bauty decidió ajustar todo con la validación de InStereo2K (102 pares)
+  y correr MiddEval3/ETH3D una sola vez con los parámetros congelados. El evaluador rechaza el
+  grupo test salvo con `--test-congelado`.
+- **Rango de búsqueda por dataset, no 96 fijo.** Con 96, SGBM no puede ver disparidades de
+  InStereo2K (hasta ~265 px) ni de MiddEval3-H (`ndisp` de 120 a 380). Regla: lo que publica
+  cada dataset, redondeado a múltiplo de 16. MiddEval3 usa el `ndisp` de cada `calib.txt`.
+  ETH3D trae `ndisp` = ancho (es relleno), así que se usa 64, por el máximo de su GT en la
+  auditoría de T04 (61,3 px). InStereo2K usa 272. Para la ELP, `num_disparities_for` lo
+  calcula con la geometría y la distancia mínima.
+- **DA V2 (para el PR 2):** se carga con `transformers` (`Depth-Anything-V2-Small-hf`), solo
+  la versión Small (Apache 2.0). Bauty delegó la elección.
+
+**Qué se hizo.**
+- `src/visionx/depth/stereo.py`:
+  - `SgbmMatcher` calcula B0 (SGBM base), B1 (unicidad, manchas y L/R propio) y B2 (WLS con
+    máscara por confianza).
+  - `SgbmEstimator` cumple `DepthEstimator`: recibe un `StereoFrame` rectificado, comprueba
+    la geometría, puede reducir a `compute_size` (trabaja en `geometry.resized`) y devuelve un
+    `DepthResult` con `depth_m`.
+  - Convenciones probadas: división por 16, inválido de SGBM ≠ disparidad 0, matcher derecho
+    con signo negativo pasado a positivo, y L/R leyendo en `x − d`.
+- `src/visionx/depth/metrics.py`: EPE, bad-1/2/3, cobertura y, con geometría, AbsRel, MAE_Z,
+  sesgo y P95. El agregado es por escena (principal) y por píxel. No responder da cobertura 0
+  y error NaN, nunca EPE 0.
+- `python -m visionx.depth evaluar <B0|B1|B2> <dataset> --grupo val`: escribe `muestras.csv` y
+  `resumen.yaml` (commit, comando y parámetros) en `outputs/profundidad/`.
+- `configs/default.yaml`: parámetros de SGBM, B1 y B2 **provisorios** y rangos por dataset.
+
+**Evidencia.**
+- `uv run pytest`: 292 aprobados (18 nuevos en `tests/test_depth_stereo.py`). `ruff check` y
+  `ruff format --check` correctos.
+- Prueba de humo con parámetros provisorios, InStereo2K val, 10 muestras repartidas (`--limite
+  10`), región all, media por escena:
+
+| Método | EPE (px) | bad-2 (%) | Cobertura |
+|---|---|---|---|
+| B0 | 5,90 | 23,4 | 74 % |
+| B1 | 1,77 | 9,4 | 46 % |
+| B2 | 0,63 | 4,5 | 53 % |
+
+**Límites.**
+- Son 10 de 102 pares y parámetros sin ajustar: sirven para ver que el pipeline funciona, no
+  como resultado. La comparación honesta es a igual cobertura (PR 3).
+- No se corrió nada sobre MiddEval3, ETH3D ni la ELP.
+- No se midió la latencia en el pipeline real.
+
+**Próximo paso:** PR 2 (DA V2, alineación, B3 y B4).
+
 ## 2026-11-14 — T02: prueba M2 con la ELP en la Mac y grabaciones de desarrollo
 
 **Tarea:** T02 (pedido de Tomás). **Persona/agente:** Bauty / Claude Code. **Rama:**
