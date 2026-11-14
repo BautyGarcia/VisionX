@@ -1,0 +1,39 @@
+# Grillas del ajuste de T05 (PR 3): `uv run --extra ml python -m visionx.depth ajustar`.
+# Solo elige InStereo2K val. El test público (MiddEval3, ETH3D) no aparece acá.
+#
+# Objetivo único: acierto-2 = % de los píxeles con GT respondidos con error <= 2 px, media por
+# muestra. Junta cobertura y error: un filtro que descarta píxeles buenos baja el acierto igual
+# que uno que deja pasar píxeles malos. La media por escena no sirve para elegir: val tiene
+# dos tramos y uno tiene 2 pares (se informa aparte).
+#
+# Etapas, cada una con lo anterior ya fijado:
+#   1. base SGBM (bloque, P1/P2) sobre B0
+#   2. filtros de B1 x alineación, sobre B4 con anclas B1
+#   3. WLS sobre B2
+#   4. alineación sobre B4 con anclas B2; gana la mejor de 2 y 4
+# Confirmación: los mejores B4 se repiten en muestras repartidas de train para ver si el orden
+# se mantiene en otras escenas (no elige: solo avisa).
+
+base:
+  block_size: [3, 5, 7, 9]
+  p1_p2_factor: [[4, 16], [8, 32], [8, 64]]
+
+b1:
+  uniqueness_ratio: [5, 10, 15]
+  speckle_window: [0, 100]
+  lr_max_diff_px: [1.0, 2.0]
+
+alineacion:
+  inlier_threshold_px: [1.0, 2.0, 3.0]
+  min_inlier_ratio: [0.3, 0.5]
+  min_holdout_inlier_ratio: [0.3, 0.5]
+
+b2:
+  wls_lambda: [4000.0, 8000.0, 16000.0]
+  wls_sigma: [1.0, 1.5]
+  wls_min_confidence: [64.0, 128.0, 192.0]
+
+confirmacion:
+  grupo: train
+  muestras: 100
+  mejores: 3
