@@ -15,7 +15,7 @@ Por qué no la mediana de toda la máscara (versión anterior): en objetos calad
 la máscara incluye el fondo que se ve a través, y la mediana se va hacia el fondo; en
 `dev-1114-acercarse-1` daba 0,84 m con la silla a ~0,5 m. La capa cercana daba 0,59 m. En
 objetos compactos (vaso, botella) capa y máscara coinciden y el percentil 20 bajó el error
-contra la cinta en ~2–3 cm (BITACORA T09 mejoras).
+contra la cinta 1,3 cm (vaso) y 2,6 cm (botella) (BITACORA T09 mejoras).
 """
 
 from __future__ import annotations
