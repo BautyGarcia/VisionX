@@ -11,8 +11,9 @@ B4 es el control clave del trabajo: ya combina las dos fuentes. Si Fusion mejora
 no B4, no se demostró que aprender la combinación agregue algo.
 
 Las anclas de la alineación son los píxeles válidos de la variante estéreo elegida en la
-config (`depth.b4.estereo`, B1 de inicio: B2 rellena con WLS y esos valores rellenados no son
-medidas independientes). Cuál variante queda se congela con validación (T05 PR 3).
+config (`depth.b4.estereo`). Se partió de B1 por prudencia (B2 rellena con WLS y esos valores
+no son medidas independientes), pero en InStereo2K val B2 dio mejor B4 (acierto-2 72,0 contra
+68,8) y quedó congelada B2 (T05 PR 3, BITACORA 2026-11-14).
 """
 
 from __future__ import annotations
@@ -60,12 +61,18 @@ def combine(
     mono_relative: np.ndarray,
     doffs: float,
     params: AlignParams,
+    alignment: Alignment | None = None,
 ) -> HybridOutput:
-    """B3 o B4 a partir de una salida estéreo y un mapa monocular del mismo par."""
+    """B3 o B4 a partir de una salida estéreo y un mapa monocular del mismo par.
+
+    `alignment` permite reusar una alineación ya calculada con esas mismas entradas (el ajuste
+    arma B3 y B4 del mismo par sin repetir RANSAC).
+    """
     if variant not in HYBRID_VARIANTS:
         raise InvalidInput(f"variante {variant!r}: se esperaba una de {HYBRID_VARIANTS}")
     m = check_relative(mono_relative, stereo.disparity_px.shape)
-    alignment = align(m, stereo.disparity_px, stereo.valid, params)
+    if alignment is None:
+        alignment = align(m, stereo.disparity_px, stereo.valid, params)
 
     shape = m.shape
     disparity = np.full(shape, np.nan, np.float32)
