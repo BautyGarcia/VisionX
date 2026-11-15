@@ -271,7 +271,8 @@ def test_new_command_invalidates_previous_and_sets_deadline():
     assert controller.active is second and second.mode is Mode.DISTANCE
     assert second.deadline_ns == 1_000 + 5 * 10**9
     texts = spoken(output)
-    assert "Busco taza." in texts and "Mido la distancia a botella." in texts
+    # distancia confirma con un sonido: la respuesta ya nombra el objeto (T09)
+    assert "Busco taza." in texts and "sonido:ok" in texts
     assert "Esa función todavía no está disponible." in texts  # sin handler: no inventa
     output.close()
 
@@ -320,14 +321,14 @@ def test_expired_command_stops_ticking_and_repeat_works():
             calls.append(now_ns)
             return [], False
 
-    controller, output = make_controller(handlers={Mode.DISTANCE: Counting()}, clock=clock)
-    controller.handle_text("distancia")
+    controller, output = make_controller(handlers={Mode.SEARCH: Counting()}, clock=clock)
+    controller.handle_text("buscá la taza")
     controller.tick()
-    clock.advance(6 * 10**9)  # vence a los 5 s
+    clock.advance(31 * 10**9)  # vence a los 30 s
     controller.tick()
     assert len(calls) == 1 and controller.active is None
     controller.handle_text("repetí")
-    assert spoken(output)[-1] == "Mido la distancia."
+    assert spoken(output)[-1] == "Busco taza."
     output.close()
 
 

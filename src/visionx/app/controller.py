@@ -141,6 +141,11 @@ class Controller:
             self.active = command
             self.history.append((command, interp))
             ack = acknowledgement(interp, self.parser.catalog)
+            if command.mode is Mode.DISTANCE:
+                # La respuesta ya nombra el objeto ("Taza a la izquierda, a 1,1 metros"): decir
+                # antes "Mido la distancia a taza." la demoraba ~2 s (se ve en las demos de T09).
+                # Un sonido corto confirma que se entendió sin hacer esperar el número.
+                ack = "sonido:ok"
             if ack:
                 self._say(Say(ack), request_id, now)
             handler = self.handlers.get(command.mode, UnavailableHandler())
