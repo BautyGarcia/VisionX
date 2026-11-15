@@ -241,8 +241,8 @@ def test_lost_target_is_announced_and_reappearance_is_a_new_acquisition():
     c = cmd(Mode.SEARCH, "cup")
     h.start(c, View(), 0)
     seen = [joint(0.1 * i, i, [("cup", -30, 5)]) for i in range(1, 4)]
-    gone = [joint(0.3 + 0.1 * i, 3 + i, []) for i in range(1, 25)]  # 2,4 s sin la taza
-    back = [joint(2.8 + 0.1 * i, 30 + i, [("cup", 25, 9)]) for i in range(1, 4)]
+    gone = [joint(0.3 + 0.1 * i, 3 + i, []) for i in range(1, 31)]  # 3 s sin la taza
+    back = [joint(3.4 + 0.1 * i, 40 + i, [("cup", 25, 9)]) for i in range(1, 4)]
     out, _ = run(h, c, seen + gone + back)
     said = [t for _, t in out]
     # salió por la izquierda: se dice hacia dónde quedó

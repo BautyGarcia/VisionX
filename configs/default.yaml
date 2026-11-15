@@ -102,7 +102,7 @@ modes:
   max_measure_age_s: 3.0    # Z más viejo que esto no se dice, s (la profundidad tarda más)
   gate_deg: 15.0            # salto de ángulo aceptado para seguir al mismo objetivo...
   gate_deg_per_s: 60.0      # ...más esto por segundo sin verlo (la cámara gira)
-  lost_s: 2.0               # sin ver el objetivo durante esto: "Perdí ...", s (clips buscar: 1 -> 2,5 s bajó avisos)
+  lost_s: 2.5               # sin ver el objetivo durante esto: "Perdí ...", s (clips buscar: menos avisos falsos)
   min_interval_s: 1.2       # mínimo entre dos frases de guía, s
   repeat_s: 4.0             # repetir la dirección aunque no cambie, s
   speech_base_s: 0.3        # duración estimada de una frase: base...

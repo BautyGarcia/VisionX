@@ -500,23 +500,56 @@ frame. Los parámetros están en la sección `modes` de la config; son candidato
 | `measure` | Metros solo con la política SPEAK_METERS de quien ubicó el objeto y dentro de `depth.range_m`. Fuera: «muy cerca, a menos de…»/«lejos, a más de…»; reencuadrar; «no puedo medir su distancia» | Ningún metro con DIRECTION_ONLY, ABSTAIN, sin Z o fuera de rango |
 | `simulate` + `python -m visionx.modes simular` | Corre los modos sobre una grabación con el tiempo grabado (`ManualClock`) y latencias de detector/profundidad emuladas. Imprime qué diría y en qué segundo | Misma entrada, misma transcripción |
 
-**Ubicación por objeto provisoria.** La real es de A (`depth/spatial/`, T09/T13). Mientras
-tanto, `app/fakes.py::FakeSpatialEstimator`, con la sección `spatial_provisional`, calcula la
-mediana de Z en la máscara. Política candidata: caja contra el borde lateral → ASK_REFRAME;
-menos de 50 % de la máscara con profundidad o IQR > 25 % de Z → DIRECTION_ONLY. El 25 % sale
-de `dev-1114-distancias`: los objetos compactos dan ~5 % y los que tienen varias superficies
-(televisor, mesa, silla calada) dan 25–50 %. Cuando A entregue su `SpatialEstimator`, se
-reemplaza en `app/__main__.py::build_depth` sin tocar los modos: ellos solo leen `policy` y
-`z_m`.
+**Ubicación por objeto provisoria (`app/spatial.py`, BITACORA 2026-11-15).** La definitiva
+es de A (`depth/spatial/`, T09/T13). Mientras tanto, `ProvisionalSpatialEstimator`, con la
+sección `spatial_provisional`, agrupa la Z de la máscara en **capas** (histograma con bins de
+3 %; los bins casi vacíos separan capas). Toma la capa más cercana que tenga al menos 25 % de la
+máscara e informa su **percentil 20**, que corresponde a la superficie del frente. Así el fondo
+que se ve a través de un objeto calado no arrastra la medida: en `acercarse-1`, con la silla a
+~0,5 m, la mediana de toda la máscara daba 0,84 m y la capa cercana 0,59 m. En vaso y botella,
+el percentil 20 bajó el error contra la cinta entre 1,3 y 2,6 cm, pero sigue quedando +3 a
++5 cm (¿el centro óptico detrás del vidrio desde donde se midió?).
 
-Todo lo que dicen los modos sale con prioridad SHORT: el bip y la dirección deben sonar
-después del «Busco taza.» de confirmación, no cortarlo.
+Política candidata:
+- caja contra el borde lateral → ASK_REFRAME;
+- menos de 50 % de la máscara con profundidad, o sin capa → DIRECTION_ONLY;
+- IQR de la capa > 50 % de Z → DIRECTION_ONLY. Una silla real tiene ~0,2 m de profundidad
+  propia; el 25 % sobre toda la máscara que se usaba antes la dejaba sin metros.
+
+Cuando A entregue su `SpatialEstimator`, se reemplaza en `app/__main__.py::build_depth` sin tocar
+los modos, que solo leen `policy` y `z_m`.
+
+**Voz de la guía.**
+- Todo sale con prioridad SHORT: el bip y la dirección suenan después del «Busco taza.» de
+  confirmación, sin cortarlo.
+- Una frase de guía no se dice mientras la anterior todavía estaría sonando. La duración se
+  estima en `speech_base_s` + `speech_s_per_char`·caracteres (Piper es_AR: 50–70 ms por
+  carácter). Si no, las frases se encolan y la dirección llega tarde: la demo lo mostró con
+  «un poco a la izquierda» sonando con la taza ya al frente.
+- Lo vertical («arriba»/«abajo») se agrega solo con |ángulo| > `vertical_deg` (15°) respecto
+  del eje de la cámara.
+- «Perdí…» dice hacia dónde quedó si salió por un costado («Perdí botella: quedó a la izquierda.»).
+- La guía solo habla en frames donde el objetivo aparece.
+
+**Demos (`python -m visionx.modes demo`).** Misma simulación, más un MP4 de 1280×720:
+- imagen rectificada con las detecciones (gris), la clase pedida (amarillo) y el objetivo
+  (verde, con flecha desde el centro);
+- panel de profundidad y estado del modo;
+- orden y subtítulos;
+- voz de Piper y bips programados como `AudioOutput`: en cola, y una orden nueva corta lo
+  anterior y descarta lo pendiente.
+
+Usa ffmpeg del sistema para H.264 + AAC; sin ffmpeg deja el video mudo y el WAV. Las demos van
+a Drive `VisionX-artefactos/demos/`, no a Git.
 
 ```text
 uv run python -m visionx.modes simular --fuente recordings/dev-1114-buscar-a
     --orden "4.3:buscá la botella" --latencia-detector 0.2 --latencia-profundidad 1.0
 uv run python -m visionx.app ejecutar --fuente recordings/dev-1114-distancias
     --detector yolo --profundidad B0 --consola        # escribir órdenes en la terminal
+uv run python -m visionx.modes demo --fuente recordings/dev-1114-buscar-a
+    --orden "4.3:buscá la botella" --latencia-detector 0.2 --latencia-profundidad 1.0
+    --salida outputs/demos/buscar-a.mp4                # --sin-voz: subtítulos sin Piper
 ```
 
 ### Leer — T10
@@ -577,7 +610,8 @@ monotónicos de Pi y PC sin sincronización y error conocido.
 | `dashboard.render` | Ojo izquierdo con detecciones, profundidad del **mismo frame** con escala fija `depth.range_m`, vista de arriba de la nube del frame (con la geometría real; sin ella no se dibuja), edad/latencia/FPS/errores, salteados y colas | Solo dibuja resultados ya calculados |
 | `science.compare` | Todos los métodos sobre todos los pares, en orden fijo y sin descartes; CSV por frame y método con tiempo y estado; los fallos quedan como filas | 12 frames × 2 métodos = 24 filas, con un fallo registrado |
 | `TraceWriter` | JSONL de eventos (frames, resultados con latencia y edad, uniones, órdenes, audio, resumen) | Seguro entre hilos |
-| `fakes.py` | `SyntheticStereoSource` (par rectificado con el ojo derecho corrido según Z), `ScriptedDetector`, `FakeDepthEstimator`, `FakeSpatialEstimator`. Todos con `model_id` `fake-…` | No miden nada: sustituyen la ELP y lo que entrega A (T05, T09/T13) |
+| `fakes.py` | `SyntheticStereoSource` (par rectificado con el ojo derecho corrido según Z), `ScriptedDetector`, `FakeDepthEstimator`. Todos con `model_id` `fake-…` | No miden nada: sustituyen la ELP y la profundidad real |
+| `spatial.py` | `ProvisionalSpatialEstimator`: capa más cercana de la máscara, percentil 20 y política candidata (ver T09) | Provisoria hasta que A entregue la suya (T09/T13) |
 
 Por qué la profundidad sigue al detector: si cada modelo tomara su propio último frame, con la
 cámara más rápida que ambos casi nunca coincidirían y no habría unión del mismo frame. El costo
@@ -600,7 +634,7 @@ uv run python -m visionx.app comparar --fuente recordings/X --detector yolo
 Con `--fuente` grabación o `usb` se rectifica con `camera.calibration`. `--profundidad
 B0|B1|B2` usa el `SgbmEstimator` de T05 con la sección `depth` (cómputo en `depth.compute`,
 1280×720): la máscara del detector (1920×1080) se reduce a esa resolución por vecino más
-cercano antes de tomar la mediana de Z (`FakeSpatialEstimator(depth_geometry=…)`), y el ángulo
+cercano antes de tomar la mediana de Z (`ProvisionalSpatialEstimator(depth_geometry=…)`), y el ángulo
 sale de la caja en la geometría del frame. Esa ubicación por objeto sigue siendo provisoria
 hasta T09/T13. `fake` solo tiene sentido con la fuente sintética: con una grabación da un plano.
 Cada unión queda en la traza con clase, ID, Z, dispersión, fracción válida, ángulo y política;
