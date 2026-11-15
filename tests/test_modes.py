@@ -582,6 +582,24 @@ def test_provisional_spatial_front_layer_border_and_diffuse():
     assert objs[3].z_m == pytest.approx(2.0, abs=0.03)
 
 
+def test_near_object_with_its_own_depth_still_gives_meters():
+    # silla de cerca: superficies de 0,55 a 1,25 m (IQR ~0,35 m > 50 % de Z ~0,69 m) pero
+    # dentro de la profundidad propia de un objeto (0,4 m): se informa su frente
+    frame = joint(0.0, 0, []).frame
+    z = np.full((G.height, G.width), 3.0, np.float32)
+    z[:, 300:380] = np.linspace(0.55, 1.25, 80, dtype=np.float32)
+    masks = np.zeros((1, G.height, G.width), bool)
+    masks[0, 100:200, 300:380] = True
+    det = build_detection(
+        frame, model_id="t", inference_ms=1.0, class_names=["chair"],
+        boxes_xyxy=np.array([[300, 100, 380, 200]], np.float32),
+        scores=np.full(1, 0.9, np.float32), masks=masks,
+    )  # fmt: skip
+    (obj,) = ProvisionalSpatialEstimator(G).locate(frame, depth_from(frame, z), det)
+    assert obj.policy is DistancePolicy.SPEAK_METERS
+    assert obj.z_m == pytest.approx(0.69, abs=0.03)
+
+
 # --- simulación y CLI --------------------------------------------------------------------
 
 

@@ -92,6 +92,7 @@ spatial_provisional:
   layer_min_frac: 0.25      # una capa de profundidad cuenta como objeto con al menos esto de la máscara
   front_percentile: 20      # percentil de Z dentro de la capa: la superficie del frente
   max_rel_spread: 0.5       # IQR de la capa / Z; más que esto es una capa difusa: solo dirección
+  spread_allowance_m: 0.4   # ...salvo que la IQR no pase esto (m): profundidad propia de un objeto (silla de cerca)
   border_px: 2              # caja a esta distancia del borde lateral: objeto cortado, reencuadrar
 
 # Modos buscar y distancia (T09, src/visionx/modes/). Candidatos sin medir: M1/M7/M8 los fijan.

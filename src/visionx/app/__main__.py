@@ -131,6 +131,7 @@ def build_spatial(
         border_px=float(s.get("border_px", 2.0)),
         layer_min_frac=float(s.get("layer_min_frac", 0.25)),
         front_percentile=float(s.get("front_percentile", 20.0)),
+        spread_allowance_m=float(s.get("spread_allowance_m", 0.4)),
     )
 
 

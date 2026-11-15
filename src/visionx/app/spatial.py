@@ -71,7 +71,10 @@ class ProvisionalSpatialEstimator:
 
     - caja que toca el borde izquierdo o derecho -> ASK_REFRAME (el objeto está cortado);
     - menos de `min_valid` de la máscara con profundidad, o sin capa -> DIRECTION_ONLY;
-    - IQR de la capa mayor que `max_rel_spread`·Z -> DIRECTION_ONLY (capa demasiado difusa);
+    - IQR de la capa mayor que max(`max_rel_spread`·Z, `spread_allowance_m`) -> DIRECTION_ONLY
+      (capa demasiado difusa). El mínimo absoluto existe porque un objeto tiene profundidad
+      propia: de cerca, una silla (asiento a respaldo ~0,4 m) superaba el 50 % de Z = 0,6 m y
+      nunca daba metros, aunque lo que se informa es su frente (p20), que no depende de eso;
     - si no, SPEAK_METERS. El rango que se anuncia lo controla el modo (`modes.range_m`).
 
     `geometry` es la del frame (cajas y máscaras). Si la profundidad está en una versión
@@ -87,6 +90,7 @@ class ProvisionalSpatialEstimator:
         border_px: float = 2.0,
         layer_min_frac: float = 0.25,
         front_percentile: float = 20.0,
+        spread_allowance_m: float = 0.4,
     ) -> None:
         self.geometry = geometry
         self.depth_geometry = depth_geometry or geometry
@@ -95,6 +99,7 @@ class ProvisionalSpatialEstimator:
         self.border_px = border_px
         self.layer_min_frac = layer_min_frac
         self.front_percentile = front_percentile
+        self.spread_allowance_m = spread_allowance_m
 
     def locate(
         self, frame: StereoFrame, depth: DepthResult, detections: Detection
@@ -124,7 +129,9 @@ class ProvisionalSpatialEstimator:
                 policy = DistancePolicy.ASK_REFRAME
             elif z is None or frac < self.min_valid:
                 policy = DistancePolicy.DIRECTION_ONLY
-            elif spread is not None and spread > self.max_rel_spread * z:
+            elif spread is not None and spread > max(
+                self.max_rel_spread * z, self.spread_allowance_m
+            ):
                 policy = DistancePolicy.DIRECTION_ONLY
             else:
                 policy = DistancePolicy.SPEAK_METERS

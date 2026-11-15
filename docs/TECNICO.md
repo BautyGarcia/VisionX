@@ -527,8 +527,10 @@ el percentil 20 bajó el error contra la cinta entre 1,3 y 2,6 cm, pero sigue qu
 Política candidata:
 - caja contra el borde lateral → ASK_REFRAME;
 - menos de 50 % de la máscara con profundidad, o sin capa → DIRECTION_ONLY;
-- IQR de la capa > 50 % de Z → DIRECTION_ONLY. Una silla real tiene ~0,2 m de profundidad
-  propia; el 25 % sobre toda la máscara que se usaba antes la dejaba sin metros.
+- IQR de la capa > max(50 % de Z, 0,4 m) → DIRECTION_ONLY. Una silla tiene ~0,2–0,4 m de
+  profundidad propia: el 25 % sobre toda la máscara que se usaba antes la dejaba sin metros, y
+  sin el mínimo absoluto, de cerca (Z 0,6 m, IQR 0,33 m) tampoco los daba. Como se informa el
+  frente (p20), ese espesor no cambia la medida.
 
 Cuando A entregue su `SpatialEstimator`, se reemplaza en `app/__main__.py::build_depth` sin tocar
 los modos, que solo leen `policy` y `z_m`.
@@ -544,6 +546,10 @@ los modos, que solo leen `policy` y `z_m`.
   «un poco a la izquierda» sonando con la taza ya al frente.
 - Lo vertical («arriba»/«abajo») se agrega solo con |ángulo| > `vertical_deg` (15°) respecto
   del eje de la cámara.
+- Las zonas tienen histéresis (`hysteresis_deg`, 3°): sin ella, un ángulo cerca de un límite
+  alternaba «…, abajo» y «…» en cada frase.
+- Metros y «Llegaste» valen con el objeto al frente o «un poco» a un lado (|h| ≤ `side_deg`).
+  Caminando hacia la silla, esta quedaba a 9–20° y nunca «llegaba».
 - «Perdí…» dice hacia dónde quedó si salió por un costado («Perdí botella: quedó a la izquierda.»).
 - La guía solo habla en frames donde el objetivo aparece.
 
