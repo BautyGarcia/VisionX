@@ -218,7 +218,8 @@ def render_frame(
     if target_xy is not None:
         cv2.arrowedLine(cam, (CAM_W // 2, CAM_H // 2), target_xy, GREEN, 3, tipLength=0.05)
     cv2.drawMarker(cam, (CAM_W // 2, CAM_H // 2), (255, 255, 255), cv2.MARKER_CROSS, 24, 1)
-    canvas[:CAM_H, :CAM_W] = cam
+    # Las etiquetas se dibujan sobre la imagen de la cámara: así no invaden el panel lateral.
+    canvas[:CAM_H, :CAM_W] = painter.text(cam, labels)
     dp = depth_panel(view, range_m)
     canvas[: dp.shape[0], CAM_W:] = dp
     side = [f"t = {t_s:5.1f} s", f"modo: {st.mode}", f"estado: {st.state}"]
@@ -232,7 +233,7 @@ def render_frame(
         for k, s in enumerate(side)
     ]
     lines.append((f"Orden: {st.order}", (16, CAM_H + 12), 22, YELLOW))
-    return painter.text(canvas, labels + lines)
+    return painter.text(canvas, lines)
 
 
 def add_subtitles(
