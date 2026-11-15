@@ -543,14 +543,26 @@ esperar metros. Si A necesita otra política (por ejemplo, profundidad primero),
 
 ```text
 uv run python -m visionx.app ejecutar                       # sintética + fakes, con ventana
-uv run python -m visionx.app ejecutar --sin-ventana --segundos 600 --retraso-detector 80     --retraso-profundidad 150 --ordenes X.jsonl --traza X.jsonl   # sobrecarga
-uv run python -m visionx.app ejecutar --fuente recordings/escena --detector yolo --voz
-uv run python -m visionx.app comparar --frames 100 --csv X.csv
+# sobrecarga: fuente sintética a 60 fps con modelos falsos lentos, 10 min sin ventana
+uv run python -m visionx.app ejecutar --sin-ventana --fps 60 --segundos 600
+    --retraso-detector 80 --retraso-profundidad 150 --ordenes X.jsonl --traza X.jsonl
+# clip real: YOLO + SGBM de T05, traza por objeto y PNG del dashboard final
+uv run python -m visionx.app ejecutar --fuente recordings/dev-1114-distancias
+    --detector yolo --profundidad B0 --traza X.jsonl --captura X.png
+# todos los pares con todos los métodos, en serie: tiempos sin competencia
+uv run python -m visionx.app comparar --fuente recordings/X --detector yolo
+    --profundidad B1 --frames 40 --csv X.csv
 ```
 
-Con `--fuente` grabación o `usb` se rectifica con `camera.calibration`; la profundidad sigue
-siendo `fake` hasta que T05 entregue un `DepthEstimator`. Teclas: c cancelar, espacio hablar
-(con `--voz`), q salir. `--consola` acepta órdenes escritas.
+Con `--fuente` grabación o `usb` se rectifica con `camera.calibration`. `--profundidad
+B0|B1|B2` usa el `SgbmEstimator` de T05 con la sección `depth` (cómputo en `depth.compute`,
+1280×720): la máscara del detector (1920×1080) se reduce a esa resolución por vecino más
+cercano antes de tomar la mediana de Z (`FakeSpatialEstimator(depth_geometry=…)`), y el ángulo
+sale de la caja en la geometría del frame. Esa ubicación por objeto sigue siendo provisoria
+hasta T09/T13. `fake` solo tiene sentido con la fuente sintética: con una grabación da un plano.
+Cada unión queda en la traza con clase, ID, Z, dispersión, fracción válida, ángulo y política;
+`--captura` guarda el dashboard final como PNG. Teclas: c cancelar, espacio hablar (con
+`--voz`), q salir. `--consola` acepta órdenes escritas.
 
 ### Audio USB y voz — T08
 

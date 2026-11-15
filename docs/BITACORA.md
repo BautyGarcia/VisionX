@@ -40,6 +40,77 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-14 — T07: SGBM de T05 en la ejecución, clips de Bauty y primeras distancias reales
+
+**Tarea:** T07 (y datos para T06/T09). **Persona/agente:** Tomás / Claude Code. **Rama:**
+`b/T07-ejecucion` (commits locales; T06 y T08 actualizados y publicados en sus PRs).
+
+**Clips de desarrollo.** Se leyeron desde Drive para escritorio (`G:\Mi unidad\VisionX-artefactos\
+grabaciones`); el conector de Drive de Claude sigue sin ver esa carpeta. Están los 12 clips, pero
+al 14/11 21 h la sincronización estaba incompleta: `dev-1114-lectura-b` tenía 119 de 1222
+imágenes; `dev-1114-iguales`, solo `frames/` (sin `manifest.yaml`, `frames.jsonl` ni
+`fases.csv`), y `dev-1114-m2`, solo `frames.jsonl`, sin el `manifest.yaml` que menciona la
+entrada de Bauty. Se copiaron a `recordings/` (ignorado). `verificar`: `distancias` 274/274,
+`buscar-a` 944/944, `buscar-b` 948/948 y `buscar-c` 948/948 pares con hash correcto. Drive baja
+a demanda a ~0,3 MB/s, así que `acercarse`, `escenas` y `lectura` seguían copiándose.
+
+**Integración.**
+- `main` (T05 partes 1 y 2, entrada M2) se trajo con *merge*, sin rebase ni force push:
+  T06 ← main, T08 ← T06 y T07 ← T08. Los conflictos fueron entradas de BITACORA (se conservaron
+  todas), filas de ROADMAP (T04/T05 de main, T06–T08 de B) y `uv.lock` (regenerado; Ultralytics
+  quedó en 8.4.213). Formato, lint y suite completa en verde en cada paso, con un entorno
+  aparte (`uv sync --locked`, como CI).
+- **Falla intermitente del PR #19 en macOS** (`test_higher_priority_preempts_cancelable_but_not_the_reverse`):
+  `FakePlayer` sumaba `block_ms` por vuelta aunque `Event.wait` tardara más, así que en un
+  runner cargado 1 s de audio podía durar más de 5 s. Ahora usa un plazo con reloj monotónico.
+- `ejecutar`/`comparar --profundidad B0|B1|B2` usan el `SgbmEstimator` de T05 con la sección
+  `depth` (cómputo a 1280×720). La ubicación provisoria reduce cada máscara a esa resolución
+  por vecino más cercano; el ángulo sale de la caja en 1920×1080. Nuevo: la traza guarda cada
+  objeto unido y `--captura` deja un PNG del dashboard. TECNICO T07 actualizado.
+
+**Distancias contra la cinta** (`dev-1114-distancias`, cámara quieta; YOLO26n-seg
+`361fbfabab28`, calibración `elp-2026-11-11-corregida`; Windows 11, Intel de 8 hilos, sin GPU;
+commit `1840d1a`). Z es la mediana de la profundidad dentro de la máscara:
+
+| Objeto (cinta, axial al frente) | B0 | B1 | B2 | Uniones (B0/B1/B2) |
+|---|---|---|---|---|
+| Vaso rojo, 0,50 m | 0,542 m | 0,541 m | 0,544 m | 43 / 24 / 24 |
+| Botella verde, 1,00 m | 1,072 m | 1,072 m | 1,078 m | 43 / 24 / 24 |
+| Taza blanca, 1,00 m | 1,072 m | 1,072 m | 1,054 m | 2 / 1 / 1 (casi no se detecta) |
+| Caja de zapatos, 1,5 m; bolso, 3 m | — | — | — | Sin clase COCO / no detectado |
+
+Error de +4 a +8 cm, igual en las tres variantes. Es compatible con medir la mediana del cuerpo
+del objeto y no su frente, pero no se separó esa causa de un sesgo de calibración: es un solo
+clip con n = 3 objetos útiles. No es una métrica de test.
+
+**Latencia por frame sin competencia** (`comparar`, 40 pares en serie): YOLO 167–174 ms
+(mediana); SGBM B0 675 ms, B1 1242 ms, B2 1254 ms (mediana; p90 754 / 1283 / 1288 ms). En
+`ejecutar`, con todo en paralelo, la reproducción se rectifica a 4,6 fps, YOLO sube a
+~310–390 ms y SGBM a 1,1 s (B0) o 2,1–2,7 s (B1/B2); la edad de la profundidad ronda 2,5 s.
+**En esta notebook, SGBM en CPU no alcanza para guiar en tiempo real**; falta medir en la Mac.
+
+**Seguimiento con cámara en mano** (`detection detectar --rectificar`, ByteTrack por defecto):
+
+| Clip (protagonista, consigna) | Episodios | IDs distintos | Reaparece con el mismo ID |
+|---|---|---|---|
+| `buscar-a` (botella, ~10 entradas) | 14 | 21; 7 episodios con cambio de ID | Nunca |
+| `buscar-b` (taza, ~10 entradas) | 11 | 8; 2 con cambio | Nunca |
+| `buscar-c` (mochila/bolso) | 4 como `backpack`, 3 como `handbag` | 1 y 1 | — (casi no se detecta) |
+
+Episodio: racha con la clase vista, cortada tras más de 6 frames procesados (~0,44 s) sin
+verla. Muchas detecciones salen **sin ID**: ByteTrack no confirma la pista. Hipótesis sin
+verificar: a ~13,7 fps (`--cada 4`) y con barrido de la cámara, el solapamiento entre frames es
+bajo. Que la reaparición dé un ID nuevo es esperable: el búfer es de 30 frames procesados
+(~2,2 s). Para T09, «buscar» no puede depender de que el ID sobreviva a una salida de cuadro.
+
+**Límites.** Conteos automáticos, sin anotación manual, sobre clips de desarrollo de una sola
+sesión. No se probó `ejecutar` con ventana, con voz ni con la ELP conectada a Windows.
+
+**Próximo paso.** Abrir el PR de T07 cuando T06/T08 estén integrados. Para T09: ubicación por
+objeto con incertidumbre (A) y una estrategia de búsqueda que no dependa del ID. Pedir a Bauty
+el `manifest.yaml` de `m2` y que confirme la subida de `iguales` y `lectura-b`. Medir SGBM en la
+Mac antes de decidir la profundidad interactiva.
+
 ## 2026-11-14 — T07: ejecución interactiva, controlador, dashboard y comparación (con sustitutos)
 
 **Tarea:** T07. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/T07-ejecucion`, apilada sobre
