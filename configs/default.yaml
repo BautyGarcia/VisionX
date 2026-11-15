@@ -100,6 +100,7 @@ modes:
   center_deg: 8.0           # |ángulo| <= esto: "al frente" (grados; + a la derecha)
   side_deg: 25.0            # <= esto: "un poco a la izquierda/derecha"; más: "a la izquierda"
   vertical_deg: 15.0        # |ángulo vertical| > esto: se agrega "arriba"/"abajo" (respecto de la cámara)
+  hysteresis_deg: 3.0       # margen para cambiar de zona (izq./frente/abajo): no alternar en un límite
   confirm_hits: 2           # presencia: frames con el objeto...
   confirm_s: 1.0            # ...dentro de esta ventana, s (en tiempo, no en frames)
   max_age_s: 1.0            # observación más vieja que esto no guía, s

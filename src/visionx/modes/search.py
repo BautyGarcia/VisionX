@@ -38,11 +38,11 @@ from visionx.modes.common import (
     View,
     age_s,
     candidates,
-    direction,
     horizontal,
     measure,
     measure_phrase,
     speech_s,
+    vertical,
 )
 from visionx.modes.target import Target, TargetMemory, plural
 from visionx.shared.contracts import Command
@@ -83,6 +83,8 @@ class SearchHandler:
         self._last_say_ns: int | None = None
         self._finished = False  # ya dijo su frase de cierre (puede pasar dentro de start())
         self._stall_reported = False
+        self._h_word: str | None = None  # últimas zonas dichas, para la histéresis
+        self._v_word: str | None = None
 
     # -- interfaz ModeHandler --------------------------------------------------------------
 
@@ -239,6 +241,7 @@ class SearchHandler:
         reacquired = self.found_once
         self.state, self.found_once = GUIDING, True
         self.target = Target(c.label, c.angle_h_deg, c.track_id, c.received_ns, c.angle_v_deg)
+        self._h_word = self._v_word = None
         self.memory.remember(self.target)
         self._measure = None
         self._event("adquirido", {"angulo_h": round(c.angle_h_deg, 1), "track_id": c.track_id,
@@ -261,11 +264,16 @@ class SearchHandler:
 
     def _guide_text(self, name: str, now_ns: int) -> str:
         assert self.target is not None
-        # "Al frente" (para metros y llegada) es horizontal; lo vertical solo se agrega a la frase.
-        front = horizontal(self.target.angle_h_deg, self.s) == "al frente"
-        where = direction(self.target.angle_h_deg, self.s, self.target.angle_v_deg)
+        # Zonas con histéresis respecto de lo último dicho (no alternar en un límite).
+        h_word = horizontal(self.target.angle_h_deg, self.s, self._h_word)
+        v_word = vertical(self.target.angle_v_deg, self.s, self._v_word)
+        self._h_word, self._v_word = h_word, v_word
+        where = h_word + v_word
+        # Metros y llegada con el objeto al frente o "un poco" a un lado (|h| <= side_deg): en
+        # la demo de la silla, caminando hacia ella quedaba a 9–20° y nunca "llegaba".
+        ahead = abs(self.target.angle_h_deg) <= self.s.side_deg
         m = self._fresh_measure(now_ns)
-        if front and m is not None:
+        if ahead and m is not None:
             close = m.ok and m.z_m is not None and m.z_m <= self.s.arrive_m
             if close or m.reason == "muy-cerca":  # más cerca que el rango validado también llega
                 return f"Llegaste: {name} {where}, {measure_phrase(m, self.s)}."

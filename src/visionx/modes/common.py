@@ -23,7 +23,7 @@ from visionx.shared.contracts import DistancePolicy, SpatialObject
 from visionx.shared.geometry import StereoGeometry
 
 __all__ = ["Candidate", "Measure", "ModeSettings", "View", "age_s", "candidates", "direction",
-           "horizontal", "measure", "measure_phrase", "meters"]  # fmt: skip
+           "horizontal", "measure", "measure_phrase", "meters", "vertical"]  # fmt: skip
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +34,10 @@ class ModeSettings:
     # Vertical (positivo hacia arriba, respecto del eje de la cámara): se agrega "arriba" o
     # "abajo" solo si |ángulo| supera esto. Con la cámara al pecho, la mesa suele quedar abajo.
     vertical_deg: float = 15.0
+    # Histéresis de los límites (grados): una vez dicha una zona, se mantiene hasta pasar el
+    # límite por este margen. Sin ella, un ángulo cerca de 15° alterna "…, abajo" / "…" en
+    # cada frase (se vio en la demo de la silla).
+    hysteresis_deg: float = 3.0
     # Presencia: el objeto se anuncia si se vio en `confirm_hits` frames dentro de
     # `confirm_s` segundos. En tiempo, no en frames: 3 frames duran distinto a 3 y a 30 fps.
     confirm_hits: int = 2
@@ -154,13 +158,39 @@ def candidates(joint: Joint, label: str | None, geometry: StereoGeometry) -> lis
     return sorted(out, key=lambda c: c.angle_h_deg)
 
 
-def horizontal(angle_h_deg: float, s: ModeSettings) -> str:
-    """Ángulo horizontal -> "al frente" / "un poco a la izquierda" / "a la derecha"."""
-    a = abs(angle_h_deg)
-    if a <= s.center_deg:
-        return "al frente"
-    side = "derecha" if angle_h_deg > 0 else "izquierda"
-    return f"un poco a la {side}" if a <= s.side_deg else f"a la {side}"
+def horizontal(angle_h_deg: float, s: ModeSettings, prev: str | None = None) -> str:
+    """Ángulo horizontal -> "al frente" / "un poco a la izquierda" / "a la derecha".
+
+    Con `prev` (la zona dicha antes) se aplica histéresis: si el ángulo está a menos de
+    `hysteresis_deg` de un límite, se conserva la zona anterior.
+    """
+
+    def zone(center: float, side_lim: float) -> str:
+        a = abs(angle_h_deg)
+        if a <= center:
+            return "al frente"
+        side = "derecha" if angle_h_deg > 0 else "izquierda"
+        return f"un poco a la {side}" if a <= side_lim else f"a la {side}"
+
+    raw = zone(s.center_deg, s.side_deg)
+    if prev is None or prev == raw:
+        return raw
+    h = s.hysteresis_deg
+    near_limits = {zone(s.center_deg + h, s.side_deg + h), zone(s.center_deg - h, s.side_deg - h)}
+    return prev if prev in near_limits else raw
+
+
+def vertical(angle_v_deg: float | None, s: ModeSettings, prev: str | None = None) -> str:
+    """ "", ", arriba" o ", abajo"; con histéresis respecto de `prev`."""
+    if angle_v_deg is None:
+        return ""
+    limit = s.vertical_deg - (s.hysteresis_deg if prev else 0.0)
+    word = ""
+    if abs(angle_v_deg) > limit:
+        word = ", arriba" if angle_v_deg > 0 else ", abajo"
+    if prev and word and word != prev and abs(angle_v_deg) <= s.vertical_deg:
+        return ""  # cruzó el centro pero no pasó el umbral del otro lado
+    return word
 
 
 def direction(angle_h_deg: float, s: ModeSettings, angle_v_deg: float | None = None) -> str:
@@ -169,10 +199,7 @@ def direction(angle_h_deg: float, s: ModeSettings, angle_v_deg: float | None = N
     "Taza a la izquierda, abajo." Lo vertical se agrega cuando |ángulo| > vertical_deg; cerca
     del centro no se dice nada, para no alargar la guía ni hacerla cambiar a cada paso.
     """
-    text = horizontal(angle_h_deg, s)
-    if angle_v_deg is not None and abs(angle_v_deg) > s.vertical_deg:
-        text += ", arriba" if angle_v_deg > 0 else ", abajo"
-    return text
+    return horizontal(angle_h_deg, s) + vertical(angle_v_deg, s)
 
 
 def meters(z_m: float, s: ModeSettings) -> str:

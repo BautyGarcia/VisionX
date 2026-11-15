@@ -167,6 +167,25 @@ def test_vertical_is_added_only_when_clear():
     ]
 
 
+def test_hysteresis_keeps_the_last_zone_near_a_limit():
+    from visionx.modes.common import horizontal, vertical
+
+    assert horizontal(9.5, S) == "un poco a la derecha"
+    assert horizontal(9.5, S, prev="al frente") == "al frente"  # 1,5° pasado el límite: no cambia
+    assert horizontal(12.0, S, prev="al frente") == "un poco a la derecha"
+    assert vertical(-13.5, S) == "" and vertical(-13.5, S, prev=", abajo") == ", abajo"
+    assert vertical(-11.0, S, prev=", abajo") == ""
+
+
+def test_arrival_with_the_object_slightly_to_one_side():
+    h, c = search(), cmd(Mode.SEARCH, "chair")
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("chair", 15, None)]), joint(0.2, 2, [("chair", 15, None)])])
+    m = joint(1.3, 13, [("chair", 15, None, 0.55, SPEAK)], measured=True)
+    says, done = h.tick(c, View(joint(1.6, 16, [("chair", 15, None)]), m), int(1.6 * SEC))
+    assert done and texts(says) == ["Llegaste: silla un poco a la derecha, a 0,6 metros."]
+
+
 def test_measure_never_gives_meters_without_valid_depth_or_out_of_range():
     def obj(z, policy=SPEAK):
         return SpatialObject("s", 0, 0, None, "cup", "d", 0.0, 0.0, z, 0.01, 1.0, 0.9, policy)
