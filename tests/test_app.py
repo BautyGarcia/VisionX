@@ -20,13 +20,13 @@ from visionx.app.controller import Controller, Say, UnavailableHandler
 from visionx.app.dashboard import DashboardState, depth_colormap, render, top_view
 from visionx.app.fakes import (
     FakeDepthEstimator,
-    FakeSpatialEstimator,
     ScriptedDetector,
     SyntheticObject,
     SyntheticStereoSource,
 )
 from visionx.app.runtime import FrameCache, LatestMailbox, Pipeline, ResultBoard
 from visionx.app.science import TraceWriter, compare
+from visionx.app.spatial import ProvisionalSpatialEstimator
 from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
 from visionx.shared.clock import ManualClock
 from visionx.shared.contracts import (
@@ -100,7 +100,7 @@ def test_fakes_satisfy_interfaces_and_contract_checks():
     frame = source.read()
     det = ScriptedDetector(source)
     depth = FakeDepthEstimator(source.geometry, source=source)
-    spatial = FakeSpatialEstimator(source.geometry)
+    spatial = ProvisionalSpatialEstimator(source.geometry)
     assert isinstance(source, FrameSource) and isinstance(det, Detector)
     assert isinstance(depth, DepthEstimator) and isinstance(spatial, SpatialEstimator)
     d = det.predict(frame)
@@ -123,8 +123,10 @@ def test_spatial_accepts_depth_in_a_resized_geometry():
     depth = FakeDepthEstimator(half, background_m=2.0).predict(frame)
     d = ScriptedDetector(source).predict(frame)
     with pytest.raises(IdentityMismatch):  # sin declarar la geometría reducida, se rechaza
-        FakeSpatialEstimator(source.geometry).locate(frame, depth, d)
-    (obj,) = FakeSpatialEstimator(source.geometry, depth_geometry=half).locate(frame, depth, d)
+        ProvisionalSpatialEstimator(source.geometry).locate(frame, depth, d)
+    (obj,) = ProvisionalSpatialEstimator(source.geometry, depth_geometry=half).locate(
+        frame, depth, d
+    )
     assert obj.z_m == pytest.approx(2.0, rel=1e-3) and obj.valid_fraction == 1.0
     # el ángulo sale de la caja en la geometría del frame, no de la reducida
     x1, y1, x2, y2 = d.boxes[0]
@@ -154,7 +156,7 @@ def test_pipeline_under_overload_keeps_bounded_queues_and_never_mixes_frames():
         source,
         det,
         depth,
-        FakeSpatialEstimator(source.geometry),
+        ProvisionalSpatialEstimator(source.geometry),
         cache_frames=10,
         on_event=lambda kind, data: events.append((kind, data)),
     )
@@ -184,7 +186,7 @@ def test_view_gives_detection_before_slow_depth():
     source = SyntheticStereoSource(fps=60, n_frames=60)
     depth = FakeDepthEstimator(source.geometry, source=source, delay_ms=400)
     pipeline = Pipeline(
-        source, ScriptedDetector(source), depth, FakeSpatialEstimator(source.geometry)
+        source, ScriptedDetector(source), depth, ProvisionalSpatialEstimator(source.geometry)
     )
     pipeline.start()
     assert wait_for(lambda: pipeline.view().seen is not None, timeout=2)
@@ -338,7 +340,7 @@ def test_dashboard_renders_with_and_without_results():
         source,
         ScriptedDetector(source),
         FakeDepthEstimator(source.geometry, source=source),
-        FakeSpatialEstimator(source.geometry),
+        ProvisionalSpatialEstimator(source.geometry),
     )
     empty = render(DashboardState(None, (pipeline.detector_status,), now_ns=0))
     assert empty.ndim == 3

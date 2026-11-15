@@ -125,7 +125,7 @@ class DistanceHandler:
     def _single(self, c: Candidate, name: str, joint: Joint) -> str:
         m = measure(c.obj, self.s)
         self._event("respuesta", self._data(joint, c, m.z_m, m.reason))
-        where = direction(c.angle_h_deg, self.s)
+        where = direction(c.angle_h_deg, self.s, c.angle_v_deg)
         return f"{name.capitalize()} {where}, {measure_phrase(m, self.s)}."
 
     def _several(self, cands: list[Candidate], name: str, joint: Joint) -> str:
@@ -134,7 +134,8 @@ class DistanceHandler:
         for c in shown:
             m = measure(c.obj, self.s)
             self._event("respuesta", self._data(joint, c, m.z_m, m.reason))
-            parts.append(f"{direction(c.angle_h_deg, self.s)}, {measure_phrase(m, self.s)}")
+            where = direction(c.angle_h_deg, self.s, c.angle_v_deg)
+            parts.append(f"{where}, {measure_phrase(m, self.s)}")
         return f"Veo {len(cands)} {plural(name)}: " + "; ".join(parts) + "."
 
     def _front(self, joint: Joint) -> str:
@@ -154,7 +155,7 @@ class DistanceHandler:
         if self._label is not None and seen is not None and age_s(seen, now_ns) <= self.s.max_age_s:
             cands = candidates(seen, self._label, self.geometry)
             if cands:
-                where = direction(cands[0].angle_h_deg, self.s)
+                where = direction(cands[0].angle_h_deg, self.s, cands[0].angle_v_deg)
                 return (
                     f"Veo {self.spoken(self._label)} {where}, pero no pude medir la distancia "
                     "a tiempo."

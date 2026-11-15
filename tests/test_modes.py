@@ -13,8 +13,9 @@ import numpy as np
 import pytest
 
 from visionx.app.controller import Controller
-from visionx.app.fakes import FakeDepthEstimator, FakeSpatialEstimator, synthetic_geometry
+from visionx.app.fakes import FakeDepthEstimator, synthetic_geometry
 from visionx.app.runtime import Joint, View
+from visionx.app.spatial import ProvisionalSpatialEstimator
 from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
 from visionx.detection.convert import build_detection
 from visionx.modes import build_handlers
@@ -51,8 +52,19 @@ def u_for(angle_deg: float) -> float:
 Obj = tuple
 
 
+def v_for(angle_deg: float) -> float:
+    """Fila del píxel que se ve a ese ángulo vertical (positivo hacia arriba)."""
+    return G.cy - G.fy * math.tan(math.radians(angle_deg))
+
+
 def joint(
-    t_s: float, frame_id: int, objs: list[Obj], *, measured: bool = False, scores=None
+    t_s: float,
+    frame_id: int,
+    objs: list[Obj],
+    *,
+    measured: bool = False,
+    scores=None,
+    v_deg: float = 0.0,
 ) -> Joint:
     frame = StereoFrame(
         session_id="s",
@@ -66,8 +78,8 @@ def joint(
     )
     boxes = []
     for _, angle, *_rest in objs:
-        u = u_for(angle)
-        boxes.append([u - 20, 150, u + 20, 210])
+        u, v = u_for(angle), v_for(v_deg)
+        boxes.append([u - 20, v - 30, u + 20, v + 30])
     det = build_detection(
         frame,
         model_id="test",
@@ -131,6 +143,27 @@ def test_direction_and_meters_phrasing():
     assert direction(-15, S) == "un poco a la izquierda" and direction(30, S) == "a la derecha"
     assert meters(1.07, S) == "1,1 metros" and meters(1.0, S) == "1 metro"
     assert meters(0.54, S) == "0,5 metros" and meters(2.96, S) == "3 metros"
+
+
+def test_vertical_is_added_only_when_clear():
+    assert direction(-30, S, -25) == "a la izquierda, abajo"
+    assert direction(0, S, 20) == "al frente, arriba"
+    assert (
+        direction(0, S, 10) == "al frente" and direction(-15, S, None) == "un poco a la izquierda"
+    )
+    # en la guía: abajo se dice, y "al frente" sigue decidiendo metros y llegada
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    out, _ = run(h, c, [joint(0.1 * i, i, [("cup", 0, None)], v_deg=-30) for i in (1, 2)])
+    assert [x for _, x in out] == ["sonido:bip", "Taza al frente, abajo."]
+    m = joint(0.3, 3, [("cup", 0, None, 0.55, SPEAK)], measured=True, v_deg=-30)
+    says, done = h.tick(c, View(joint(0.4, 4, [("cup", 0, None)], v_deg=-30), m), int(0.4 * SEC))
+    assert done and texts(says) == ["Llegaste: taza al frente, abajo, a 0,6 metros."]
+    d = distance()
+    dc = cmd(Mode.DISTANCE, "cup", t_s=0.2, request_id=5)
+    assert texts(d.start(dc, View(None, m), int(0.4 * SEC))) == [
+        "Taza al frente, abajo, a 0,6 metros."
+    ]
 
 
 def test_measure_never_gives_meters_without_valid_depth_or_out_of_range():
@@ -207,16 +240,29 @@ def test_lost_target_is_announced_and_reappearance_is_a_new_acquisition():
     c = cmd(Mode.SEARCH, "cup")
     h.start(c, View(), 0)
     seen = [joint(0.1 * i, i, [("cup", -30, 5)]) for i in range(1, 4)]
-    gone = [joint(0.3 + 0.1 * i, 3 + i, []) for i in range(1, 20)]  # 1,9 s sin la taza
-    back = [joint(2.4 + 0.1 * i, 30 + i, [("cup", 25, 9)]) for i in range(1, 4)]
+    gone = [joint(0.3 + 0.1 * i, 3 + i, []) for i in range(1, 25)]  # 2,4 s sin la taza
+    back = [joint(2.8 + 0.1 * i, 30 + i, [("cup", 25, 9)]) for i in range(1, 4)]
     out, _ = run(h, c, seen + gone + back)
     said = [t for _, t in out]
-    assert said.count("sonido:bip") == 2 and "Perdí taza." in said
-    lost_t = next(t for t, x in out if x == "Perdí taza.")
+    # salió por la izquierda: se dice hacia dónde quedó
+    assert said.count("sonido:bip") == 2 and "Perdí taza: quedó a la izquierda." in said
+    lost_t = next(t for t, x in out if x.startswith("Perdí"))
     assert lost_t == pytest.approx(0.3 + S.lost_s, abs=0.11)
     acquired = [d for k, d in events if k == "buscar-adquirido"]
     assert [a["reaparicion"] for a in acquired] == [False, True]
     assert said[-1] == "Taza a la derecha."
+
+
+def test_no_guidance_with_the_last_known_direction_while_target_is_not_seen():
+    from dataclasses import replace
+
+    s = replace(S, repeat_s=1.0, min_interval_s=0.5, lost_s=3.0)
+    h, c = search(s), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("cup", -30, None)]), joint(0.2, 2, [("cup", -30, None)])])
+    out, _ = run(h, c, [joint(0.2 + 0.1 * i, 2 + i, []) for i in range(1, 36)])
+    said = [x for _, x in out]
+    assert said == ["Perdí taza: quedó a la izquierda."]  # nada de "a la izquierda" repetido
 
 
 def test_system_lag_is_not_reported_as_a_lost_object():
@@ -439,31 +485,52 @@ def test_distance_timeout_and_absent_object():
 # --- ubicación provisoria ----------------------------------------------------------------
 
 
-def test_provisional_spatial_policy_border_and_spread():
-    frame = joint(0.0, 0, []).frame
-    z = np.full((G.height, G.width), 2.0, np.float32)
-    z[:, 300:340] = 1.0  # una mitad de la máscara del medio a 1 m y otra a 2 m
+def test_nearest_layer_ignores_sparse_noise_and_background_through_the_object():
+    from visionx.app.spatial import nearest_layer
+
+    rng = np.random.default_rng(0)
+    chair = rng.normal(0.6, 0.02, 400)  # respaldo y asiento
+    background = rng.normal(2.5, 0.05, 600)  # lo que se ve a través de la silla calada
+    layer = nearest_layer(np.concatenate([chair, background]))
+    assert layer is not None and abs(float(np.median(layer)) - 0.6) < 0.03
+    noise = rng.normal(0.4, 0.01, 50)  # 5 % de píxeles sueltos delante: no es el objeto
+    layer = nearest_layer(np.concatenate([noise, rng.normal(1.0, 0.02, 950)]))
+    assert layer is not None and abs(float(np.median(layer)) - 1.0) < 0.03
+    assert nearest_layer(np.array([], np.float32)) is None
+
+
+def depth_from(frame: StereoFrame, z: np.ndarray):
     d, valid = G.depth_to_disparity(z)
     depth = FakeDepthEstimator(G).predict(frame)
-    depth = type(depth)(**{**{f: getattr(depth, f) for f in depth.__dataclass_fields__},
-                           "disparity_px": d, "valid_mask": valid,
-                           "depth_m": G.disparity_to_depth(d, valid)[0]})  # fmt: skip
-    masks = np.zeros((3, G.height, G.width), bool)
+    fields = {f: getattr(depth, f) for f in depth.__dataclass_fields__}
+    fields.update(disparity_px=d, valid_mask=valid, depth_m=G.disparity_to_depth(d, valid)[0])
+    return type(depth)(**fields)
+
+
+def test_provisional_spatial_front_layer_border_and_diffuse():
+    frame = joint(0.0, 0, []).frame
+    z = np.full((G.height, G.width), 2.0, np.float32)
+    z[:, 300:340] = 1.0  # la mitad izquierda de la máscara del medio está a 1 m
+    z[:, 400:480] = np.linspace(1.0, 3.0, 80, dtype=np.float32)  # rampa: capa difusa
+    masks = np.zeros((4, G.height, G.width), bool)
     masks[0, 100:200, 0:60] = True  # toca el borde izquierdo
-    masks[1, 100:200, 280:360] = True  # mitad a 1 m, mitad a 2 m
-    masks[2, 100:200, 500:560] = True  # todo a 2 m
+    masks[1, 100:200, 300:380] = True  # frente a 1 m, fondo a 2 m (objeto calado)
+    masks[2, 100:200, 400:480] = True  # superficies de 1 a 3 m sin separación
+    masks[3, 100:200, 500:560] = True  # todo a 2 m
+    boxes = [[0, 100, 60, 200], [300, 100, 380, 200], [400, 100, 480, 200], [500, 100, 560, 200]]
     det = build_detection(
-        frame, model_id="t", inference_ms=1.0, class_names=["cup", "cup", "cup"],
-        boxes_xyxy=np.array([[0, 100, 60, 200], [280, 100, 360, 200], [500, 100, 560, 200]],
-                            np.float32),
-        scores=np.full(3, 0.9, np.float32), masks=masks,
+        frame, model_id="t", inference_ms=1.0, class_names=["cup"] * 4,
+        boxes_xyxy=np.array(boxes, np.float32), scores=np.full(4, 0.9, np.float32), masks=masks,
     )  # fmt: skip
-    objs = FakeSpatialEstimator(G).locate(frame, depth, det)
+    objs = ProvisionalSpatialEstimator(G).locate(frame, depth_from(frame, z), det)
     assert [o.policy for o in objs] == [
         DistancePolicy.ASK_REFRAME,
+        DistancePolicy.SPEAK_METERS,
         DistancePolicy.DIRECTION_ONLY,
         DistancePolicy.SPEAK_METERS,
     ]
+    assert objs[1].z_m == pytest.approx(1.0, abs=0.03)  # el frente, no el fondo
+    assert objs[3].z_m == pytest.approx(2.0, abs=0.03)
 
 
 # --- simulación y CLI --------------------------------------------------------------------

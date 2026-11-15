@@ -39,6 +39,7 @@ from visionx.modes.common import (
     age_s,
     candidates,
     direction,
+    horizontal,
     measure,
     measure_phrase,
 )
@@ -136,12 +137,22 @@ class SearchHandler:
             if fresh:
                 self._stall_reported = False
             if gap_s > self.s.lost_s:
-                self._event("perdido", {"angulo_h": round(self.target.angle_h_deg, 1)})
+                last = self.target.angle_h_deg
+                self._event("perdido", {"angulo_h": round(last, 1)})
                 self.state, self.target = SEARCHING, None
                 self._hits.clear()
                 self.memory.remember(None)
-                says.append(self._phrase(f"Perdí {name}.", now_ns))
-            elif fresh:
+                # Si salió por un costado, decir hacia dónde quedó ayuda a volver a girar.
+                where = horizontal(last, self.s)
+                lost = (
+                    f"Perdí {name}: quedó {where}."
+                    if where.startswith("a la")
+                    else f"Perdí {name}."
+                )
+                says.append(self._phrase(lost, now_ns))
+            elif fresh and gap_s == 0:
+                # Solo se guía en frames donde el objetivo está: mientras no se lo ve, repetir
+                # su última dirección sería guiar con información vieja.
                 says += self._guide(name, now_ns)
         done = any(s.text_or_sound.startswith("Llegaste") for s in says)
         if done:
@@ -210,7 +221,7 @@ class SearchHandler:
     def _acquire(self, c: Candidate, name: str, now_ns: int) -> list[Say]:
         reacquired = self.found_once
         self.state, self.found_once = GUIDING, True
-        self.target = Target(c.label, c.angle_h_deg, c.track_id, c.received_ns)
+        self.target = Target(c.label, c.angle_h_deg, c.track_id, c.received_ns, c.angle_v_deg)
         self.memory.remember(self.target)
         self._measure = None
         self._event("adquirido", {"angulo_h": round(c.angle_h_deg, 1), "track_id": c.track_id,
@@ -231,14 +242,16 @@ class SearchHandler:
 
     def _guide_text(self, name: str, now_ns: int) -> str:
         assert self.target is not None
-        where = direction(self.target.angle_h_deg, self.s)
+        # "Al frente" (para metros y llegada) es horizontal; lo vertical solo se agrega a la frase.
+        front = horizontal(self.target.angle_h_deg, self.s) == "al frente"
+        where = direction(self.target.angle_h_deg, self.s, self.target.angle_v_deg)
         m = self._fresh_measure(now_ns)
-        if where == "al frente" and m is not None:
+        if front and m is not None:
             close = m.ok and m.z_m is not None and m.z_m <= self.s.arrive_m
             if close or m.reason == "muy-cerca":  # más cerca que el rango validado también llega
-                return f"Llegaste: {name} al frente, {measure_phrase(m, self.s)}."
+                return f"Llegaste: {name} {where}, {measure_phrase(m, self.s)}."
             if m.ok or m.reason in ("muy-cerca", "muy-lejos"):
-                return f"{name.capitalize()} al frente, {measure_phrase(m, self.s)}."
+                return f"{name.capitalize()} {where}, {measure_phrase(m, self.s)}."
         return f"{name.capitalize()} {where}."
 
     def _phrase(self, text: str, now_ns: int) -> Say:

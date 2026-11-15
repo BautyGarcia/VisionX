@@ -1,9 +1,9 @@
 """Sustitutos para ejecutar la aplicación sin cámara ni profundidad real (T07).
 
 **No son mediciones.** Sirven para probar el armado (colas, unión por frame, cancelación,
-dashboard) mientras faltan la ELP, el estimador de profundidad (T05, área A) y la ubicación
-espacial (T09/T13, área A). Cada salida lleva un model_id que empieza con "fake-" para que
-ningún resultado de estos sustitutos pase por una medición.
+dashboard) sin la ELP ni un estimador de profundidad real. Cada salida lleva un model_id que
+empieza con "fake-" para que ningún resultado de estos sustitutos pase por una medición. La
+ubicación por objeto provisoria (con profundidad real) está en app/spatial.py.
 """
 
 from __future__ import annotations
@@ -20,12 +20,7 @@ from visionx.shared.contracts import (
     DepthResult,
     DepthStatus,
     Detection,
-    DistancePolicy,
-    SpatialObject,
     StereoFrame,
-    check_depth_geometry,
-    check_detection_frame,
-    check_same_frame,
 )
 from visionx.shared.geometry import StereoGeometry
 
@@ -208,99 +203,3 @@ class FakeDepthEstimator:
 
     def close(self) -> None:
         pass
-
-
-class FakeSpatialEstimator:
-    """Ubicación espacial provisoria hasta que A entregue la real (T09/T13).
-
-    Ángulo desde el centro de la caja; Z = mediana dentro de la máscara. Política (candidata,
-    sin calibrar; la real es de A y se calibra en T13):
-    - caja que toca el borde izquierdo o derecho -> ASK_REFRAME (el objeto está cortado);
-    - menos de `min_valid` de la máscara con profundidad -> DIRECTION_ONLY;
-    - dispersión (IQR) mayor que `max_rel_spread`·Z -> DIRECTION_ONLY: la mediana mezcla
-      superficies a distinta distancia (en el clip `distancias`, vaso y botella dan ~5 %;
-      televisor, mesa y silla calada, 25–50 %: BITACORA T09);
-    - si no, SPEAK_METERS. El rango que se anuncia lo controla el modo (`modes.range_m`).
-
-    `geometry` es la del frame (donde están cajas y máscaras). Si la profundidad se calcula
-    en una versión reescalada (p. ej. SGBM a 1280x720 con captura de 1920x1080), se pasa como
-    `depth_geometry` y cada máscara se reduce a ese tamaño por vecino más cercano.
-    """
-
-    def __init__(
-        self,
-        geometry: StereoGeometry,
-        min_valid: float = 0.5,
-        depth_geometry: StereoGeometry | None = None,
-        max_rel_spread: float = 0.25,
-        border_px: float = 2.0,
-    ) -> None:
-        self.geometry = geometry
-        self.depth_geometry = depth_geometry or geometry
-        self.min_valid = min_valid
-        self.max_rel_spread = max_rel_spread
-        self.border_px = border_px
-
-    def locate(
-        self, frame: StereoFrame, depth: DepthResult, detections: Detection
-    ) -> list[SpatialObject]:
-        check_same_frame(frame, depth, detections)
-        check_detection_frame(frame, detections)
-        check_depth_geometry(depth, self.depth_geometry)
-        out = []
-        z_map = depth.depth_m
-        for i, label in enumerate(detections.classes):
-            x1, y1, x2, y2 = detections.boxes[i]
-            mask = (
-                self._to_depth_size(detections.masks[i])
-                if detections.masks is not None
-                else np.zeros(depth.valid_mask.shape, bool)
-            )
-            inside = mask & depth.valid_mask
-            frac = float(inside.sum() / mask.sum()) if mask.any() else 0.0
-            z = spread = None
-            if z_map is not None and inside.any():
-                values = z_map[inside]
-                z = float(np.median(values))
-                spread = float(np.percentile(values, 75) - np.percentile(values, 25))
-            h, vert = self.geometry.pixel_to_angles(float(x1 + x2) / 2, float(y1 + y2) / 2)
-            width = self.geometry.width
-            if x1 <= self.border_px or x2 >= width - 1 - self.border_px:
-                policy = DistancePolicy.ASK_REFRAME
-            elif z is None or frac < self.min_valid:
-                policy = DistancePolicy.DIRECTION_ONLY
-            elif spread is not None and spread > self.max_rel_spread * z:
-                policy = DistancePolicy.DIRECTION_ONLY
-            else:
-                policy = DistancePolicy.SPEAK_METERS
-            track = detections.track_ids[i] if detections.track_ids is not None else None
-            out.append(
-                SpatialObject(
-                    session_id=frame.session_id,
-                    frame_id=frame.frame_id,
-                    detection_index=i,
-                    track_id=track,
-                    label=label,
-                    depth_model_id=depth.model_id,
-                    angle_h_deg=h,
-                    angle_v_deg=vert,
-                    z_m=z,
-                    z_spread_m=spread,
-                    valid_fraction=frac,
-                    detector_score=float(detections.scores[i]),
-                    policy=policy,
-                )
-            )
-        return out
-
-    def _to_depth_size(self, mask: np.ndarray) -> np.ndarray:
-        """Máscara del detector llevada a la resolución de la profundidad (vecino más cercano:
-        no inventa bordes intermedios)."""
-        if mask.shape == self.depth_geometry.size[::-1]:
-            return mask
-        import cv2
-
-        small = cv2.resize(
-            mask.astype(np.uint8), self.depth_geometry.size, interpolation=cv2.INTER_NEAREST
-        )
-        return small.astype(bool)

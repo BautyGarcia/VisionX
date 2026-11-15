@@ -80,11 +80,14 @@ detection:
   tracker: bytetrack.yaml   # config de Ultralytics; su búfer de pérdida está en frames, no en segundos
   classes: null             # lista de clases del modelo a conservar (ej. [cup, bottle]); null = todas
 
-# Ubicación por objeto PROVISORIA (app/fakes.py, FakeSpatialEstimator) hasta que A entregue
-# depth/spatial (T09/T13). Candidatos sin calibrar; ver BITACORA T09.
+# Ubicación por objeto PROVISORIA (app/spatial.py) hasta que A entregue depth/spatial (T09/T13).
+# Z = percentil front_percentile de la capa más cercana de la máscara. Candidatos medidos en
+# clips de desarrollo, sin calibrar; ver BITACORA T09.
 spatial_provisional:
   min_valid: 0.5            # fracción mínima de la máscara con profundidad para decir metros
-  max_rel_spread: 0.25      # IQR de Z / Z; más que esto mezcla superficies: solo dirección
+  layer_min_frac: 0.25      # una capa de profundidad cuenta como objeto con al menos esto de la máscara
+  front_percentile: 20      # percentil de Z dentro de la capa: la superficie del frente
+  max_rel_spread: 0.5       # IQR de la capa / Z; más que esto es una capa difusa: solo dirección
   border_px: 2              # caja a esta distancia del borde lateral: objeto cortado, reencuadrar
 
 # Modos buscar y distancia (T09, src/visionx/modes/). Candidatos sin medir: M1/M7/M8 los fijan.
@@ -92,13 +95,14 @@ spatial_provisional:
 modes:
   center_deg: 8.0           # |ángulo| <= esto: "al frente" (grados; + a la derecha)
   side_deg: 25.0            # <= esto: "un poco a la izquierda/derecha"; más: "a la izquierda"
+  vertical_deg: 15.0        # |ángulo vertical| > esto: se agrega "arriba"/"abajo" (respecto de la cámara)
   confirm_hits: 2           # presencia: frames con el objeto...
   confirm_s: 1.0            # ...dentro de esta ventana, s (en tiempo, no en frames)
   max_age_s: 1.0            # observación más vieja que esto no guía, s
   max_measure_age_s: 3.0    # Z más viejo que esto no se dice, s (la profundidad tarda más)
   gate_deg: 15.0            # salto de ángulo aceptado para seguir al mismo objetivo...
   gate_deg_per_s: 60.0      # ...más esto por segundo sin verlo (la cámara gira)
-  lost_s: 1.5               # sin ver el objetivo durante esto: "Perdí ...", s
+  lost_s: 2.0               # sin ver el objetivo durante esto: "Perdí ...", s (clips buscar: 1 -> 2,5 s bajó avisos)
   min_interval_s: 1.2       # mínimo entre dos frases de guía, s
   repeat_s: 4.0             # repetir la dirección aunque no cambie, s
   end_margin_s: 1.0         # frase de cierre antes del vencimiento de la orden, s

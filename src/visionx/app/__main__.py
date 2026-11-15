@@ -33,12 +33,12 @@ from visionx.app.controller import Controller
 from visionx.app.dashboard import DashboardState, render
 from visionx.app.fakes import (
     FakeDepthEstimator,
-    FakeSpatialEstimator,
     ScriptedDetector,
     SyntheticStereoSource,
 )
 from visionx.app.runtime import Pipeline
 from visionx.app.science import TraceWriter, compare
+from visionx.app.spatial import ProvisionalSpatialEstimator
 from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
 from visionx.modes import build_handlers
 from visionx.shared.config import ROOT, load_config
@@ -118,15 +118,19 @@ def load_script(path: str | None) -> list[tuple[float, str]]:
     return sorted(items)
 
 
-def build_spatial(cfg: dict[str, Any], geometry, depth_geometry=None) -> FakeSpatialEstimator:
+def build_spatial(
+    cfg: dict[str, Any], geometry, depth_geometry=None
+) -> ProvisionalSpatialEstimator:
     """Ubicación provisoria con los parámetros de `spatial_provisional` (config)."""
     s = cfg.get("spatial_provisional") or {}
-    return FakeSpatialEstimator(
+    return ProvisionalSpatialEstimator(
         geometry,
         min_valid=float(s.get("min_valid", 0.5)),
         depth_geometry=depth_geometry,
-        max_rel_spread=float(s.get("max_rel_spread", 0.25)),
+        max_rel_spread=float(s.get("max_rel_spread", 0.5)),
         border_px=float(s.get("border_px", 2.0)),
+        layer_min_frac=float(s.get("layer_min_frac", 0.25)),
+        front_percentile=float(s.get("front_percentile", 20.0)),
     )
 
 

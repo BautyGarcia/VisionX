@@ -23,7 +23,7 @@ from visionx.shared.contracts import DistancePolicy, SpatialObject
 from visionx.shared.geometry import StereoGeometry
 
 __all__ = ["Candidate", "Measure", "ModeSettings", "View", "age_s", "candidates", "direction",
-           "measure", "measure_phrase", "meters"]  # fmt: skip
+           "horizontal", "measure", "measure_phrase", "meters"]  # fmt: skip
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +31,9 @@ class ModeSettings:
     # Dirección (grados desde el eje óptico; positivo a la derecha).
     center_deg: float = 8.0  # |ángulo| <= esto: "al frente"
     side_deg: float = 25.0  # <= esto: "un poco a la izquierda/derecha"; más: "a la izquierda"
+    # Vertical (positivo hacia arriba, respecto del eje de la cámara): se agrega "arriba" o
+    # "abajo" solo si |ángulo| supera esto. Con la cámara al pecho, la mesa suele quedar abajo.
+    vertical_deg: float = 15.0
     # Presencia: el objeto se anuncia si se vio en `confirm_hits` frames dentro de
     # `confirm_s` segundos. En tiempo, no en frames: 3 frames duran distinto a 3 y a 30 fps.
     confirm_hits: int = 2
@@ -42,7 +45,9 @@ class ModeSettings:
     # sobrevive a una salida de cuadro: BITACORA 2026-11-14).
     gate_deg: float = 15.0  # salto de ángulo aceptado entre dos frames seguidos...
     gate_deg_per_s: float = 60.0  # ...más esto por segundo transcurrido (la cámara gira)
-    lost_s: float = 1.5  # sin ver el objetivo durante esto: "lo perdí"
+    # Sin ver el objetivo durante esto: "lo perdí". 2 s: en los clips buscar, pasar de 1 a
+    # 2,5 s bajó los avisos de pérdida sin bajar la cobertura de guía (BITACORA T09 mejoras).
+    lost_s: float = 2.0
     # Ritmo de la voz durante la guía.
     min_interval_s: float = 1.2  # entre dos frases de guía
     repeat_s: float = 4.0  # repetir la dirección aunque no cambie
@@ -78,6 +83,7 @@ class Candidate:
     label: str
     index: int  # posición en la Detection
     angle_h_deg: float
+    angle_v_deg: float
     track_id: int | None
     score: float
     received_ns: int  # cuándo llegó su frame
@@ -128,22 +134,34 @@ def candidates(joint: Joint, label: str | None, geometry: StereoGeometry) -> lis
         if (label is not None and cls != label) or i in drop:
             continue
         x1, y1, x2, y2 = (float(x) for x in det.boxes[i])
-        h, _ = geometry.pixel_to_angles((x1 + x2) / 2, (y1 + y2) / 2)
+        h, vert = geometry.pixel_to_angles((x1 + x2) / 2, (y1 + y2) / 2)
         track = det.track_ids[i] if det.track_ids is not None else None
         out.append(
-            Candidate(cls, i, h, track, float(det.scores[i]), joint.frame.received_ns,
+            Candidate(cls, i, h, vert, track, float(det.scores[i]), joint.frame.received_ns,
                       located.get(i))
         )  # fmt: skip
     return sorted(out, key=lambda c: c.angle_h_deg)
 
 
-def direction(angle_h_deg: float, s: ModeSettings) -> str:
-    """Ángulo -> frase corta. Positivo es a la derecha."""
+def horizontal(angle_h_deg: float, s: ModeSettings) -> str:
+    """Ángulo horizontal -> "al frente" / "un poco a la izquierda" / "a la derecha"."""
     a = abs(angle_h_deg)
     if a <= s.center_deg:
         return "al frente"
     side = "derecha" if angle_h_deg > 0 else "izquierda"
     return f"un poco a la {side}" if a <= s.side_deg else f"a la {side}"
+
+
+def direction(angle_h_deg: float, s: ModeSettings, angle_v_deg: float | None = None) -> str:
+    """Frase de dirección: la horizontal y, solo si es clara, la vertical.
+
+    "Taza a la izquierda, abajo." Lo vertical se agrega cuando |ángulo| > vertical_deg; cerca
+    del centro no se dice nada, para no alargar la guía ni hacerla cambiar a cada paso.
+    """
+    text = horizontal(angle_h_deg, s)
+    if angle_v_deg is not None and abs(angle_v_deg) > s.vertical_deg:
+        text += ", arriba" if angle_v_deg > 0 else ", abajo"
+    return text
 
 
 def meters(z_m: float, s: ModeSettings) -> str:
