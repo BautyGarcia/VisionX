@@ -73,7 +73,8 @@ class SearchHandler:
         self.state = SEARCHING
         self.target: Target | None = None
         self.found_once = False
-        self._hits: deque[int] = deque()  # received_ns de frames con candidatos
+        self._hits: deque[tuple[int, int]] = deque()  # (received_ns, cuántos) con candidatos
+        self._single_since: int | None = None  # eligiendo: desde cuándo se ve uno solo
         self._choices: list[Candidate] = []
         self._last_seen_key = None
         self._last_measured_key = None
@@ -196,14 +197,29 @@ class SearchHandler:
         if not cands:
             return []
         received = cands[0].received_ns
-        self._hits.append(received)
-        while self._hits and (received - self._hits[0]) / 1e9 > self.s.confirm_s:
+        self._hits.append((received, len(cands)))
+        while self._hits and (received - self._hits[0][0]) / 1e9 > self.s.confirm_s:
             self._hits.popleft()
         if self.state == CHOOSING:
             self._choices = cands  # la elección se aplica a lo último que se vio
+            # Si queda uno solo de forma estable, ya no hay entre qué elegir: se guía a ese.
+            if len(cands) == 1:
+                self._single_since = self._single_since or received
+                if (received - self._single_since) / 1e9 >= self.s.confirm_s:
+                    self._event(
+                        "eleccion", {"opcion": "unico", "angulo_h": round(cands[0].angle_h_deg, 1)}
+                    )
+                    return self._acquire(cands[0], name, now_ns)
+            else:
+                self._single_since = None
             return []
         if len(self._hits) < self.s.confirm_hits:
             return []
+        # "Varios" tiene que ser consistente en la ventana de confirmación: una detección suelta
+        # de más en un frame (pasa con modelos sensibles) no justifica preguntar.
+        several = min(n for _, n in self._hits) > 1
+        if not several:
+            return self._acquire(max(cands, key=lambda c: c.score), name, now_ns)
         if len(cands) > 1:
             self.state, self._choices = CHOOSING, cands
             self._event("varios", {"cantidad": len(cands)})

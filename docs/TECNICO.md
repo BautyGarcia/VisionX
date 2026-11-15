@@ -429,6 +429,20 @@ YOLO-World con otro segmentador. Los prompts y embeddings deben estar preparados
 uso puede descargar un encoder. No se garantiza reconocer cualquier objeto nombrado.
 [YOLOE oficial](https://docs.ultralytics.com/models/yoloe/).
 
+**Default elegido con clips ELP (BITACORA 2026-11-15): `yolo26s-seg` a `imgsz` 960.** Sobre
+el ojo rectificado, con umbral 0,25:
+
+| | yolo26n @640 | yolo26n @960 | yolo26s @640 | yolo26s @960 |
+|---|---|---|---|---|
+| Taza blanca a 1 m (`distancias`) | 2 % | 100 % | 4 % | 100 % |
+| Bolso a 3 m (`distancias`) | 0 % | 0 % | 0 % | 100 % |
+| Taza en mano (`buscar-b`) | 19 % | 26 % | 32 % | 39 % |
+| Mochila/bolso en mano (`buscar-c`) | 2 % | 4 % | 36 % | 36 % |
+
+Más resolución ayuda con lo chico y lejano; el modelo más grande, con mochilas y bolsos. En la
+CPU de Windows cuesta ~0,5 s por frame (yolo26n @640: ~0,12 s); en la Mac falta medirlo (M1).
+Una máquina lenta puede volver a yolo26n @640 en `configs/local.yaml`.
+
 Probar español y alias del catálogo; guardar qué categorías fueron aceptadas con evidencia.
 Mantener un detector principal por configuración, sin correr todos en cada frame.
 **ByteTrack** relaciona detecciones entre frames y da un ID temporal. No prueba identidad
@@ -520,6 +534,8 @@ Cuando A entregue su `SpatialEstimator`, se reemplaza en `app/__main__.py::build
 los modos, que solo leen `policy` y `z_m`.
 
 **Voz de la guía.**
+- En distancia, el acuse es `sonido:ok` y no «Mido la distancia a taza.»: la respuesta ya nombra
+  el objeto, y la frase la demoraba ~2 s.
 - Todo sale con prioridad SHORT: el bip y la dirección suenan después del «Busco taza.» de
   confirmación, sin cortarlo.
 - Una frase de guía no se dice mientras la anterior todavía estaría sonando. La duración se

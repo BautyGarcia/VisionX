@@ -349,6 +349,32 @@ def test_duplicate_box_of_the_same_object_is_not_a_second_object():
     assert [c.index for c in cands] == [0, 2]
 
 
+def test_one_stray_extra_detection_does_not_trigger_a_choice():
+    h, c = search(), cmd(Mode.SEARCH, "backpack")
+    h.start(c, View(), 0)
+    one = [("backpack", -10, None)]
+    two = [("backpack", -10, None), ("backpack", 30, None)]
+    out, _ = run(
+        h,
+        c,
+        [joint(0.1, 1, one), joint(0.2, 2, two)],
+    )
+    assert [x for _, x in out] == ["sonido:bip", "Mochila un poco a la izquierda."]
+
+
+def test_choice_resolves_itself_when_only_one_remains():
+    h, c = search(), cmd(Mode.SEARCH, "bottle")
+    h.start(c, View(), 0)
+    two = [("bottle", -20, None), ("bottle", 20, None)]
+    run(h, c, [joint(0.1, 1, two), joint(0.2, 2, two)])
+    assert h.state == "eligiendo"
+    out, _ = run(h, c, [joint(0.2 + 0.1 * i, 2 + i, [("bottle", 20, None)]) for i in range(1, 13)])
+    assert h.state == "guiando" and [x for _, x in out][:2] == [
+        "sonido:bip",
+        "Botella un poco a la derecha.",
+    ]
+
+
 def test_choose_nearest_needs_meters_and_choose_without_search_says_so():
     ctl, sink, state, clock = make_controller()
     ctl.handle_text("la de la izquierda")
