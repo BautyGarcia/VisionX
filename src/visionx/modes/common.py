@@ -51,6 +51,11 @@ class ModeSettings:
     # Ritmo de la voz durante la guía.
     min_interval_s: float = 1.2  # entre dos frases de guía
     repeat_s: float = 4.0  # repetir la dirección aunque no cambie
+    # Duración estimada de una frase hablada: base + por carácter. Piper es_AR (daniela, rate
+    # 1,0) mide 50–70 ms por carácter. La guía no habla encima de su frase anterior: si lo
+    # hiciera, las frases se encolarían y la dirección llegaría tarde.
+    speech_base_s: float = 0.3
+    speech_s_per_char: float = 0.065
     end_margin_s: float = 1.0  # cerrar con una frase antes de que venza la orden
     # Metros.
     range_m: tuple[float, float] = (0.5, 3.0)  # fuera de esto no se dice un número
@@ -88,6 +93,11 @@ class Candidate:
     score: float
     received_ns: int  # cuándo llegó su frame
     obj: SpatialObject | None = None  # ubicación del mismo frame, si la hay
+
+
+def speech_s(text: str, s: ModeSettings) -> float:
+    """Cuánto tarda en decirse una frase (estimado; los sonidos son cortos)."""
+    return 0.15 if text.startswith("sonido:") else s.speech_base_s + s.speech_s_per_char * len(text)
 
 
 def age_s(joint: Joint, now_ns: int) -> float:

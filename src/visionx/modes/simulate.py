@@ -89,6 +89,7 @@ def simulate(
     every: int = 1,
     tick_s: float | None = None,
     tail_s: float = 0.0,
+    on_frame: Callable[[float, Any, View, RecordingSink], None] | None = None,
 ) -> SimulationResult:
     """Recorre la fuente frame a frame con tiempo emulado.
 
@@ -96,6 +97,8 @@ def simulate(
     el detector mira uno de cada N frames. `tick_s`: para fuentes sin tiempo propio (la
     sintética), cuánto avanza el reloj antes de cada frame. `tail_s`: segundos que se sigue
     simulando después del último frame (sin frames nuevos), para que los modos cierren.
+    `on_frame(t_s, frame, view, sink)` se llama después de cada tick (frame None en la cola):
+    lo usa la demo para dibujar.
     """
     t0: list[int | None] = [None]
     events: list[tuple[float, str, dict[str, Any]]] = []
@@ -167,6 +170,8 @@ def simulate(
         index += 1
         deliver(now)
         controller.tick()
+        if on_frame is not None:
+            on_frame(t_s(), frame, state["view"], sink)
     # Sin frames nuevos: el tiempo sigue para que los modos noten la ausencia y cierren.
     step = int(0.1 * 1e9)
     for _ in range(int(tail_s / 0.1)):
@@ -174,4 +179,6 @@ def simulate(
         give_orders()
         deliver(clock.now_ns())
         controller.tick()
+        if on_frame is not None:
+            on_frame(t_s(), None, state["view"], sink)
     return SimulationResult(sink.spoken, events, n_frames, n_det, n_depth, t_s(), errors)

@@ -105,6 +105,8 @@ modes:
   lost_s: 2.0               # sin ver el objetivo durante esto: "Perdí ...", s (clips buscar: 1 -> 2,5 s bajó avisos)
   min_interval_s: 1.2       # mínimo entre dos frases de guía, s
   repeat_s: 4.0             # repetir la dirección aunque no cambie, s
+  speech_base_s: 0.3        # duración estimada de una frase: base...
+  speech_s_per_char: 0.065  # ...más esto por carácter (Piper es_AR: 50–70 ms/car); la guía no habla encima
   end_margin_s: 1.0         # frase de cierre antes del vencimiento de la orden, s
   round_m: 0.1              # redondeo de los metros que se dicen
   arrive_m: 0.6             # al frente y a esto o menos: "Llegaste", m

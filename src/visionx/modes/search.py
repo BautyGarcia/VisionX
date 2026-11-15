@@ -42,6 +42,7 @@ from visionx.modes.common import (
     horizontal,
     measure,
     measure_phrase,
+    speech_s,
 )
 from visionx.modes.target import Target, TargetMemory, plural
 from visionx.shared.contracts import Command
@@ -234,7 +235,9 @@ class SearchHandler:
             return [self._phrase(text, now_ns)] if text else []
         since = None if self._last_say_ns is None else (now_ns - self._last_say_ns) / 1e9
         changed = text != self._last_phrase
-        if since is not None and since < self.s.min_interval_s:
+        # Ni antes del mínimo ni mientras la frase anterior todavía suena (no encolar guía vieja).
+        speaking = speech_s(self._last_phrase or "", self.s) + 0.2
+        if since is not None and since < max(self.s.min_interval_s, speaking):
             return []
         if changed or since is None or since >= self.s.repeat_s:
             return [self._phrase(text, now_ns)]

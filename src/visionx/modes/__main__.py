@@ -150,6 +150,118 @@ def cmd_simular(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_demo(args: argparse.Namespace) -> int:
+    """Como `simular`, pero además escribe un MP4 con la imagen anotada, subtítulos y voz."""
+    import tempfile
+
+    import cv2
+
+    from visionx.modes.common import ModeSettings
+    from visionx.modes.demo import (
+        AudioSchedule,
+        DemoState,
+        H,
+        Painter,
+        W,
+        add_subtitles,
+        mux,
+        render_frame,
+        write_wav,
+    )
+
+    cfg = load_config(args.config)
+    clock = ManualClock(1_000_000_000)
+    source, geometry, detector, depth, spatial, tick_s = build(args, cfg, clock)
+    catalog = ClassCatalog(COCO_CLASSES)
+    settings = ModeSettings.from_config(cfg)
+    deadlines = {
+        str(k): float(v) for k, v in ((cfg.get("audio") or {}).get("deadlines_s") or {}).items()
+    }
+    holder: dict = {}
+
+    def make_controller(latest_view, sink, on_event):
+        holder["handlers"] = build_handlers(cfg, geometry, catalog.spoken, on_event)
+        holder["controller"] = Controller(
+            CommandParser(catalog),
+            sink,
+            latest_view=latest_view,
+            handlers=holder["handlers"],
+            deadlines_s=deadlines,
+            clock=clock,
+            on_event=on_event,
+        )
+        return holder["controller"]
+
+    synth = None
+    sample_rate = 22050
+    if not args.sin_voz:
+        from visionx.voice.engines import PiperSynth, VoiceSettings
+        from visionx.voice.output import CachedSynth
+
+        synth_obj = CachedSynth(PiperSynth(VoiceSettings.from_config(cfg)))
+        synth, sample_rate = synth_obj.synthesize, synth_obj.sample_rate
+    schedule = AudioSchedule(synth, sample_rate)
+    painter = Painter()
+    out = Path(args.salida)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix="visionx-demo-"))
+    writer = cv2.VideoWriter(
+        str(tmp / "video.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), args.fps, (W, H)
+    )
+    info = [f"detector: {detector.model_id.split('@')[0]}",
+            f"  latencia emulada {args.latencia_detector:g} s"]  # fmt: skip
+    if depth is not None:
+        info += [
+            f"profundidad: {depth.model_id}",
+            f"  latencia emulada {args.latencia_profundidad:g} s",
+        ]
+    st = DemoState()
+    cursor = {"base": None, "next": 0.0}
+
+    def on_frame(t_s, frame, view, sink):
+        schedule.update(sink)
+        ctl = holder["controller"]
+        active = ctl.active
+        if active is not None:
+            names = {"search": "buscar", "distance": "distancia", "choose": "elegir"}
+            st.order, st.label = active.utterance, active.target
+            st.mode = names.get(active.mode.value, active.mode.value)
+            handler = holder["handlers"].get(active.mode)
+            target = getattr(handler, "target", None)
+            st.state = getattr(handler, "state", "midiendo")
+            st.target_angle = (target.angle_h_deg, target.angle_v_deg) if target else None
+        else:
+            st.mode, st.state, st.target_angle = "-", "inactivo", None
+        while cursor["base"] is not None and cursor["next"] <= t_s:
+            writer.write(add_subtitles(cursor["base"], schedule, cursor["next"], painter))
+            cursor["next"] += 1 / args.fps
+        if frame is not None:
+            cursor["base"] = render_frame(frame, view, st, geometry, catalog.spoken, t_s, info,
+                                          settings, painter)  # fmt: skip
+
+    result = simulate(
+        source, detector, make_controller, clock, load_orders(args), depth=depth, spatial=spatial,
+        det_latency_s=args.latencia_detector, depth_latency_s=args.latencia_profundidad,
+        every=args.cada, tick_s=tick_s, tail_s=args.cola, on_frame=on_frame,
+    )  # fmt: skip
+    end = max([result.duration_s] + [s.end_s for s in schedule.segments]) + 0.5
+    while cursor["base"] is not None and cursor["next"] <= end:
+        writer.write(add_subtitles(cursor["base"], schedule, cursor["next"], painter))
+        cursor["next"] += 1 / args.fps
+    writer.release()
+    write_wav(tmp / "audio.wav", schedule.mix(end), sample_rate)
+    if mux(tmp / "video.mp4", tmp / "audio.wav", out):
+        print(f"demo: {out} ({end:.1f} s, con audio)")
+    else:
+        silent = out.with_name(out.stem + "-sin-audio.mp4")
+        tmp.joinpath("video.mp4").replace(silent)
+        tmp.joinpath("audio.wav").replace(out.with_suffix(".wav"))
+        print(f"sin ffmpeg: video {silent} y audio {out.with_suffix('.wav')} por separado")
+    for s in result.spoken:
+        print(f"  {s.t_s:7.2f} s  [#{s.request_id}] {s.text}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m visionx.modes",
@@ -170,6 +282,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--traza", help="JSONL con lo dicho y los eventos")
     p.add_argument("--config")
     p.set_defaults(fn=cmd_simular)
+
+    d = sub.add_parser("demo", help="como simular, más un MP4 con imagen, subtítulos y voz")
+    for action in p._actions:  # mismas opciones que simular
+        if action.dest not in ("help", "traza"):
+            d._add_action(action)
+    d.add_argument("--salida", required=True, help="archivo .mp4")
+    d.add_argument("--sin-voz", action="store_true", help="sin Piper: subtítulos y silencio")
+    d.add_argument("--fps", type=float, default=15.0, help="cuadros por segundo del video")
+    d.set_defaults(fn=cmd_demo)
     args = parser.parse_args(argv)
     try:
         return args.fn(args)

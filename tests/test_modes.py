@@ -8,6 +8,7 @@ El reloj es manual: los tiempos son exactos y no dependen de la máquina.
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -380,10 +381,13 @@ def test_meters_during_guidance_only_when_fresh_and_valid_and_arrival_ends():
     stale = View(joint(9.9, 99, [("cup", 0, None)]), m2)  # Z de hace 4,1 s: no se dice
     assert not any("metro" in t for t in texts(h.tick(c, stale, int(9.9 * SEC))[0]))
     m2b = joint(10.0, 100, [("cup", 1, None, 1.4, SPEAK)], measured=True)
+    # la frase anterior ("Taza al frente.", 9,9 s) tarda ~1,3 s: la nueva espera a que termine
     says, _ = h.tick(c, View(joint(11.2, 112, [("cup", 0, None)]), m2b), int(11.2 * SEC))
+    assert texts(says) == []
+    says, _ = h.tick(c, View(joint(11.5, 115, [("cup", 0, None)]), m2b), int(11.5 * SEC))
     assert texts(says) == ["Taza al frente, a 1,4 metros."]
-    m3 = joint(11.3, 113, [("cup", 0, None, 0.55, SPEAK)], measured=True)
-    says, done = h.tick(c, View(joint(11.4, 114, [("cup", 0, None)]), m3), int(11.4 * SEC))
+    m3 = joint(11.6, 116, [("cup", 0, None, 0.55, SPEAK)], measured=True)
+    says, done = h.tick(c, View(joint(11.7, 117, [("cup", 0, None)]), m3), int(11.7 * SEC))
     assert done and texts(says) == ["Llegaste: taza al frente, a 0,6 metros."]
     # más cerca que el rango validado: también llegó, sin un número que no se validó
     h2, c2 = search(), cmd(Mode.SEARCH, "cup", request_id=2)
@@ -558,3 +562,34 @@ def test_simulation_cli_is_deterministic_and_answers(capsys, tmp_path):
     assert len(answers) == 1
     # el frame medido es posterior a la orden (t=6 s a 30 fps: frame >= 165 con 0,5 s de margen)
     assert int(answers[0].split('"frame_id": ')[1].split(",")[0]) >= 165
+
+
+def test_demo_writes_a_video_without_voice(tmp_path, capsys):
+    pytest.importorskip("PIL")
+    pytest.importorskip("matplotlib")  # vienen con el extra de detección; CI puede no tenerlos
+    out = tmp_path / "demo.mp4"
+    argv = ["demo", "--fuente", "sintetica", "--frames", "60", "--orden", "0.3:buscá la taza",
+            "--sin-voz", "--salida", str(out)]  # fmt: skip
+    assert modes_main(argv) == 0
+    produced = out if out.exists() else tmp_path / "demo-sin-audio.mp4"  # sin ffmpeg: mudo
+    assert produced.stat().st_size > 0 and "Busco taza." in capsys.readouterr().out
+
+
+def test_audio_schedule_queues_and_cancel_cuts():
+    from visionx.modes.demo import AudioSchedule
+    from visionx.modes.simulate import Spoken
+
+    sched = AudioSchedule(None, 1000)
+    sink = SimpleNamespace(spoken=[Spoken(0.0, 1, 1, "a" * 20), Spoken(0.1, 1, 1, "b" * 20)],
+                           cancelled=[])  # fmt: skip
+    sched.update(sink)
+    first, second = sched.segments
+    assert second.start_s == pytest.approx(first.end_s)  # en cola, no encima
+    cut = first.end_s - 0.5
+    sink.cancelled.append((cut, 1))  # una orden nueva cancela el pedido 1...
+    sink.spoken.append(Spoken(cut, 2, 1, "nuevo"))
+    sched.update(sink)
+    # ...lo que sonaba se corta y lo pendiente ("b") se descarta
+    assert [s.text for s in sched.segments] == ["a" * 20, "nuevo"]
+    assert sched.segments[0].end_s == pytest.approx(cut)
+    assert sched.segments[1].start_s == pytest.approx(cut)
