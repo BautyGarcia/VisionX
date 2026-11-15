@@ -40,6 +40,7 @@ from visionx.app.fakes import (
 from visionx.app.runtime import Pipeline
 from visionx.app.science import TraceWriter, compare
 from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
+from visionx.modes import build_handlers
 from visionx.shared.config import ROOT, load_config
 from visionx.shared.errors import EstimatorError, InvalidInput, SourceError
 from visionx.voice.commands import CommandParser
@@ -117,13 +118,25 @@ def load_script(path: str | None) -> list[tuple[float, str]]:
     return sorted(items)
 
 
+def build_spatial(cfg: dict[str, Any], geometry, depth_geometry=None) -> FakeSpatialEstimator:
+    """Ubicación provisoria con los parámetros de `spatial_provisional` (config)."""
+    s = cfg.get("spatial_provisional") or {}
+    return FakeSpatialEstimator(
+        geometry,
+        min_valid=float(s.get("min_valid", 0.5)),
+        depth_geometry=depth_geometry,
+        max_rel_spread=float(s.get("max_rel_spread", 0.25)),
+        border_px=float(s.get("border_px", 2.0)),
+    )
+
+
 def build_depth(args: argparse.Namespace, cfg: dict[str, Any], geometry, synthetic):
     """(estimador de profundidad, ubicación espacial, geometría de la profundidad)."""
     if args.profundidad == "ninguna":
         return None, None, geometry
     if args.profundidad == "fake":
         depth = FakeDepthEstimator(geometry, source=synthetic, delay_ms=args.retraso_profundidad)
-        return depth, FakeSpatialEstimator(geometry), geometry
+        return depth, build_spatial(cfg, geometry), geometry
     if synthetic is not None:
         raise InvalidInput(f"--profundidad {args.profundidad} necesita una grabación o usb")
     from visionx.depth.stereo import SgbmEstimator, SgbmParams
@@ -137,8 +150,7 @@ def build_depth(args: argparse.Namespace, cfg: dict[str, Any], geometry, synthet
         compute_size=tuple(compute) if compute else None,
         min_coverage=float(dcfg.get("min_coverage", 0.0)),
     )
-    spatial = FakeSpatialEstimator(geometry, depth_geometry=depth.geometry)
-    return depth, spatial, depth.geometry
+    return depth, build_spatial(cfg, geometry, depth.geometry), depth.geometry
 
 
 def cmd_ejecutar(args: argparse.Namespace) -> int:
@@ -162,10 +174,12 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
 
     output, voice = build_output(args, cfg, on_record)
     pipeline = Pipeline(source, detector, depth, spatial, on_event=on_event)
+    catalog = ClassCatalog(COCO_CLASSES)
     controller = Controller(
-        CommandParser(ClassCatalog(COCO_CLASSES)),
+        CommandParser(catalog),
         output,
-        latest_joint=pipeline.latest_joint,
+        latest_view=pipeline.view,
+        handlers=build_handlers(cfg, geometry, catalog.spoken, on_event),
         deadlines_s={str(k): float(v) for k, v in (voice_cfg.get("deadlines_s") or {}).items()},
         on_event=on_event,
     )

@@ -213,8 +213,14 @@ class FakeDepthEstimator:
 class FakeSpatialEstimator:
     """Ubicación espacial provisoria hasta que A entregue la real (T09/T13).
 
-    Ángulo desde el centro de la caja; Z = mediana dentro de la máscara; metros solo si al
-    menos `min_valid` de la máscara tiene profundidad. La política real se calibra en T13.
+    Ángulo desde el centro de la caja; Z = mediana dentro de la máscara. Política (candidata,
+    sin calibrar; la real es de A y se calibra en T13):
+    - caja que toca el borde izquierdo o derecho -> ASK_REFRAME (el objeto está cortado);
+    - menos de `min_valid` de la máscara con profundidad -> DIRECTION_ONLY;
+    - dispersión (IQR) mayor que `max_rel_spread`·Z -> DIRECTION_ONLY: la mediana mezcla
+      superficies a distinta distancia (en el clip `distancias`, vaso y botella dan ~5 %;
+      televisor, mesa y silla calada, 25–50 %: BITACORA T09);
+    - si no, SPEAK_METERS. El rango que se anuncia lo controla el modo (`modes.range_m`).
 
     `geometry` es la del frame (donde están cajas y máscaras). Si la profundidad se calcula
     en una versión reescalada (p. ej. SGBM a 1280x720 con captura de 1920x1080), se pasa como
@@ -226,10 +232,14 @@ class FakeSpatialEstimator:
         geometry: StereoGeometry,
         min_valid: float = 0.5,
         depth_geometry: StereoGeometry | None = None,
+        max_rel_spread: float = 0.25,
+        border_px: float = 2.0,
     ) -> None:
         self.geometry = geometry
         self.depth_geometry = depth_geometry or geometry
         self.min_valid = min_valid
+        self.max_rel_spread = max_rel_spread
+        self.border_px = border_px
 
     def locate(
         self, frame: StereoFrame, depth: DepthResult, detections: Detection
@@ -254,11 +264,15 @@ class FakeSpatialEstimator:
                 z = float(np.median(values))
                 spread = float(np.percentile(values, 75) - np.percentile(values, 25))
             h, vert = self.geometry.pixel_to_angles(float(x1 + x2) / 2, float(y1 + y2) / 2)
-            policy = (
-                DistancePolicy.SPEAK_METERS
-                if z is not None and frac >= self.min_valid
-                else DistancePolicy.DIRECTION_ONLY
-            )
+            width = self.geometry.width
+            if x1 <= self.border_px or x2 >= width - 1 - self.border_px:
+                policy = DistancePolicy.ASK_REFRAME
+            elif z is None or frac < self.min_valid:
+                policy = DistancePolicy.DIRECTION_ONLY
+            elif spread is not None and spread > self.max_rel_spread * z:
+                policy = DistancePolicy.DIRECTION_ONLY
+            else:
+                policy = DistancePolicy.SPEAK_METERS
             track = detections.track_ids[i] if detections.track_ids is not None else None
             out.append(
                 SpatialObject(

@@ -485,6 +485,39 @@ Distancia congela un par identificado y su selección: no aplicar la máscara m�
 depth anterior. Responder Z axial con redondeo acorde a validación, o explicar abstención.
 El usuario debe poder cancelar en captura, inferencia, preparación de frase y reproducción.
 
+**Implementación (`src/visionx/modes/`, BITACORA 2026-11-15).** Los modos son `ModeHandler`
+del controlador de T07 y reciben una vista (`app.runtime.View`): `seen`, lo último detectado
+(sin esperar profundidad), y `measured`, la última unión con profundidad y objetos del mismo
+frame. Los parámetros están en la sección `modes` de la config; son candidatos sin medir.
+
+| Pieza | Qué hace | Garantía que se prueba (`tests/test_modes.py`) |
+|---|---|---|
+| `SearchHandler` | Estados buscando → (eligiendo) → guiando. Presencia confirmada en el tiempo (`confirm_hits` en `confirm_s`): bip y dirección («Taza un poco a la izquierda.»). Habla cuando cambia la frase, con al menos `min_interval_s` entre frases, o cada `repeat_s`. Al frente, con Z decible y fresco: «Taza al frente, a 1,1 metros.». A `arrive_m` o menos: «Llegaste…» y termina. Sin verlo `lost_s`: «Perdí taza.» y vuelve a buscar. Cierra antes de vencer («No encontré…»/«Terminé de buscar…») | Un frame suelto no da bip; una observación vieja no guía; no habla en cada frame; repite tras `repeat_s`; la reaparición es una adquisición nueva |
+| Elegir entre iguales | Con varios de la clase pide «izquierda, derecha, centro o la más cercana». El controlador entrega la elección a la búsqueda activa sin reemplazarla; «la más cercana» solo con metros decibles | La elección conserva el request_id de la búsqueda; sin búsqueda: «No hay nada para elegir ahora.» |
+| `Target` | Sigue al elegido por track_id y, si falta, por el candidato de la misma clase más cercano en ángulo, dentro de `gate_deg` + `gate_deg_per_s`·Δt. Fuera de la ventana no se lo asigna a nadie | Sigue a la taza de la izquierda aunque aparezca otra |
+| `DistanceHandler` | Congela la primera unión medida que llegó después de la orden (o hasta `accept_before_s` antes) y responde solo desde ella. Sin objeto nombrado: el guiado en los últimos 5 s o el que está al frente. Varios iguales: los enumera de izquierda a derecha | Nunca responde con un frame anterior a la orden; una sola respuesta; explica en vez de inventar |
+| `measure` | Metros solo con la política SPEAK_METERS de quien ubicó el objeto y dentro de `depth.range_m`. Fuera: «muy cerca, a menos de…»/«lejos, a más de…»; reencuadrar; «no puedo medir su distancia» | Ningún metro con DIRECTION_ONLY, ABSTAIN, sin Z o fuera de rango |
+| `simulate` + `python -m visionx.modes simular` | Corre los modos sobre una grabación con el tiempo grabado (`ManualClock`) y latencias de detector/profundidad emuladas. Imprime qué diría y en qué segundo | Misma entrada, misma transcripción |
+
+**Ubicación por objeto provisoria.** La real es de A (`depth/spatial/`, T09/T13). Mientras
+tanto, `app/fakes.py::FakeSpatialEstimator`, con la sección `spatial_provisional`, calcula la
+mediana de Z en la máscara. Política candidata: caja contra el borde lateral → ASK_REFRAME;
+menos de 50 % de la máscara con profundidad o IQR > 25 % de Z → DIRECTION_ONLY. El 25 % sale
+de `dev-1114-distancias`: los objetos compactos dan ~5 % y los que tienen varias superficies
+(televisor, mesa, silla calada) dan 25–50 %. Cuando A entregue su `SpatialEstimator`, se
+reemplaza en `app/__main__.py::build_depth` sin tocar los modos: ellos solo leen `policy` y
+`z_m`.
+
+Todo lo que dicen los modos sale con prioridad SHORT: el bip y la dirección deben sonar
+después del «Busco taza.» de confirmación, no cortarlo.
+
+```text
+uv run python -m visionx.modes simular --fuente recordings/dev-1114-buscar-a
+    --orden "4.3:buscá la botella" --latencia-detector 0.2 --latencia-profundidad 1.0
+uv run python -m visionx.app ejecutar --fuente recordings/dev-1114-distancias
+    --detector yolo --profundidad B0 --consola        # escribir órdenes en la terminal
+```
+
 ### Leer — T10
 
 **OCR**, reconocimiento óptico de caracteres, convierte imagen en texto. Usar un motor

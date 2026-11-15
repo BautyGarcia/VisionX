@@ -178,6 +178,26 @@ def test_pipeline_under_overload_keeps_bounded_queues_and_never_mixes_frames():
     assert any(kind == "union" for kind, _ in events)
 
 
+def test_view_gives_detection_before_slow_depth():
+    # Buscar (T09) avisa presencia con la detección sola: la vista la trae aunque la
+    # profundidad todavía no haya terminado ese frame.
+    source = SyntheticStereoSource(fps=60, n_frames=60)
+    depth = FakeDepthEstimator(source.geometry, source=source, delay_ms=400)
+    pipeline = Pipeline(
+        source, ScriptedDetector(source), depth, FakeSpatialEstimator(source.geometry)
+    )
+    pipeline.start()
+    assert wait_for(lambda: pipeline.view().seen is not None, timeout=2)
+    first = pipeline.view()
+    assert first.measured is None or first.measured.frame.frame_id <= first.seen.frame.frame_id
+    assert wait_for(lambda: pipeline.view().measured is not None, timeout=5)
+    view = pipeline.view()
+    pipeline.stop()
+    assert view.seen.depth is None and view.measured.depth is not None
+    assert view.seen.frame.frame_id >= view.measured.frame.frame_id
+    check_same_frame(view.measured.frame, view.measured.detection, view.measured.depth)
+
+
 def test_model_failure_is_counted_and_pipeline_continues():
     source = SyntheticStereoSource(fps=100, n_frames=40)
 
@@ -268,10 +288,10 @@ def test_cancel_cuts_audio_and_clears_active():
     output.player = FakePlayer(realtime=True, block_ms=5)
 
     class Talkative(UnavailableHandler):
-        def start(self, command, joint):
+        def start(self, command, view, now_ns):
             return [Say("x" * 3000, cancelable=True)]  # 3 s a 1 kHz
 
-        def tick(self, command, joint, now_ns):
+        def tick(self, command, view, now_ns):
             return [], False
 
     controller.handlers = {Mode.SEARCH: Talkative()}
@@ -291,10 +311,10 @@ def test_expired_command_stops_ticking_and_repeat_works():
     calls = []
 
     class Counting(UnavailableHandler):
-        def start(self, command, joint):
+        def start(self, command, view, now_ns):
             return []
 
-        def tick(self, command, joint, now_ns):
+        def tick(self, command, view, now_ns):
             calls.append(now_ns)
             return [], False
 
