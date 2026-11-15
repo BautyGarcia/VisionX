@@ -51,7 +51,9 @@ def u_for(angle_deg: float) -> float:
 Obj = tuple
 
 
-def joint(t_s: float, frame_id: int, objs: list[Obj], *, measured: bool = False) -> Joint:
+def joint(
+    t_s: float, frame_id: int, objs: list[Obj], *, measured: bool = False, scores=None
+) -> Joint:
     frame = StereoFrame(
         session_id="s",
         frame_id=frame_id,
@@ -71,7 +73,7 @@ def joint(t_s: float, frame_id: int, objs: list[Obj], *, measured: bool = False)
         model_id="test",
         boxes_xyxy=np.array(boxes, np.float32).reshape(-1, 4),
         class_names=[o[0] for o in objs],
-        scores=np.full(len(objs), 0.8, np.float32),
+        scores=np.array(scores, np.float32) if scores else np.full(len(objs), 0.8, np.float32),
         inference_ms=1.0,
         track_ids=[o[2] for o in objs] if objs else None,
     )
@@ -278,6 +280,26 @@ def test_several_equal_objects_ask_and_choice_completes_the_same_search():
     assert ctl.active is not None and ctl.active.request_id == search_id  # no la reemplazó
     assert [s.text for s in sink.spoken][-2:] == ["sonido:bip", "Taza un poco a la derecha."]
     assert all(s.request_id == search_id for s in sink.spoken[-2:])
+
+
+def test_unanswered_choice_is_asked_again_not_decided_for_the_user():
+    h, c = search(), cmd(Mode.SEARCH, "bottle")
+    h.start(c, View(), 0)
+    two = [("bottle", -20, None), ("bottle", -10, None)]
+    out, _ = run(h, c, [joint(0.1 * i, i, two) for i in range(1, 100)])
+    asked = [t for t, x in out if "¿Cuál" in x]
+    assert len(asked) == 2 and asked[1] - asked[0] == pytest.approx(2 * S.repeat_s, abs=0.11)
+    assert h.state == "eligiendo" and h.target is None
+
+
+def test_duplicate_box_of_the_same_object_is_not_a_second_object():
+    # una caja de silla dentro de otra (YOLO detectó una parte como otra silla)
+    objs = [("chair", 0, None), ("chair", 0.5, None), ("chair", 30, None)]
+    j = joint(0.1, 1, objs, scores=[0.8, 0.3, 0.8])
+    from visionx.modes.common import candidates
+
+    cands = candidates(j, "chair", G)
+    assert [c.index for c in cands] == [0, 2]
 
 
 def test_choose_nearest_needs_meters_and_choose_without_search_says_so():

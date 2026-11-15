@@ -88,17 +88,44 @@ def age_s(joint: Joint, now_ns: int) -> float:
     return max(0.0, (now_ns - joint.frame.received_ns) / 1e9)
 
 
+# Dos cajas de la misma clase que se cubren tanto son el mismo objeto detectado dos veces (YOLO
+# devolvió una parte de la silla como otra silla: clip acercarse-1, BITACORA T09).
+DUPLICATE_OVERLAP = 0.7
+
+
+def _duplicates(det, label: str | None) -> set[int]:
+    """Índices a descartar: la de menor score de cada par de la misma clase cuya intersección
+    cubre más de DUPLICATE_OVERLAP de la caja más chica."""
+    drop: set[int] = set()
+    idx = [i for i, c in enumerate(det.classes) if label is None or c == label]
+    for a in idx:
+        for b in idx:
+            if a >= b or det.classes[a] != det.classes[b] or a in drop or b in drop:
+                continue
+            ax1, ay1, ax2, ay2 = (float(x) for x in det.boxes[a])
+            bx1, by1, bx2, by2 = (float(x) for x in det.boxes[b])
+            inter = max(0.0, min(ax2, bx2) - max(ax1, bx1)) * max(
+                0.0, min(ay2, by2) - max(ay1, by1)
+            )
+            smaller = min((ax2 - ax1) * (ay2 - ay1), (bx2 - bx1) * (by2 - by1))
+            if smaller > 0 and inter / smaller > DUPLICATE_OVERLAP:
+                drop.add(a if det.scores[a] < det.scores[b] else b)
+    return drop
+
+
 def candidates(joint: Joint, label: str | None, geometry: StereoGeometry) -> list[Candidate]:
     """Detecciones de `label` (todas si None), ordenadas de izquierda a derecha.
 
     El ángulo sale del centro de la caja con la geometría del frame. Si la unión trae objetos
-    ubicados, se adjuntan (mismo frame garantizado por T07).
+    ubicados, se adjuntan (mismo frame garantizado por T07). Los duplicados de la misma clase se
+    descartan (ver DUPLICATE_OVERLAP).
     """
     det = joint.detection
     located = {o.detection_index: o for o in joint.objects}
+    drop = _duplicates(det, label)
     out = []
     for i, cls in enumerate(det.classes):
-        if label is not None and cls != label:
+        if (label is not None and cls != label) or i in drop:
             continue
         x1, y1, x2, y2 = (float(x) for x in det.boxes[i])
         h, _ = geometry.pixel_to_angles((x1 + x2) / 2, (y1 + y2) / 2)

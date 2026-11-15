@@ -112,6 +112,14 @@ class SearchHandler:
             self._last_seen_key = seen.frame.key  # type: ignore[union-attr]
             cands = candidates(seen, label, self.geometry)  # type: ignore[arg-type]
             says += self._on_frame(cands, name, now_ns)
+        if self.state == CHOOSING and self._last_say_ns is not None:
+            # Sin respuesta, se vuelve a preguntar de vez en cuando (no se elige por el usuario).
+            if (now_ns - self._last_say_ns) / 1e9 >= 2 * self.s.repeat_s and self._choices:
+                says.append(
+                    self._phrase(
+                        f"¿Cuál {name}? Decí izquierda, derecha, centro o la más cercana.", now_ns
+                    )
+                )
         if self.state == GUIDING and self.target is not None:
             # "Perdí" necesita evidencia de ausencia: frames frescos que cubran lost_s de video
             # sin el objetivo, medido en tiempo de FRAME. Si el sistema se atrasa (no llegan
