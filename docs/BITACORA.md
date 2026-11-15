@@ -40,6 +40,88 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-15 — T09: buscar/guiar, elegir entre iguales y distancia (con clips ELP)
+
+**Tarea:** T09. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/T09-buscar`, apilada sobre
+`b/T07-ejecucion` (PR #24), porque los modos son `ModeHandler` de su controlador. Commits
+locales `4e4dab2` y `485216d`.
+
+**Hecho.**
+- Paquete `src/visionx/modes/`:
+  - `SearchHandler`: buscando → eligiendo → guiando, con bip, dirección por cambio o
+    intervalo, metros al frente, «Perdí…», «Llegaste…» y cierre antes de vencer.
+  - `DistanceHandler`: congela un frame posterior a la orden; nombrado, guiado o al frente;
+    enumera iguales.
+  - `Target`: sigue al objetivo por ID o por ángulo, sin depender de ByteTrack.
+  - `measure`: metros solo con SPEAK_METERS y dentro de `depth.range_m`.
+  - Simulador `python -m visionx.modes simular`, con tiempo grabado y latencias emuladas.
+  - Parámetros en `modes` y `spatial_provisional` de `configs/default.yaml`.
+- Controlador (T07): los modos reciben `View` (lo visto y lo medido) y elegir se entrega a
+  la búsqueda activa sin reemplazarla. `Pipeline.view()` da la detección antes que una
+  profundidad lenta. `app ejecutar` ya trae buscar y distancia.
+- Ubicación provisoria: caja contra el borde → reencuadrar; IQR > 25 % de Z → solo dirección.
+- TECNICO T09 (tabla de piezas y garantías) y T07 actualizados.
+
+**Problemas encontrados con los clips y corregidos.**
+- **Distancia respondía dos veces:** `start()` respondía y el `tick()` siguiente repetía.
+  Ahora hay una marca de respuesta dada.
+- **«Perdí» falso por atraso del sistema** (en `app ejecutar` sobre `distancias`, con la
+  cámara quieta): un pico del detector de 775 ms dejó la vista vieja y, pasado `lost_s`, se
+  anunció la pérdida. Ahora «Perdí» exige `lost_s` de video fresco sin el objetivo, medido en
+  tiempo de frame; si el sistema se atrasa, calla y registra `buscar-demora`.
+- **«Veo 2 sillas» con una sola silla:** YOLO dio una caja de score 0,28 dentro de otra. Cajas
+  de la misma clase cuya intersección cubre más del 70 % de la menor cuentan como una.
+- **Elección sin respuesta:** quedaba en silencio hasta vencer. Ahora repregunta cada
+  2·`repeat_s` y nunca elige por el usuario.
+- **«Llegaste» con Z menor que el rango validado:** no se anunciaba. Ahora sí, sin decir el
+  número («muy cerca, a menos de 0,5 metros»).
+
+**Evidencia.**
+- Tests: 24 en `tests/test_modes.py` (presencia, frames viejos, ritmo, repetición, pérdida
+  y reaparición, atraso ≠ pérdida, seguimiento por ángulo, iguales y elección, repregunta,
+  duplicados, metros solo válidos y frescos, llegada, cierre, distancia congelada y única, sin
+  metros inválidos, enumeración, al frente, vencimiento, política provisoria, CLI determinista).
+  Más 1 de `Pipeline.view()` en `test_app.py`. Suite completa, ruff y formato en verde.
+- Evaluación sobre 6 clips con `485216d`: tiempo grabado, detector emulado a 0,2 s y SGBM B0 a
+  1,0 s (cercanos a lo medido sin competencia en esta notebook). Órdenes en el inicio de cada toma
+  según `fases.csv`. Un ejemplo:
+  `python -m visionx.modes simular --fuente recordings/dev-1114-buscar-a --orden "4.3:buscá la botella" --orden "10:la de la izquierda" --orden "36.6:buscá la botella" --profundidad B0 --latencia-detector 0.2 --latencia-profundidad 1.0`.
+
+| Clip | Qué se pidió | Qué dijo | Lectura |
+|---|---|---|---|
+| `distancias` | vaso, botella, bolso, al frente | «Veo 2 tazas: a la izquierda, a 1,1 m; a la derecha, a 0,5 m» (Z 1,078/0,542); «Botella a la izquierda, a 1,1 m» (1,069); «No veo cartera»; «Silla al frente, lejos, a más de 3 metros» (3,26) | Cinta: taza 1,00, vaso 0,50, botella 1,00. El vaso y la taza son la misma clase (`cup`): se enumeran. Respuesta 0,9–1,6 s después de la orden |
+| `acercarse-1` (silla) | distancia cada ~3 s caminando | 2,8 m quieto a «~3 m» (nota del clip); al acercarse, «no puedo medir su distancia» | La silla es calada: de cerca la IQR es 0,75 m con Z ≈ 1 m y la regla del 25 % se abstiene. Correcto, pero no hay «Llegaste» con sillas |
+| `acercarse-1` (buscar) | «buscá la silla» | Bip, guía y metros al frente (2,5–2,8 m) | Sin «Llegaste» por lo mismo |
+| `acercarse-2` (puerta) / `-3` (pared) | distancia sin objeto | 7 de 8 «No veo nada al frente que pueda medir»; 1 «Pájaro al frente, a 1,5 m» | Puerta y pared no son clases COCO: abstenerse es lo correcto. El «pájaro» no se verificó |
+| `buscar-a` (botella) | buscar en dos tomas + «la de la izquierda» | 6 adquisiciones, 6 pérdidas, 2 «Veo 2 botellas», 1 elección aplicada, repreguntas a los 8 s | Hay dos botellas reales (roja y verde, Z 0,76/0,98 m): preguntar era correcto |
+| `buscar-b` (taza) | buscar en dos tomas | Bip y «Llegaste: … muy cerca, a menos de 0,5 metros» en las dos | El diagnóstico muestra la taza sobre la mesada, al pie de la imagen, con Z 0,30–0,44 m. Plausible, sin cinta |
+| `buscar-c` (mochila/bolso) | «buscá la mochila», «buscá el bolso» | 1 adquisición de cada una y pérdida | Limitado por el detector (BITACORA 2026-11-14) |
+
+- `app ejecutar` en vivo (hilos, reloj real, `distancias`): «Busco botella», guía, «Botella
+  a la izquierda, a 1,1 metros», «Taza a la derecha, a 0,5 metros». Ahí apareció el «Perdí»
+  falso que se corrigió arriba.
+
+**Límites.**
+- Sin anotación manual: no hay tasa de éxito ni de falsos bips (M8), ni MAE por objeto (M7).
+  Las cifras de cinta son 3 objetos de un clip.
+- La simulación emula latencias, no las mide. M1 (bip ≤ 500 ms, cancelación P95 ≤ 200 ms)
+  sigue pendiente con equipo y audio real.
+- La ubicación por objeto y su política son provisorias (B). La real es de A (T09/T13): se
+  reemplaza en `app/__main__.py::build_depth` sin tocar los modos.
+- La dirección es solo horizontal; no se guía arriba/abajo.
+- `iguales` y `lectura-b` siguen incompletos en Drive.
+
+**Para Bauty.**
+- Los modos consumen `SpatialObject.policy` y `z_m` tal cual. El rango que se anuncia sale de
+  `depth.range_m`.
+- La regla provisoria del 25 % de IQR deja sin metros a objetos calados o con varias
+  superficies (silla, mesa, TV): conviene tenerla en cuenta en T13.
+
+**Próximo paso.**
+- Revisar con Tomás y publicar el PR de T09 cuando se integre T07 (#24).
+- Anotar `buscar-*` para M8 y tomar la ELP en vivo para M1.
+- Cambiar a la ubicación de A cuando exista.
+
 ## 2026-11-14 — T07: SGBM de T05 en la ejecución, clips de Bauty y primeras distancias reales
 
 **Tarea:** T07 (y datos para T06/T09). **Persona/agente:** Tomás / Claude Code. **Rama:**
