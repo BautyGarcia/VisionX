@@ -51,8 +51,9 @@ al 14/11 21 h la sincronización estaba incompleta: `dev-1114-lectura-b` tenía 
 imágenes; `dev-1114-iguales`, solo `frames/` (sin `manifest.yaml`, `frames.jsonl` ni
 `fases.csv`), y `dev-1114-m2`, solo `frames.jsonl`, sin el `manifest.yaml` que menciona la
 entrada de Bauty. Se copiaron a `recordings/` (ignorado). `verificar`: `distancias` 274/274,
-`buscar-a` 944/944, `buscar-b` 948/948 y `buscar-c` 948/948 pares con hash correcto. Drive baja
-a demanda a ~0,3 MB/s, así que `acercarse`, `escenas` y `lectura` seguían copiándose.
+`buscar-a` 944/944, `buscar-b` 948/948, `buscar-c` 948/948, `acercarse-1/2/3` 401/401, 401/401
+y 389/389, `escenas` 3019/3019 y `lectura` 2035/2035 pares con hash correcto. Drive baja a
+demanda a ~0,3 MB/s: copiar los 9 clips completos (~5,9 GB) llevó varias horas.
 
 **Integración.**
 - `main` (T05 partes 1 y 2, entrada M2) se trajo con *merge*, sin rebase ni force push:
