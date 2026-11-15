@@ -40,6 +40,98 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-14 — T05: ajuste en InStereo2K val, congelado, test público y latencia (PR 3 de 3)
+
+**Tarea:** T05. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T05-profundidad`.
+**Commits:** ajuste `ac3d7e1`/`5ec0cb5`, ronda 2 `c9904e8`, congelado `c214b6b`.
+
+**Qué se hizo.**
+- `tuning.py` + `python -m visionx.depth ajustar`: ajuste por etapas sobre los 102 pares de
+  InStereo2K val (grillas en `configs/ajuste-t05.yaml`). Objetivo único **acierto-2**: % de
+  los píxeles con GT respondidos con error ≤ 2 px, media por muestra. Se agregó a `metrics.py`.
+  Junta cobertura y error: no responder resta lo mismo que responder mal.
+- Se elige con la media por muestra, no por escena: val tiene dos tramos y uno solo tiene 2
+  pares. Los 3 mejores B4 se repitieron en 100 pares repartidos de train: el orden se mantuvo
+  (acierto-2 79,1 en train contra 72,0 en val). Train no eligió nada.
+- `latency.py` + `python -m visionx.depth latencia <clip>`: protocolo M9 sobre pares ya
+  rectificados (50 de calentamiento + 300 medidos, P50/P95 por etapa).
+- `combine` acepta una alineación ya calculada (el ajuste arma B3 y B4 con un solo RANSAC).
+- 313 tests (8 nuevos: acierto-2, etapas sobre pares sintéticos, determinismo, latencia).
+
+**Ronda 1 → ronda 2 (cambio de grilla, no de protocolo).** La ronda 1 (354 ensayos, 19 min)
+dejó varios ganadores en el borde de la grilla: bloque 9, P2 64, umbral 3 px, mínimos 0,3,
+confianza WLS 64. Se amplió la grilla y se repitió, también solo en val (664 ensayos, 27 min).
+Resultado: la base tiene óptimo interior (bloque 9, P2 64); con bloque 11–13 y P2 ≥ 64 SGBM
+colapsa a acierto ~0 (el costo P2 = factor·3·bloque² desborda los 16 bits de OpenCV).
+
+**Valores congelados en `configs/default.yaml` (con el motivo de cada uno).**
+- SGBM: bloque 9, P1/P2 = 8/64, 3way. Unicidad 15, manchas 100/2, L/R 2 px. Los filtros de B1
+  casi no mueven B4 (67,1–68,8 en las 12 combinaciones).
+- WLS: λ 4000, σ 1,5, confianza mínima 16. λ y σ no cambian nada en val; bajar la confianza
+  de 128 a 16 sube el acierto 2 puntos. 16 sigue en el borde, pero la curva ya es plana.
+- Anclas de B3/B4: **B2**, no B1. Mejor B4 con anclas B2: 72,0; con anclas B1: 68,8. La idea
+  previa (B1 por prudencia, porque WLS rellena) no se sostuvo en val.
+- Alineación: umbral 4 px, mínimo de inliers 0,5 y de reservadas 0,3. Desde 4 px es una meseta;
+  0,2–0,5 empatan (71,96 contra 71,98). Se tomó el más exigente en vez del primero de la grilla:
+  decisión a mano, sobre val, registrada acá. Aceptación en val: 98 % de los pares.
+
+**Tabla en val con lo congelado (102 pares, media por muestra).**
+
+| | acierto-2 | EPE | bad-2 | cobertura | ms (M2 Max, 1080×860) |
+|---|---|---|---|---|---|
+| B0 | 54,8 % | 3,84 px | 24,7 % | 73 % | 71 |
+| B1 | 37,4 % | 1,60 px | 13,2 % | 42 % | 161 |
+| B2 | 49,7 % | 1,14 px | 11,2 % | 55 % | 150 |
+| B3 | 62,3 % | 2,47 px | 36,4 % | 98 % | 205 |
+| B4 | 72,0 % | 2,06 px | 27,0 % | 99 % | 205 |
+
+**Test público, una sola vez con `--test-congelado` (commit `c214b6b`, región noc, media por
+escena).**
+
+| | MiddEval3-H (15): acierto-2 / EPE / bad-2 / cobertura | ETH3D (27): acierto-2 / EPE / bad-2 / cobertura |
+|---|---|---|
+| B0 | 72,2 / 4,30 / 17,4 / 87 % | 86,6 / 1,38 / 5,2 / 91 % |
+| B1 | 59,8 / 2,03 / 8,9 / 65 % | 78,6 / 0,82 / 2,8 / 81 % |
+| B2 | 57,5 / 1,70 / 11,5 / 65 % | 82,5 / 0,63 / 2,4 / 84 % |
+| B3 | 26,9 / 4,89 / 64,2 / 75 % | 93,9 / 0,85 / 6,1 / 100 % |
+| B4 | 65,4 / 2,56 / 25,2 / 89 % | 96,1 / 0,71 / 3,9 / 100 % |
+
+- **ETH3D:** B4 es el mejor control por acierto-2 (96,1) y la alineación se aceptó en 27/27.
+- **MiddEval3:** B4 **pierde contra B0** (65,4 contra 72,2). El monocular alineado falla: B3
+  tiene bad-2 64 % y la alineación se aceptó en 75 % de las escenas, o sea que se aceptaron
+  rectas malas. Probable causa (sin comprobar): rangos de disparidad de hasta 380 px, donde la
+  relación entre m y d deja de ser una recta; los umbrales en px se eligieron a 1080×860.
+- No se cambia nada mirando esto: el test ya se usó. Queda como hallazgo para Fusion (T12) y
+  para el banco ELP: que la alineación rechace mejor es un objetivo medible, no un ajuste.
+
+**Latencia M9 de B4 en la Mac** (M2 Max, MPS, `dev-1114-distancias`: 100 pares distintos en
+ciclo, 50 + 300, commit `c214b6b`, memoria pico 2,3 GB). Solo el componente de profundidad
+sobre pares ya rectificados: sin captura, JPEG ni rectificación.
+
+| por ojo | rango | total P50 / P95 | estéreo B2 | monocular | alineación | pares/s (P50) |
+|---|---|---|---|---|---|---|
+| 640×360 | 32 px | 51 / 56 ms | 16 ms | 24 ms | 9 ms | ~19,5 |
+| 960×540 | 48 px | 127 / 199 ms | 37 ms | 73 / 137 ms | 17 ms | ~7,9 |
+| 1280×720 | 64 px | 176 / 189 ms | 74 ms | 72 / 81 ms | 27 ms | ~5,7 |
+
+- El monocular cuesta lo mismo a 960 y a 1280 y tres veces más que a 640, aunque la red
+  siempre recibe ~518 px de lado corto. El costo extra parece estar en el pre/post-proceso del
+  processor de `transformers`, no en la red. Sin investigar; es la primera optimización.
+- El P95 de 960×540 (199 ms) viene del monocular (137 ms): variabilidad de MPS sin explicar.
+  Una sola corrida, no las tres del protocolo final.
+- En el clip, la alineación se aceptó en 100 % de los pares y B4 cubre todo el mapa.
+
+**Límites.**
+- Los umbrales en px se eligieron a 1080×860. En la ELP a 1280×720 la disparidad máxima es de
+  ~64 px, así que 4 px pesa más. Revisarlo con el banco ELP (T04), no con este clip.
+- `min_coverage` sigue en 0: se fija con el banco ELP.
+- El acierto-2 trata igual responder mal que no responder. Para avisar obstáculos, un error
+  puede ser peor que una abstención: T13 (incertidumbre) lo retoma con riesgo-cobertura.
+- Sin metros físicos validados en la ELP (las distancias de cinta del clip no se usaron).
+
+**Próximo paso:** publicar el PR 3 y cerrar T05. Después, con el banco ELP: revisar los
+umbrales de alineación y `min_coverage` y comparar a 640×360 contra 1280×720.
+
 ## 2026-11-14 — T05: Depth Anything V2, alineación, B3 y B4 (PR 2 de 3)
 
 **Tarea:** T05. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T05-profundidad`, sobre
