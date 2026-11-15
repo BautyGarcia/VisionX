@@ -11,6 +11,7 @@ Reglas que aplican todas las funciones:
   por píxel se informa aparte para que una imagen grande no domine.
 
 Unidades: EPE en píxeles de la resolución evaluada; bad-2 en % de píxeles con error > 2 px;
+acierto-2 en % de los píxeles con GT (respondidos y con error <= 2 px);
 AbsRel = |Z - Z_GT| / Z_GT (sin unidad); MAE_Z y sesgo en metros.
 """
 
@@ -68,6 +69,9 @@ def disparity_metrics(
     out["epe"] = float(err.mean()) if n else math.nan
     for t in BAD_THRESHOLDS_PX:
         out[f"bad{t:g}"] = float((err > t).mean() * 100.0) if n else math.nan
+    # Acierto-2: % de la GT respondida con error <= 2 px. Junta cobertura y error en un número
+    # para elegir parámetros (T05 PR 3): no responder resta igual que responder mal.
+    out["acierto2"] = float((err <= 2.0).sum() / n_gt * 100.0) if n_gt else math.nan
 
     if geometry is not None:
         z_pred, ok_pred = geometry.disparity_to_depth(p, pred_valid)
@@ -85,6 +89,8 @@ def disparity_metrics(
 
 # Métricas que se promedian directamente; las cuentas (n, n_gt) se suman.
 _COUNTS = ("n", "n_gt")
+# Por píxel, el acierto se pondera por los píxeles con GT (n_gt), no por los respondidos (n).
+_GT_WEIGHTED = ("acierto2",)
 
 
 def aggregate(rows: Iterable[dict[str, Any]], key: str = "escena") -> dict[str, dict[str, float]]:
@@ -118,7 +124,8 @@ def aggregate(rows: Iterable[dict[str, Any]], key: str = "escena") -> dict[str, 
     for m in metrics:
         if m == "cobertura":
             continue
-        pairs = [(r[m], r["n"]) for r in rows if not math.isnan(r[m]) and r["n"] > 0]
+        w = "n_gt" if m in _GT_WEIGHTED else "n"
+        pairs = [(r[m], r[w]) for r in rows if not math.isnan(r[m]) and r[w] > 0]
         weight = sum(n for _, n in pairs)
         per_pixel[m] = sum(val * n for val, n in pairs) / weight if weight else math.nan
     per_pixel.update(n_escenas=float(len(by_scene)), n_muestras=float(len(rows)))

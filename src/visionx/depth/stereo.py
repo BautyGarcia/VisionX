@@ -16,8 +16,8 @@ Convenciones (las mismas de shared/geometry.py):
 - Inválido: SGBM escribe (min_disparity - 1) * 16. Una disparidad 0 o negativa NO es inválida
   por sí misma: lo físico es d + doffs > 0, y eso decide la geometría, no SGBM.
 
-Los valores de los parámetros en configs/default.yaml son provisorios hasta el ajuste con la
-validación de InStereo2K (T05, PR 3). El test público no se usa para elegirlos.
+Los valores de los parámetros en configs/default.yaml se congelaron con la validación de
+InStereo2K (T05 PR 3, `python -m visionx.depth ajustar`). El test público no los eligió.
 """
 
 from __future__ import annotations
