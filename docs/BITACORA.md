@@ -351,6 +351,88 @@ tabla seguía en «En curso» con la reserva de `a/T04-datos`. Pasa a **Parcial*
 reserva: falta el banco ELP (escenas separadas por sesión y test físico reservado), que no se
 cubre con los clips de desarrollo de arriba. Sin pruebas de software; revisión de diff.
 
+## 2026-11-14 — T08: reglas de voz, salida con prioridad y cancelación, Piper y Whisper (sin micrófono)
+
+**Tarea:** T08. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/T08-voz`, apilada sobre
+`b/T06-deteccion` (PR #18) porque las reglas usan el catálogo en español de T06.
+
+**Hecho.** Paquete nuevo `src/visionx/voice/`:
+- `CommandParser`: reglas en español para cancelar, repetir, distancia, leer, describir,
+  buscar/guiar y elegir. Normaliza signos, tildes y muletillas, y busca el nombre de objeto más
+  largo. Si no conoce el objeto o no entiende la frase, pide aclaración en vez de adivinar.
+- `AudioOutput` (`AudioSink`): cola con prioridad, corte por prioridad mayor, `cancel` y
+  `cancel_all`, vencimiento antes y después de sintetizar, y cola acotada. Registra resultado y
+  espera de cada evento. Los sonidos (`sonido:bip`, `ok`, `error`, `cancelado`) no pasan por TTS.
+- Motores: `PiperSynth` + `CachedSynth`, `WhisperTranscriber` (faster-whisper), `PushToTalk`
+  (el callback solo copia bloques), `SoundDevicePlayer` (corta entre bloques con `abort()`) y
+  remuestreo por FFT.
+- CLI `python -m visionx.voice dispositivos | descargar | orden | frases | decir | transcribir |
+  bucle | escuchar`.
+- Config `audio` (dispositivos, bloque, vigencia por modo, TTS, STT) y extra `voz`
+  (sounddevice 0.5.6, faster-whisper 1.2.1, piper-tts 1.8.0). TECNICO T08 y README.
+- `tests/fixtures/voz-frases.csv`: 62 frases con modo y objetivo esperados.
+
+**Modelos bajados a `weights/` (no versionado), con SHA-256:**
+- Voz `es_AR-daniela-high.onnx` (Piper v1.0.0): 114 199 011 B,
+  `7ceb1fc0dab349418c5b54a639ae9ee595212d7c9ea422220d8419163d5cc985`. Su md5 coincide con el
+  publicado en `voices.json` (`e373fb65…`). `.onnx.json`:
+  `aedbf69647e1d754c62ecf8e0366ca5f16af3e768e3c6b5329af6eb6bde3852b`.
+- `model.bin` de faster-whisper (Systran, Hugging Face):
+  - tiny: 75 538 270 B, `dcb76c6586fc06cbdac6dd21f14cfd129cc4cdd9dce19bf4ffa62e59cbe6e6d1`.
+  - base: 145 217 532 B, `d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9`.
+  - small: 483 546 902 B, `3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671`.
+
+**Evidencia.**
+- Reglas sobre las 62 frases escritas: 62/62. **Sesgo:** las escribió el mismo agente junto con
+  las reglas; no es una evaluación independiente ni son frases de usuarios.
+- Tests: 24 en `tests/test_voice.py` con reproductor falso y sin modelos. Entorno tipo CI
+  (`uv sync --locked`, sin extras): 334 aprobados y 2 salteados; ruff correcto. Cubren el orden por
+  prioridad, que cancelar corte en < 1 s un audio de 3 s, el corte por prioridad (una alerta no
+  cancelable sigue), lo vencido antes y durante la síntesis, el cancelar durante la síntesis, la
+  síntesis que falla, la cola llena, la caché, el remuestreo sin aliasing y el WAV.
+- **Bucle Piper → Whisper → reglas** (`bucle`): 61 frases dichas con la voz sintética, la misma
+  notebook de T06, en CPU int8 y beam 1. Aciertos de modo+objetivo y STT mediana:
+
+  | Modelo | Con prompt, remuestreo lineal | Con prompt, FFT | Sin prompt, FFT | STT mediana |
+  |---|---|---|---|---|
+  | tiny | 24/61 | 26/61 | 19/61 | ~0,7 s |
+  | base | 26/61 | 24/61 | 25/61 | ~1,4 s |
+  | small | 38/61 | 36/61 | 29/61 | ~4,5–4,8 s (2,5–3,4 s en la primera prueba) |
+
+  Whisper procesa una ventana fija de 30 s: el tiempo casi no depende del largo de la orden.
+  Síntesis de Piper: mediana de 344–595 ms por frase según la corrida.
+
+**Problemas y decisiones.**
+- **El prompt ayuda en total pero inventa en frases cortas:** con `initial_prompt` «Stop» se
+  transcribió «¿A qué distancia está?» y «La de la derecha», «Leé la derecha». Sin prompt, small
+  baja de 36 a 29. Se deja el prompt y se anota el riesgo.
+- **Cancelar por voz no es confiable:** «Pará» salió «Pero» y «Basta», «Gracias». Confirma la
+  decisión de TECNICO: cancelar tiene botón (`cancel_all`) y no depende del STT.
+- **Remuestreo:** el lineal no filtraba antes de bajar a 16 kHz. Se reemplazó por FFT (el test
+  verifica que 10 kHz no se dobla sobre la voz). No mejoró el bucle de forma apreciable.
+- **Reloj:** en Windows con Python 3.11, `time.monotonic_ns` es `GetTickCount64`, con resolución
+  de 15,625 ms (`time.get_clock_info`). Un test que ordenaba eventos por tiempo fallaba por
+  empates. Las latencias de este módulo usan `perf_counter`, pero `shared/clock.py` (compartido,
+  usado en `received_ns`) tiene esa resolución en Windows. **Coordinar con Bauty** si se cambia;
+  en la Mac la resolución es fina.
+- Licencias: Piper GPL-3.0 (motor; la licencia de la voz no se revisó todavía), faster-whisper
+  MIT, sounddevice MIT. Las descargas desactivan la telemetría de Hugging Face y la carga usa
+  `HF_HUB_OFFLINE`.
+
+**Límites.** No se usó micrófono ni parlantes: no hay latencia audible, ni cancelación audible,
+ni AirPods, ni prueba de que el TTS vuelva a entrar al micrófono. La voz sintética no representa
+el acento, el ruido ni el micrófono reales: la tasa de aciertos del bucle **no** es la de
+usuarios. No se probó MLX Whisper en la Mac ni VAD. Con small, 4–5 s de STT en esta CPU son
+demasiado para uso interactivo; falta decidirlo con voz real y en la Mac.
+
+**Pendiente con dispositivos (Tomás):**
+1. `python -m visionx.voice dispositivos` y `decir "Busco la taza."`: confirmar que suena.
+2. `escuchar` con el micrófono de la notebook: decir las 62 frases del CSV (o 50–100 nuevas de
+   otras personas) y anotar aciertos y la latencia de soltar a la respuesta con tiny, base y small.
+3. Cancelar mientras habla (tecla o botón) y medir a oído si corta enseguida; probar con AirPods.
+
+**Próximo paso.** T07 sobre esta rama. Después, la prueba con micrófono (puntos 1–3).
+
 ## 2026-11-14 — T06: detector YOLO-seg, IDs con ByteTrack, catálogo en español y CLI (sin cámara)
 
 **Tarea:** T06. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/T06-deteccion` (local, desde

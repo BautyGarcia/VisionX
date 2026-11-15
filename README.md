@@ -40,7 +40,8 @@ En Windows con Smart App Control activado, los `.exe` que uv genera para los com
 `uv run python -m visionx doctor` y `uv run python -m pytest`. Si el bloqueado es
 `.venv\Scripts\python.exe`, renombrar `.venv` y volver a correr `uv sync --locked`.
 
-Las tareas neuronales usan `uv sync --locked --extra ml`; el detector (T06), `--extra deteccion`.
+Las tareas neuronales usan `uv sync --locked --extra ml`; el detector (T06), `--extra deteccion`;
+la voz (T08), `--extra voz`.
 `uv sync` deja instalados solo los extras que se le nombran: para tener ambos, pasar los dos.
 Los modelos/pesos se obtienen por separado y se verifican antes de usarlos. `configs/local.yaml` solo se carga si se elige
 explícitamente con el mecanismo indicado por el comando; existir no lo activa.
