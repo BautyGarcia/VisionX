@@ -69,10 +69,14 @@ depth:
       instereo2k: 272       # README y auditoría T04: disparidad 20-265 px
 
 detection:
-  model: yolo26n-seg        # yolo26n-seg | yolo11n-seg (referencia); comparar con `python -m visionx.detection medir`
+  # yolo26s + 960 px (BITACORA T09 mejoras): en clips ELP detecta la taza blanca a 1 m y el bolso
+  # a 3 m en 100 % de los frames (yolo26n a 640: 2 % y 0 %) y la mochila en mano en 36 % (2 %).
+  # Cuesta ~0,5 s/frame en la CPU de Windows; en la Mac (MPS) falta medirlo (M1). Para una
+  # máquina lenta, pisar en configs/local.yaml con yolo26n-seg e imgsz 640.
+  model: yolo26s-seg        # yolo26s-seg | yolo26n-seg | yolo11n-seg; comparar con `python -m visionx.detection medir`
   weights_dir: weights      # carpeta local, ignorada por Git; `python -m visionx.detection descargar` deja ahí el .pt
   device: cpu               # cpu | mps (Mac) | cuda:0 | auto
-  imgsz: 640                # lado mayor de la imagen que entra a la red, px (la salida vuelve a la resolución original)
+  imgsz: 960                # lado mayor de la imagen que entra a la red, px (la salida vuelve a la resolución original)
   conf: 0.25                # score mínimo para informar un objeto, en [0, 1]; candidato, falta fijarlo con clips anotados
   iou: 0.7                  # solapamiento del NMS (YOLO26 no usa NMS y lo ignora)
   threads: null             # hilos de torch en CPU; null = lo que elige Ultralytics (núcleos lógicos - 1)
