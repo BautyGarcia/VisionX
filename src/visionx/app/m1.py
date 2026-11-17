@@ -34,7 +34,7 @@ from visionx.app.fakes import (
 from visionx.app.runtime import Pipeline, View
 from visionx.app.spatial import ProvisionalSpatialEstimator
 from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
-from visionx.modes.common import ModeSettings
+from visionx.modes.common import ModeSettings, speech_s
 from visionx.modes.distance import DistanceHandler
 from visionx.modes.search import SearchHandler
 from visionx.shared.clock import ManualClock
@@ -471,7 +471,10 @@ def core_case(bank: Scenario) -> None:
             bank.drain()
         command = bank.controller.active
         require(command is not None, "la búsqueda terminó antes de tiempo")
-        bank.clock.set(command.deadline_ns - int(bank.settings.end_margin_s * 1e9))
+        bank.clock.set(
+            command.deadline_ns
+            - int((speech_s("No encontré taza.", bank.settings) + bank.settings.end_margin_s) * 1e9)
+        )
         bank.controller.tick()
         bank.drain()
         bank.check("ausencia_explicita", bank.texts()[-1] == "No encontré taza.")

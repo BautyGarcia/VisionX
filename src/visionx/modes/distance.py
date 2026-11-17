@@ -25,11 +25,14 @@ from visionx.modes.common import (
     View,
     age_s,
     candidates,
+    closing_due,
+    closing_text,
     direction,
     measure,
     measure_phrase,
     precision_view,
     request_precision,
+    speech_s,
 )
 from visionx.modes.target import Target, TargetMemory, plural
 from visionx.shared.contracts import Command
@@ -73,32 +76,53 @@ class DistanceHandler:
             if remembered is None:
                 self.memory.remember(None)
             self.memory.request(command.target, now_ns)
-        request_precision(view, command, now_ns, self.s)
+        closing = self._closing(command, view, now_ns)
+        request_precision(
+            view, command, now_ns, self.s, reserve_s=speech_s(closing, self.s) + self.s.end_margin_s
+        )
         says, _ = self.tick(command, view, now_ns)
         return says
 
     def tick(self, command: Command, view: View, now_ns: int) -> tuple[list[Say], bool]:
         if command.request_id != self.request_id or self._answered:
             return [], True
+        closing = self._closing(command, view, now_ns)
+        due = closing_due(command, now_ns, closing, self.s)
         guided = self._guided_target.angle_h_deg if self._guided_target is not None else None
-        view = precision_view(view, command, now_ns, self.s, self.geometry, self._label, guided)
-        if view is None:
+        selected = precision_view(view, command, now_ns, self.s, self.geometry, self._label, guided)
+        if selected is None and not due:
             return [], False
+        if selected is not None:
+            view = selected
         joint = self._usable(view.measured, command, now_ns)
         if joint is not None:
             answer = self._answer(joint, view, now_ns)
             if answer is not None:
                 self._answered = True
-                return [Say(answer)], True
-        if command.deadline_ns is not None and now_ns >= command.deadline_ns - int(
-            self.s.end_margin_s * 1e9
-        ):
+                answer = closing_text(
+                    command, now_ns, [answer, closing, "Sin medida."], self.s, reserve=False
+                )
+                return ([Say(answer)] if answer else []), True
+        if due:
             self._answered = True
             self._event("sin-medida", {"motivo": "vencimiento"})
-            return [Say(self._late(view, now_ns))], True
+            closing = closing_text(command, now_ns, [closing, "Sin medida."], self.s, reserve=False)
+            return ([Say(closing)] if closing else []), True
         return [], False
 
     # -- interno ---------------------------------------------------------------------------
+
+    def _closing(self, command: Command, view: View, now_ns: int) -> str:
+        return closing_text(
+            command,
+            command.issued_ns,
+            [
+                self._late(view, now_ns),
+                "No pude medir a tiempo.",
+                "Sin medida.",
+            ],
+            self.s,
+        )
 
     def _usable(self, joint: Joint | None, command: Command, now_ns: int) -> Joint | None:
         if joint is None or joint.depth is None:

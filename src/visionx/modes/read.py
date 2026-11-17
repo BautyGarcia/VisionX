@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from visionx.app.controller import Say
 from visionx.app.runtime import View
+from visionx.modes.common import ModeSettings, closing_due, closing_text, speech_s
 from visionx.reading import RapidReader, ReadingSettings, TextReader, reading_order
 from visionx.reading.core import framing_hint, spoken_chunks
 from visionx.reading.worker import ReadingWorker, ReadJob
@@ -22,8 +24,14 @@ class ReadHandler:
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         *,
         prewarm: bool = False,
+        mode_settings: ModeSettings | None = None,
     ) -> None:
         self.s = settings or ReadingSettings()
+        self._timing = replace(
+            mode_settings or ModeSettings(),
+            speech_base_s=self.s.speech_base_s,
+            speech_s_per_char=self.s.speech_s_per_char,
+        )
         self.reader = reader if reader is not None else RapidReader(self.s)
         self._event = on_event or (lambda kind, data: None)
         self._worker: ReadingWorker | None = (
@@ -72,6 +80,18 @@ class ReadHandler:
         if command.deadline_ns is not None and now_ns >= command.deadline_ns:
             self.cancel()
             return [], True
+        closing = closing_text(
+            command,
+            command.issued_ns,
+            [
+                "No terminé de leer a tiempo.",
+                "No pude leer.",
+            ],
+            self._timing,
+        )
+        if closing_due(command, now_ns, closing, self._timing) and now_ns >= self._next_say_ns:
+            self.cancel()
+            return self._finish(closing, command, now_ns)
         end_ns = command.issued_ns + int(self.s.window_s * 1e9)
         if not job.complete.is_set():
             self.observe(view, now_ns)
@@ -85,7 +105,7 @@ class ReadHandler:
                 raw = job.result.result()
             except Exception as exc:
                 self._event("leer-error", {"request_id": job.request_id, "error": str(exc)})
-                return [Say("No pude leer. Probá de nuevo.")], True
+                return self._finish("No pude leer. Probá de nuevo.", command, now_ns)
             ordered = reading_order(raw, self.s)
             self._event(
                 "leer-resultado",
@@ -101,21 +121,47 @@ class ReadHandler:
             )
             if not ordered:
                 hint = framing_hint(raw, job.selected_shape, self.s) if job.selected_shape else ""
-                return [Say("No encuentro texto." + (f" {hint}" if hint else ""))], True
+                return self._finish(
+                    "No encuentro texto." + (f" {hint}" if hint else ""), command, now_ns
+                )
             self._chunks.extend(spoken_chunks(ordered, self.s))
             if not self._chunks:
-                return [Say("No pude leer con suficiente confianza. Probá acercarlo.")], True
+                return self._finish(
+                    "No pude leer con suficiente confianza. Probá acercarlo.", command, now_ns
+                )
         if now_ns < self._next_say_ns:
             return [], False
         if not self._chunks:
             return [], True
         text = self._chunks.popleft()
+        # No empezar un bloque que el deadline cortaría; dejar lugar para avisarlo.
+        if (
+            command.deadline_ns is not None
+            and now_ns
+            + int(
+                (
+                    speech_s(text, self._timing)
+                    + speech_s(closing, self._timing)
+                    + self._timing.end_margin_s
+                )
+                * 1e9
+            )
+            > command.deadline_ns
+        ):
+            self.cancel()
+            return self._finish(closing, command, now_ns)
         # Como T09: espaciar por duración estimada evita llenar la cola y perder leyendas.
         # Es una estimación de Piper es_AR, no latencia audible medida en esta PC.
         self._next_say_ns = now_ns + int(
             (self.s.speech_base_s + len(text) * self.s.speech_s_per_char) * 1e9
         )
         return [Say(text, Priority.LONG)], False
+
+    def _finish(self, text: str, command: Command, now_ns: int) -> tuple[list[Say], bool]:
+        closing = closing_text(
+            command, now_ns, [text, "No pude leer."], self._timing, reserve=False
+        )
+        return ([Say(closing)] if closing else []), True
 
     def _frame(self, view: View) -> StereoFrame | None:
         if view is None:

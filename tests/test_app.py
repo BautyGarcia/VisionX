@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from visionx.app.__main__ import main as app_main
-from visionx.app.controller import Controller, Say, UnavailableHandler
+from visionx.app.controller import EXPIRED_REPEAT, Controller, Say, UnavailableHandler
 from visionx.app.dashboard import DashboardState, depth_colormap, render, top_view
 from visionx.app.fakes import (
     FakeDepthEstimator,
@@ -382,7 +382,8 @@ def test_expired_command_stops_ticking_and_repeat_works():
     controller.tick()
     assert len(calls) == 1 and controller.active is None
     controller.handle_text("repetí")
-    assert spoken(output)[-1] == "Busco taza."
+    # La búsqueda terminó: repetir «Busco taza.» haría creer que sigue buscando.
+    assert spoken(output)[-1] == EXPIRED_REPEAT
     output.close()
 
 

@@ -52,6 +52,9 @@ def build_handlers(
         Mode.SEARCH: SearchHandler(geometry, spoken, settings, memory, on_event),
         Mode.DISTANCE: DistanceHandler(geometry, spoken, settings, memory, on_event),
         Mode.READ: ReadHandler(
-            settings=ReadingSettings.from_config(cfg), on_event=on_event, prewarm=prewarm_reading
+            settings=ReadingSettings.from_config(cfg),
+            on_event=on_event,
+            prewarm=prewarm_reading,
+            mode_settings=settings,
         ),
     }

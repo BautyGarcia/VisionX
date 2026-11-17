@@ -195,8 +195,7 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
         last_audio[0] = f"{record.text_or_sound} ({record.outcome})"
         on_event(
             "audio",
-            {"request_id": record.request_id, "texto": record.text_or_sound,
-             "resultado": record.outcome, "espera_ms": record.wait_ms},
+            record.trace_data(),
         )  # fmt: skip
 
     output, voice = build_output(args, cfg, on_record)

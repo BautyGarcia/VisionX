@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from visionx.shared.clock import Clock, MonotonicClock
-from visionx.shared.contracts import AudioEvent, Command, Mode, Priority
+from visionx.shared.contracts import AudioEvent, Command, FrameKey, Mode, Priority
 from visionx.shared.interfaces import AudioSink
 from visionx.voice.commands import (
     CANCEL,
@@ -33,6 +33,8 @@ from visionx.voice.commands import (
     Interpretation,
     acknowledgement,
 )
+
+EXPIRED_REPEAT = "Ya no está vigente. Pedilo de nuevo."
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +45,8 @@ class Say:
     priority: Priority = Priority.SHORT
     cancelable: bool = True
     valid_until_ns: int | None = None
+    fact_received_ns: int | None = None
+    frame: FrameKey | None = None
 
 
 class ModeHandler(Protocol):
@@ -83,6 +87,7 @@ class Controller:
         self.handlers = handlers or {}
         self._audio_request_id: int | None = None
         self._audio_deadline_ns: int | None = None
+        self._extra_audio_ids: set[int] = set()
         self.deadlines_s = deadlines_s or {}
         self.clock = clock or MonotonicClock()
         self._on_event = on_event or (lambda kind, data: None)
@@ -91,6 +96,9 @@ class Controller:
         self.active: Command | None = None
         self.last_spoken: str | None = None
         self._last_spoken_valid_until_ns: int | None = None
+        self._last_spoken_deadline_ns: int | None = None
+        self._last_spoken_fact_received_ns: int | None = None
+        self._last_spoken_frame: FrameKey | None = None
         self.history: list[tuple[Command | None, Interpretation]] = []
 
     # -- entrada -----------------------------------------------------------------------------
@@ -104,31 +112,61 @@ class Controller:
     def handle(self, interp: Interpretation) -> Command | None:
         with self._lock:
             now = self.clock.now_ns()
-            self._on_event(
-                "orden",
-                {"texto": interp.utterance, "modo": interp.mode, "objetivo": interp.target,
-                 "regla": interp.rule, "aclaracion": interp.reply},
-            )  # fmt: skip
+            order = {
+                "texto": interp.utterance,
+                "modo": interp.mode,
+                "objetivo": interp.target,
+                "regla": interp.rule,
+                "aclaracion": interp.reply,
+                "request_id": None,
+                "issued_ns": now,
+                "deadline_ns": None,
+            }
             if interp.mode is Mode.CONTROL and interp.target == CANCEL:
+                order["request_id"] = self._audio_request_id
+                self._on_event("orden", order)
                 self.cancel()
                 self.history.append((None, interp))
                 return None
             if interp.mode is Mode.CONTROL and interp.target == REPEAT:
-                if self.last_spoken:
+                repeat_id = self._new_id()
+                order.update(request_id=repeat_id, deadline_ns=self._last_spoken_deadline_ns)
+                self._on_event("orden", order)
+                deadline = self._last_spoken_deadline_ns
+                if self.last_spoken and (deadline is None or now < deadline):
+                    self._extra_audio_ids.add(repeat_id)
                     self._say(
-                        Say(self.last_spoken, valid_until_ns=self._last_spoken_valid_until_ns),
-                        self._new_id(),
+                        Say(
+                            self.last_spoken,
+                            valid_until_ns=self._last_spoken_valid_until_ns,
+                            fact_received_ns=self._last_spoken_fact_received_ns,
+                            frame=self._last_spoken_frame,
+                        ),
+                        repeat_id,
                         now,
                         remember=False,
+                        deadline=deadline,
                     )
+                elif self.last_spoken:
+                    # Vencida: no se repite un hecho viejo como si fuera actual, pero tampoco
+                    # se deja a la persona en silencio.
+                    self._say(Say(EXPIRED_REPEAT), repeat_id, now, remember=False)
                 self.history.append((None, interp))
                 return None
             if not interp.ok:
+                self._on_event("orden", order)
                 # Aclarar no interrumpe lo que estaba en curso (puede ser un error del STT).
                 self._say(Say(interp.reply or "No entendí."), self._new_id(), now)
                 self.history.append((None, interp))
                 return None
             if interp.mode is Mode.CHOOSE:
+                if self.active is not None:
+                    order.update(
+                        request_id=self.active.request_id,
+                        issued_ns=self.active.issued_ns,
+                        deadline_ns=self.active.deadline_ns,
+                    )
+                self._on_event("orden", order)
                 # Elegir completa la orden activa; no la reemplaza ni le cambia la vigencia.
                 active = self.active
                 handler = self.handlers.get(active.mode) if active is not None else None
@@ -144,11 +182,16 @@ class Controller:
             if self._audio_request_id is not None:
                 # También si el handler terminó pero su último bloque sigue sonando.
                 self.output.cancel(self._audio_request_id)
+            self._cancel_repeats()
             self._cancel_handler()
             request_id = self._new_id()
             deadline_s = self.deadlines_s.get(interp.mode.value)  # type: ignore[union-attr]
             deadline = now + int(deadline_s * 1e9) if deadline_s else None
             command = interp.to_command(request_id, now, deadline)
+            order.update(
+                request_id=request_id, issued_ns=command.issued_ns, deadline_ns=command.deadline_ns
+            )
+            self._on_event("orden", order)
             self.active = command
             self._audio_request_id = request_id
             self._audio_deadline_ns = deadline
@@ -170,11 +213,15 @@ class Controller:
         """El botón de cancelar (o la orden "cancelar")."""
         with self._lock:
             self.output.cancel_all()
+            self._extra_audio_ids.clear()
             self._audio_deadline_ns = None
             previous = self.active
             self._cancel_handler()
             self.active = None
-            self._on_event("cancelado", {"request_id": previous.request_id if previous else None})
+            self._on_event(
+                "cancelado",
+                {"request_id": previous.request_id if previous else self._audio_request_id},
+            )
             self.output.submit(
                 AudioEvent(self._new_id(), Priority.SHORT, "sonido:cancelado", self.clock.now_ns())
             )
@@ -187,6 +234,7 @@ class Controller:
                 # Un modo puede haber terminado de emitir antes de acabar la reproducción.
                 # La vigencia también corta su último bloque que aún esté sonando/en cola.
                 self.output.cancel(self._audio_request_id)
+                self._cancel_repeats()
                 self._audio_deadline_ns = None
             view = self.latest_view()
             # Hook liviano: LEER conserva capturas previas aun sin una orden activa.
@@ -226,6 +274,9 @@ class Controller:
     def close(self) -> None:
         """Cerrar workers de modos al salir de la aplicación, sin esperar OCR nativo."""
         with self._lock:
+            if self._audio_request_id is not None:
+                self.output.cancel(self._audio_request_id)
+            self._cancel_repeats()
             self._cancel_handler()
             self.active = None
             for handler in self.handlers.values():
@@ -237,8 +288,22 @@ class Controller:
         self._next_id += 1
         return self._next_id
 
-    def _say(self, say: Say, request_id: int, now: int, *, remember: bool = True) -> None:
-        deadline = None
+    def _cancel_repeats(self) -> None:
+        for request_id in self._extra_audio_ids:
+            self.output.cancel(request_id)
+        self._extra_audio_ids.clear()
+
+    def _say(
+        self,
+        say: Say,
+        request_id: int,
+        now: int,
+        *,
+        remember: bool = True,
+        deadline: int | None = None,
+    ) -> None:
+        if not say.text_or_sound:
+            return
         if self.active is not None and self.active.request_id == request_id:
             deadline = self.active.deadline_ns
         self.output.submit(
@@ -250,9 +315,14 @@ class Controller:
                 deadline_ns=deadline,
                 cancelable=say.cancelable,
                 valid_until_ns=say.valid_until_ns,
+                fact_received_ns=say.fact_received_ns,
+                frame=say.frame,
             )
         )
         if remember and not say.text_or_sound.startswith("sonido:"):
             self.last_spoken = say.text_or_sound
             # Repetir una guía no rejuvenece el hecho que la originó.
             self._last_spoken_valid_until_ns = say.valid_until_ns
+            self._last_spoken_deadline_ns = deadline
+            self._last_spoken_fact_received_ns = say.fact_received_ns
+            self._last_spoken_frame = say.frame

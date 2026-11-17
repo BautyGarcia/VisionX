@@ -38,6 +38,8 @@ from visionx.modes.common import (
     View,
     age_s,
     candidates,
+    closing_due,
+    closing_text,
     horizontal,
     measure,
     measure_phrase,
@@ -84,6 +86,7 @@ class SearchHandler:
         self._last_phrase: str | None = None
         self._last_say_ns: int | None = None
         self._finished = False  # ya dijo su frase de cierre (puede pasar dentro de start())
+        self._closing_ns: int | None = None
         self._stall_reported = False
         self._h_word: str | None = None  # últimas zonas dichas, para la histéresis
         self._v_word: str | None = None
@@ -105,13 +108,28 @@ class SearchHandler:
             return [], True
         label = command.target or ""
         name = self.spoken(label)
-        if command.deadline_ns is not None and now_ns >= command.deadline_ns - int(
-            self.s.end_margin_s * 1e9
-        ):
+        closing = closing_text(
+            command,
+            command.issued_ns,
+            [
+                f"Terminé de buscar {name}." if self.found_once else f"No encontré {name}.",
+                "Terminé de buscar." if self.found_once else "No lo encontré.",
+                "Fin de búsqueda.",
+            ],
+            self.s,
+        )
+        self._closing_ns = (
+            command.deadline_ns - int((speech_s(closing, self.s) + self.s.end_margin_s) * 1e9)
+            if command.deadline_ns is not None
+            else None
+        )
+        if closing_due(command, now_ns, closing, self.s):
             self._event("fin", {"motivo": "vencimiento", "encontrado": self.found_once})
             self._finished = True
-            return [Say(f"Terminé de buscar {name}." if self.found_once
-                        else f"No encontré {name}.")], True  # fmt: skip
+            closing = closing_text(
+                command, now_ns, [closing, "Fin de búsqueda."], self.s, reserve=False
+            )
+            return ([Say(closing)] if closing else []), True
 
         self._update_measure(view, label, now_ns)
         says: list[Say] = []
@@ -248,12 +266,17 @@ class SearchHandler:
             more = "o más " if len(cands) > listed else ""
             return (
                 [
-                    Say(BIP, valid_until_ns=received + int(self.s.max_age_s * 1e9)),
+                    Say(
+                        BIP,
+                        valid_until_ns=received + int(self.s.max_age_s * 1e9),
+                        fact_received_ns=received,
+                    ),
                     self._ask(
                         f"Veo {listed} {more}{plural(name)}. ¿Cuál? "
                         "Decí izquierda, derecha, centro o la más cercana.",
                         now_ns,
                         valid_until_ns=received + int(self.s.max_age_s * 1e9),
+                        fact_received_ns=received,
                     ),
                 ]
                 if self._can_ask(now_ns)
@@ -279,16 +302,24 @@ class SearchHandler:
         self._measure = None
         self._event("adquirido", {"angulo_h": round(c.angle_h_deg, 1), "track_id": c.track_id,
                                   "reaparicion": reacquired})  # fmt: skip
-        text, valid_until = self._guide_fact(name, now_ns)
+        text, valid_until, received = self._guide_fact(name, now_ns)
         return [
-            Say(BIP, valid_until_ns=c.received_ns + int(self.s.max_age_s * 1e9)),
-            self._phrase(text, now_ns, valid_until_ns=valid_until),
+            Say(
+                BIP,
+                valid_until_ns=c.received_ns + int(self.s.max_age_s * 1e9),
+                fact_received_ns=c.received_ns,
+            ),
+            self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received),
         ]
 
     def _guide(self, name: str, now_ns: int) -> list[Say]:
-        text, valid_until = self._guide_fact(name, now_ns)
+        text, valid_until, received = self._guide_fact(name, now_ns)
         if text == "" or text.startswith("Llegaste"):
-            return [self._phrase(text, now_ns, valid_until_ns=valid_until)] if text else []
+            return (
+                [self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received)]
+                if text
+                else []
+            )
         since = None if self._last_say_ns is None else (now_ns - self._last_say_ns) / 1e9
         changed = text != self._last_phrase
         # Ni antes del mínimo ni mientras la frase anterior todavía suena (no encolar guía vieja).
@@ -296,10 +327,12 @@ class SearchHandler:
         if since is not None and since < max(self.s.min_interval_s, speaking):
             return []
         if changed or since is None or since >= self.s.repeat_s:
-            return [self._phrase(text, now_ns, valid_until_ns=valid_until)]
+            return [
+                self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received)
+            ]
         return []
 
-    def _guide_fact(self, name: str, now_ns: int) -> tuple[str, int]:
+    def _guide_fact(self, name: str, now_ns: int) -> tuple[str, int, int]:
         assert self.target is not None
         valid_until = self.target.last_seen_ns + int(self.s.max_age_s * 1e9)
         # Zonas con histéresis respecto de lo último dicho (no alternar en un límite).
@@ -315,18 +348,32 @@ class SearchHandler:
             assert self._measure is not None
             # Una frase compuesta vence cuando vence cualquiera de sus hechos.
             measured_until = self._measure[1] + int(self.s.max_measure_age_s * 1e9)
+            received = min(self.target.last_seen_ns, self._measure[1])
             close = m.ok and m.z_m is not None and m.z_m <= self.s.arrive_m
             if close or m.reason == "muy-cerca":  # más cerca que el rango validado también llega
                 return (f"Llegaste: {name} {where}, {measure_phrase(m, self.s)}.",
-                        min(valid_until, measured_until))  # fmt: skip
+                        min(valid_until, measured_until), received)  # fmt: skip
             if m.ok or m.reason in ("muy-cerca", "muy-lejos"):
                 return (f"{name.capitalize()} {where}, {measure_phrase(m, self.s)}.",
-                        min(valid_until, measured_until))  # fmt: skip
-        return f"{name.capitalize()} {where}.", valid_until
+                        min(valid_until, measured_until), received)  # fmt: skip
+        return f"{name.capitalize()} {where}.", valid_until, self.target.last_seen_ns
 
-    def _phrase(self, text: str, now_ns: int, *, valid_until_ns: int | None = None) -> Say:
+    def _phrase(
+        self,
+        text: str,
+        now_ns: int,
+        *,
+        valid_until_ns: int | None = None,
+        fact_received_ns: int | None = None,
+    ) -> Say:
+        if (
+            self._closing_ns is not None
+            and now_ns + int((speech_s(text, self.s) + self.s.end_margin_s) * 1e9)
+            > self._closing_ns
+        ):
+            return Say("")  # dejar que drene la voz anterior antes de emitir el cierre
         self._last_phrase, self._last_say_ns = text, now_ns
-        return Say(text, valid_until_ns=valid_until_ns)
+        return Say(text, valid_until_ns=valid_until_ns, fact_received_ns=fact_received_ns)
 
     def _can_ask(self, now_ns: int) -> bool:
         return (
@@ -334,9 +381,18 @@ class SearchHandler:
             or (now_ns - self._last_choice_ns) / 1e9 >= self.s.choice_repeat_s
         )
 
-    def _ask(self, text: str, now_ns: int, *, valid_until_ns: int | None = None) -> Say:
+    def _ask(
+        self,
+        text: str,
+        now_ns: int,
+        *,
+        valid_until_ns: int | None = None,
+        fact_received_ns: int | None = None,
+    ) -> Say:
         self._last_choice_ns = now_ns
-        return self._phrase(text, now_ns, valid_until_ns=valid_until_ns)
+        return self._phrase(
+            text, now_ns, valid_until_ns=valid_until_ns, fact_received_ns=fact_received_ns
+        )
 
     def _update_measure(self, view: View, label: str, now_ns: int) -> None:
         """Toma el Z del objetivo de la unión medida más nueva (mismo frame que su máscara)."""
