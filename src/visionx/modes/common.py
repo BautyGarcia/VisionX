@@ -109,15 +109,42 @@ def speech_s(text: str, s: ModeSettings) -> float:
     return 0.15 if text.startswith("sonido:") else s.speech_base_s + s.speech_s_per_char * len(text)
 
 
+def closing_text(
+    command: Command, now_ns: int, phrases: list[str], s: ModeSettings, *, reserve: bool = True
+) -> str:
+    """Elegir un cierre completo que quepa, reservando síntesis/cola además del habla.
+
+    Si ni el cierre mínimo cabe, callar: el deadline sigue siendo un límite duro.
+    Las alternativas van de más informativa a más breve; no se recortan palabras.
+    """
+    if command.deadline_ns is None:
+        return phrases[0]
+    remaining = (command.deadline_ns - now_ns) / 1e9
+    margin = s.end_margin_s if reserve else 0.0
+    return next((p for p in phrases if p and speech_s(p, s) + margin <= remaining), "")
+
+
+def closing_due(command: Command, now_ns: int, text: str, s: ModeSettings) -> bool:
+    return command.deadline_ns is not None and now_ns >= command.deadline_ns - int(
+        (speech_s(text, s) + s.end_margin_s) * 1e9
+    )
+
+
 def age_s(joint: Joint, now_ns: int) -> float:
     return max(0.0, (now_ns - joint.frame.received_ns) / 1e9)
 
 
-def request_precision(view: View, command: Command, now_ns: int, s: ModeSettings) -> None:
+def request_precision(
+    view: View, command: Command, now_ns: int, s: ModeSettings, *, reserve_s: float | None = None
+) -> None:
     """Congelar una detección para este request_id; desactivado por defecto."""
     if view.precise is not None:
         view.precise.request(
-            command, view, now_ns, end_margin_s=s.end_margin_s, accept_before_s=s.accept_before_s
+            command,
+            view,
+            now_ns,
+            end_margin_s=s.end_margin_s if reserve_s is None else reserve_s,
+            accept_before_s=s.accept_before_s,
         )
 
 

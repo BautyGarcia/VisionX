@@ -30,6 +30,7 @@ from visionx.modes.common import (
     measure,
     measure_phrase,
     meters,
+    speech_s,
 )
 from visionx.modes.describe import (
     DescribeHandler,
@@ -503,12 +504,16 @@ def test_meters_during_guidance_only_when_fresh_and_valid_and_arrival_ends():
 def test_search_closes_before_deadline():
     h, c = search(), cmd(Mode.SEARCH, "cup", deadline_s=10)
     h.start(c, View(), 0)
-    says, done = h.tick(c, View(), int(9.5 * SEC))
+    closing_ns = c.deadline_ns - int((speech_s("No encontré taza.", S) + S.end_margin_s) * SEC)
+    says, done = h.tick(c, View(), closing_ns)
     assert done and texts(says) == ["No encontré taza."]
     h2, c2 = search(), cmd(Mode.SEARCH, "cup", deadline_s=10, request_id=2)
     h2.start(c2, View(), 0)
     run(h2, c2, [joint(0.1, 1, [("cup", 0, None)]), joint(0.2, 2, [("cup", 0, None)])])
-    says, done = h2.tick(c2, View(), int(9.5 * SEC))
+    closing_ns = c2.deadline_ns - int(
+        (speech_s("Terminé de buscar taza.", S) + S.end_margin_s) * SEC
+    )
+    says, done = h2.tick(c2, View(), closing_ns)
     assert done and texts(says) == ["Terminé de buscar taza."]
 
 
@@ -710,11 +715,10 @@ def test_distance_without_object_measures_what_is_in_front():
 def test_distance_timeout_and_absent_object():
     h, c = distance(), cmd(Mode.DISTANCE, "cup", t_s=1.0, deadline_s=5)
     h.start(c, View(), int(1.0 * SEC))
-    seen = joint(4.9, 49, [("cup", -30, None)])
-    says, done = h.tick(c, View(seen, None), int(5.0 * SEC))
-    assert done and texts(says) == [
-        "Veo taza a la izquierda, pero no pude medir la distancia a tiempo."
-    ]
+    seen = joint(3.2, 32, [("cup", -30, None)])
+    says, done = h.tick(c, View(seen, None), int(3.3 * SEC))
+    # La explicación larga no cabe en 5 s; el aviso breve conserva su sentido completo.
+    assert done and texts(says) == ["No pude medir a tiempo."]
     h2, c2 = distance(), cmd(Mode.DISTANCE, "cup", t_s=1.0, deadline_s=5, request_id=2)
     m = joint(1.1, 11, [("bottle", 0, None, 1.0, SPEAK)], measured=True)
     assert texts(h2.start(c2, View(None, m), int(1.2 * SEC))) == ["No veo taza."]
@@ -1021,12 +1025,12 @@ def test_describe_deadline_and_old_request_never_speak():
 
 
 def test_describe_short_deadline_falls_back_before_expiring():
-    h, c = describe(), cmd(Mode.DESCRIBE, None, t_s=1, deadline_s=2)
-    h.start(c, View(), SEC)
-    says, done = h.tick(c, View(joint(2, 20, []), None), 2 * SEC)
-    assert done and texts(says) == [
-        "No reconozco objetos con suficiente confianza.",
-    ]
+    h, c = describe(), cmd(Mode.DESCRIBE, None, t_s=1, deadline_s=2.1)
+    assert h.start(c, View(), SEC) == []
+    says, done = h.tick(c, View(), int(1.1 * SEC))
+    assert texts(says) == ["Sin imagen."]
+    assert done and speech_s(texts(says)[0], S) <= 2
+    assert h.tick(c, View(joint(2, 20, []), None), 2 * SEC) == ([], True)
 
 
 def test_describe_controller_cancels_waiting_and_completed_narrations():

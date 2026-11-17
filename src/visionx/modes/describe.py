@@ -20,6 +20,7 @@ from visionx.modes.common import (
     ModeSettings,
     age_s,
     candidates,
+    closing_text,
     horizontal,
     measure,
     measure_phrase,
@@ -260,15 +261,31 @@ class DescribeHandler:
             if observation is not None:
                 self._observe(observation, now_ns)
 
-        view = precision_view(view, command, now_ns, self.s, self.geometry)
-        if view is None:
-            return [], False
+        selected = precision_view(view, command, now_ns, self.s, self.geometry)
+        if selected is not None:
+            view = selected
         if view.measured is not None:
             self._observe(view.measured, now_ns)
 
         limit = command.issued_ns + int(self.describe.wait_measure_s * 1e9)
         if command.deadline_ns is not None:
-            limit = min(limit, command.deadline_ns - int(self.s.end_margin_s * 1e9))
+            fallback = closing_text(
+                command,
+                command.issued_ns,
+                [
+                    "No pude obtener una imagen reciente para describir.",
+                    "No pude describir a tiempo.",
+                    "Sin imagen.",
+                ],
+                self.s,
+            )
+            # Reservar el aviso; _finish comprueba además la suma real de la escena.
+            limit = min(
+                limit,
+                command.deadline_ns - int((speech_s(fallback, self.s) + self.s.end_margin_s) * 1e9),
+            )
+        if selected is None and now_ns < limit:
+            return [], False
 
         # Mantener zonas mientras esperamos profundidad. Nunca copiar sus objetos ubicados:
         # la máscara y la Z que se describen deben seguir perteneciendo a la unión elegida.
@@ -282,15 +299,28 @@ class DescribeHandler:
         ):
             # Si todavía falta confirmación, aprovechar la espera ya acotada por el pedido.
             if self._confirmed(joint) or not joint.detection.classes or now_ns >= limit:
-                return self._finish(joint, measured=True)
+                return self._finish(joint, measured=True, command=command, now_ns=now_ns)
 
         if now_ns < limit:
             return [], False
         if self._usable(view.seen, command, now_ns, self.s.max_age_s):
-            return self._finish(view.seen, measured=False)  # type: ignore[arg-type]
+            return self._finish(  # type: ignore[arg-type]
+                view.seen, measured=False, command=command, now_ns=now_ns
+            )
         self._answered = True
         self._event({"motivo": "sin-vista-reciente"})
-        return [Say("No pude obtener una imagen reciente para describir.")], True
+        closing = closing_text(
+            command,
+            now_ns,
+            [
+                "No pude obtener una imagen reciente para describir.",
+                "No pude describir a tiempo.",
+                "Sin imagen.",
+            ],
+            self.s,
+            reserve=False,
+        )
+        return ([Say(closing)] if closing else []), True
 
     def _instances(self, joint: Joint) -> dict[int, _SeenInstance]:
         return {
@@ -392,7 +422,9 @@ class DescribeHandler:
             self._zones = zones
         return tuple(facts)
 
-    def _finish(self, joint: Joint, *, measured: bool) -> tuple[list[Say], bool]:
+    def _finish(
+        self, joint: Joint, *, measured: bool, command: Command, now_ns: int
+    ) -> tuple[list[Say], bool]:
         confirmed = self._confirmed(joint)
         # La asociación con todos los candidatos sigue mandando sobre el conjunto hablado.
         # Filtrar candidatos puede cambiar un empate IoU: no dejar métricas huérfanas.
@@ -422,6 +454,22 @@ class DescribeHandler:
             joint.depth.model_id if measured and joint.depth else None,
         )
         phrases = self._render(self.facts, measured=measured)
+        if (
+            command.deadline_ns is not None
+            and sum(speech_s(p, self.s) for p in phrases) + (self.s.end_margin_s)
+            > (command.deadline_ns - now_ns) / 1e9
+        ):
+            brief = closing_text(
+                command,
+                now_ns,
+                [
+                    "No pude describir a tiempo.",
+                    "Sin descripción.",
+                ],
+                self.s,
+                reserve=False,
+            )
+            phrases = [brief] if brief else []
         self._answered = True
         self._event(
             {

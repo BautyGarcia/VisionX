@@ -448,6 +448,7 @@ class AudioEvent:
     frame: FrameKey | None = None  # frame que originó el evento, si hay uno
     schema: int = SCHEMA_VERSION
     valid_until_ns: int | None = None  # hecho observado; mismo reloj que created_ns
+    fact_received_ns: int | None = None  # frame del hecho más antiguo de la frase
 
     def __post_init__(self) -> None:
         _check_schema_field(self)
@@ -462,6 +463,8 @@ class AudioEvent:
         # Puede llegar ya vencido a la cola: AudioOutput registra el descarte.
         if self.valid_until_ns is not None:
             v.non_negative_int("valid_until_ns", self.valid_until_ns)
+        if self.fact_received_ns is not None:
+            v.non_negative_int("fact_received_ns", self.fact_received_ns)
         if self.frame is not None and not isinstance(self.frame, FrameKey):
             raise InvalidInput("frame tiene que ser un FrameKey")
 

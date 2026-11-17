@@ -27,7 +27,7 @@ from typing import Protocol
 import numpy as np
 
 from visionx.shared.clock import Clock, MonotonicClock
-from visionx.shared.contracts import AudioEvent, check_schema
+from visionx.shared.contracts import AudioEvent, FrameKey, check_schema
 from visionx.shared.errors import InvalidInput
 
 SOUND_PREFIX = "sonido:"
@@ -146,6 +146,10 @@ class PlaybackRecord:
     started_ns: int | None = None  # empezó a sonar (después de sintetizar)
     ended_ns: int | None = None
     error: str | None = None
+    deadline_ns: int | None = None
+    valid_until_ns: int | None = None
+    fact_received_ns: int | None = None
+    frame: FrameKey | None = None
 
     @property
     def wait_ms(self) -> float | None:
@@ -153,6 +157,31 @@ class PlaybackRecord:
         if self.started_ns is None:
             return None
         return (self.started_ns - self.submitted_ns) / 1e6
+
+    def trace_data(self) -> dict:
+        """Tiempos de Player; con dispositivo real son límites software del audio audible.
+
+        Un descarte anterior a play no tiene inicio ni fin audible. ended_ns conserva
+        aparte el instante de resolución del evento, incluso si nunca llegó a sonar.
+        """
+        return {
+            "request_id": self.request_id,
+            "texto": self.text_or_sound,
+            "resultado": self.outcome,
+            "espera_ms": self.wait_ms,
+            "started_ns": self.started_ns,
+            "finished_ns": self.ended_ns if self.started_ns is not None else None,
+            "ended_ns": self.ended_ns,
+            "deadline_ns": self.deadline_ns,
+            "valid_until_ns": self.valid_until_ns,
+            "fact_received_ns": self.fact_received_ns,
+            "fact_age_ms": (self.started_ns - self.fact_received_ns) / 1e6
+            if self.started_ns is not None and self.fact_received_ns is not None
+            else None,
+            "frame": {"session_id": self.frame.session_id, "frame_id": self.frame.frame_id}
+            if self.frame is not None
+            else None,
+        }
 
 
 @dataclass(order=True)
@@ -196,7 +225,14 @@ class AudioOutput:
         check_schema(event)
         now = self.clock.now_ns()
         record = PlaybackRecord(
-            event.request_id, int(event.priority), event.text_or_sound, submitted_ns=now
+            event.request_id,
+            int(event.priority),
+            event.text_or_sound,
+            submitted_ns=now,
+            deadline_ns=event.deadline_ns,
+            valid_until_ns=event.valid_until_ns,
+            fact_received_ns=event.fact_received_ns,
+            frame=event.frame,
         )
         with self._cond:
             if self._closed:

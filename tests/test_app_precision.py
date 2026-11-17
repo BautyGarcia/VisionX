@@ -230,7 +230,9 @@ def test_precise_wait_is_limited_by_command_deadline(setup_precision):
     cmd = replace(command(), deadline_ns=11 * SEC)
     mode = handler(env)
     says = mode.start(cmd, env.view, env.clock.now_ns())
-    assert says and "1 metro" in says[0].text_or_sound
+    # Queda 1 s: ni la respuesta ni el aviso mínimo caben completos. No empezar
+    # audio destinado al corte; el selector sí libera la espera de precisión.
+    assert says == []
     assert env.worker.selection["motivo"] == "espera-vencida"
 
 
