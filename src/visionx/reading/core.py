@@ -7,6 +7,7 @@ una detección ni como geometría estéreo; no cambia schema 3.
 from __future__ import annotations
 
 import math
+import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -52,6 +53,7 @@ class FakeReader:
 class ReadingSettings:
     window_s: float = 1.5
     min_score: float = 0.65
+    speech_min_score: float = 0.90
     line_height_ratio: float = 0.5
     region_gap_ratio: float = 0.15
     section_gap_ratio: float = 1.5
@@ -92,6 +94,11 @@ class ReadingSettings:
                 raise ValueError(f"reading.{name} debe ser no negativo y finito")
         if not math.isfinite(self.min_score) or not 0 <= self.min_score <= 1:
             raise ValueError("reading.min_score fuera de [0, 1]")
+        if (
+            not math.isfinite(self.speech_min_score)
+            or not self.min_score <= self.speech_min_score <= 1
+        ):
+            raise ValueError("reading.speech_min_score debe estar entre min_score y 1")
         if self.image_source not in ("original", "rectified"):
             raise ValueError("reading.image_source: original | rectified")
         if self.crop not in ("none", "center", "text", "object"):
@@ -138,6 +145,16 @@ def reading_order(blocks: Sequence[TextBlock], settings: ReadingSettings) -> lis
     Un título que abarca columnas se separa por el espacio horizontal antes de buscar
     columnas debajo. El mínimo corredor escala con la altura mediana del texto.
     """
+    return [
+        b
+        for region in _reading_regions(blocks, settings, separate_lines=True)
+        for b in _line_order(region, settings)
+    ]
+
+
+def _reading_regions(
+    blocks: Sequence[TextBlock], settings: ReadingSettings, *, separate_lines: bool
+) -> list[list[TextBlock]]:
     clean = [
         TextBlock(normalize_text(b.text), b.score, b.box)
         for b in blocks
@@ -168,17 +185,23 @@ def reading_order(blocks: Sequence[TextBlock], settings: ReadingSettings) -> lis
             axis = 1
         elif 0 in candidates:
             axis = 0
-        elif 1 in candidates:
+        elif separate_lines and 1 in candidates:
             axis = 1
         else:
             return [items]
         _, i, ordered = candidates[axis]
         return regions(ordered[:i]) + regions(ordered[i:])
 
-    return [b for region in regions(clean) for b in _line_order(region, settings)]
+    # Para voz, conservar juntos los renglones de una columna hasta la próxima
+    # sección amplia. La evaluación conserva exactamente sus cortes anteriores.
+    return regions(clean) if clean else []
 
 
 def _line_order(blocks: Sequence[TextBlock], settings: ReadingSettings) -> list[TextBlock]:
+    return [b for line in _line_groups(blocks, settings) for b in line]
+
+
+def _line_groups(blocks: Sequence[TextBlock], settings: ReadingSettings) -> list[list[TextBlock]]:
     # La menor altura impide que un título grande absorba dos renglones pequeños.
     lines: list[list[TextBlock]] = []
     for b in sorted(blocks, key=lambda b: ((b.box[1] + b.box[3]) / 2, b.box[0])):
@@ -199,11 +222,11 @@ def _line_order(blocks: Sequence[TextBlock], settings: ReadingSettings) -> list[
         else:
             lines.append([b])
     lines.sort(key=lambda line: float(np.median([(b.box[1] + b.box[3]) / 2 for b in line])))
-    return [b for line in lines for b in sorted(line, key=lambda b: b.box[0])]
+    return [sorted(line, key=lambda b: b.box[0]) for line in lines]
 
 
 def speech_chunks(blocks: Sequence[TextBlock], max_chars: int) -> list[str]:
-    """Un Say por bloque, cortando por palabras las leyendas largas (sin perder caracteres)."""
+    """Un Say por texto/región, cortando por palabras sin perder caracteres."""
     chunks = []
     for block in blocks:
         chunk = ""
@@ -224,24 +247,79 @@ def speech_chunks(blocks: Sequence[TextBlock], max_chars: int) -> list[str]:
     return chunks
 
 
+def _plausible_line(text: str, *, context: bool = False) -> str:
+    """Filtro ortográfico de habla, sin diccionario ni correcciones.
+
+    Palabras de 3–30 letras: >=80 % letras, vocal y solo letras con guion/apóstrofo
+    internos. Tokens de 1–2 letras requieren otro token largo o numérico en el
+    mismo renglón (incluye unidades como g). Números decimales y % se conservan.
+    No certifica que una palabra exista: errores plausibles pueden pasar.
+    """
+    tokens = normalize_text(text).split()
+    candidates: list[tuple[str, bool]] = []
+    for token in tokens:
+        token = token.strip('.,;:!?¿¡()[]{}«»"“”‘’…')
+        if re.fullmatch(r"\d+(?:[.,]\d+)?%?", token):
+            candidates.append((token, True))
+            continue
+        if token == "%":
+            candidates.append((token, True))
+            continue
+        letters = [c for c in token if c.isalpha()]
+        if not token or not 1 <= len(letters) <= 30 or len(letters) / len(token) < 0.8:
+            continue
+        if any(
+            not c.isalpha()
+            and not (
+                c in "-'’"
+                and 0 < i < len(token) - 1
+                and token[i - 1].isalpha()
+                and token[i + 1].isalpha()
+            )
+            for i, c in enumerate(token)
+        ):
+            continue
+        folded = unicodedata.normalize("NFD", token.casefold())
+        if len(letters) <= 2:
+            candidates.append((token, False))
+        elif any(c in "aeiou" for c in folded):
+            candidates.append((token, True))
+    context = context or any(long_or_number for _, long_or_number in candidates)
+    return " ".join(t for t, long_or_number in candidates if long_or_number or context)
+
+
 def spoken_chunks(blocks: Sequence[TextBlock], settings: ReadingSettings) -> list[str]:
-    """Título (mayor altura, desempate por área) primero; resto en orden visual.
+    """Región del título (mayor altura, desempate por área) primero; resto visual.
 
     Límites totales independientes del tamaño por Say. El aviso ocupa parte del tope
     de caracteres y no propone diálogo. Las métricas siempre usan TODOS los bloques.
     """
-    if not blocks:
+    regions = []
+    for region in _reading_regions(blocks, settings, separate_lines=False):
+        filtered = []
+        confident = [b for b in region if b.score >= settings.speech_min_score]
+        for line in _line_groups(confident, settings):
+            context = bool(_plausible_line(" ".join(b.text for b in line)))
+            filtered.extend(
+                TextBlock(text, b.score, b.box)
+                for b in line
+                if (text := _plausible_line(b.text, context=context))
+            )
+        if filtered:
+            regions.append(filtered)
+    if not regions:
         return []
     title = max(
-        range(len(blocks)),
-        key=lambda i: (
-            blocks[i].box[3] - blocks[i].box[1],
-            (blocks[i].box[2] - blocks[i].box[0]) * (blocks[i].box[3] - blocks[i].box[1]),
+        range(len(regions)),
+        key=lambda i: max(
+            (b.box[3] - b.box[1], (b.box[2] - b.box[0]) * (b.box[3] - b.box[1])) for b in regions[i]
         ),
     )
-    ordered = [blocks[title]] + [b for i, b in enumerate(blocks) if i != title]
+    ordered = [regions[title]] + [r for i, r in enumerate(regions) if i != title]
     chosen = ordered[: settings.speech_max_blocks]
-    full = speech_chunks(chosen, settings.max_chars)
+    full = speech_chunks(
+        [TextBlock(" ".join(b.text for b in r), 1.0, r[0].box) for r in chosen], settings.max_chars
+    )
     truncated = len(chosen) < len(ordered) or sum(map(len, full)) > settings.speech_max_chars
     if not truncated:
         return full
