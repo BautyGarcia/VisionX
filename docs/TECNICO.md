@@ -429,6 +429,20 @@ YOLO-World con otro segmentador. Los prompts y embeddings deben estar preparados
 uso puede descargar un encoder. No se garantiza reconocer cualquier objeto nombrado.
 [YOLOE oficial](https://docs.ultralytics.com/models/yoloe/).
 
+**Default elegido con clips ELP (BITACORA 2026-11-15): `yolo26s-seg` a `imgsz` 960.** Sobre
+el ojo rectificado, con umbral 0,25:
+
+| | yolo26n @640 | yolo26n @960 | yolo26s @640 | yolo26s @960 |
+|---|---|---|---|---|
+| Taza blanca a 1 m (`distancias`) | 2 % | 100 % | 4 % | 100 % |
+| Bolso a 3 m (`distancias`) | 0 % | 0 % | 0 % | 100 % |
+| Taza en mano (`buscar-b`) | 19 % | 26 % | 32 % | 39 % |
+| Mochila/bolso en mano (`buscar-c`) | 2 % | 4 % | 36 % | 36 % |
+
+Más resolución ayuda con lo chico y lejano; el modelo más grande, con mochilas y bolsos. En la
+CPU de Windows cuesta ~0,5 s por frame (yolo26n @640: ~0,12 s); en la Mac falta medirlo (M1).
+Una máquina lenta puede volver a yolo26n @640 en `configs/local.yaml`.
+
 Probar español y alias del catálogo; guardar qué categorías fueron aceptadas con evidencia.
 Mantener un detector principal por configuración, sin correr todos en cada frame.
 **ByteTrack** relaciona detecciones entre frames y da un ID temporal. No prueba identidad
@@ -485,6 +499,81 @@ Distancia congela un par identificado y su selección: no aplicar la máscara m�
 depth anterior. Responder Z axial con redondeo acorde a validación, o explicar abstención.
 El usuario debe poder cancelar en captura, inferencia, preparación de frase y reproducción.
 
+**Implementación (`src/visionx/modes/`, BITACORA 2026-11-15).** Los modos son `ModeHandler`
+del controlador de T07 y reciben una vista (`app.runtime.View`): `seen`, lo último detectado
+(sin esperar profundidad), y `measured`, la última unión con profundidad y objetos del mismo
+frame. Los parámetros están en la sección `modes` de la config; son candidatos sin medir.
+
+| Pieza | Qué hace | Garantía que se prueba (`tests/test_modes.py`) |
+|---|---|---|
+| `SearchHandler` | Estados buscando → (eligiendo) → guiando. Presencia confirmada en el tiempo (`confirm_hits` en `confirm_s`): bip y dirección («Taza un poco a la izquierda.»). Habla cuando cambia la frase, con al menos `min_interval_s` entre frases, o cada `repeat_s`. Al frente, con Z decible y fresco: «Taza al frente, a 1,1 metros.». A `arrive_m` o menos: «Llegaste…» y termina. «Perdí taza.» exige `lost_s` de video fresco sin el objetivo, medido en tiempo de frame; si el sistema se atrasa, la guía calla y la traza registra `buscar-demora`. Cierra antes de vencer («No encontré…»/«Terminé de buscar…») | Un frame suelto no da bip; una observación vieja no guía; no habla en cada frame; repite tras `repeat_s`; la reaparición es una adquisición nueva; un atraso del detector no se anuncia como pérdida |
+| Elegir entre iguales | Con varios de la clase pide «izquierda, derecha, centro o la más cercana». El controlador entrega la elección a la búsqueda activa sin reemplazarla; «la más cercana» solo con metros decibles. Solo pregunta si hay varios en todos los frames de la confirmación (una detección suelta de más no alcanza). Sin respuesta, repregunta cada 2·`repeat_s`: nunca elige por el usuario; si queda uno solo estable durante `confirm_s`, guía hacia ese | La elección conserva el request_id de la búsqueda; sin búsqueda: «No hay nada para elegir ahora.» |
+| `candidates` | Detecciones de la clase con su ángulo, de izquierda a derecha. Dos cajas de la misma clase cuya intersección cubre más del 70 % de la más chica cuentan como una (la de mayor score) | Una parte de la silla no es «otra silla» |
+| `Target` | Sigue al elegido por track_id y, si falta, por el candidato de la misma clase más cercano en ángulo, dentro de `gate_deg` + `gate_deg_per_s`·Δt. Fuera de la ventana no se lo asigna a nadie | Sigue a la taza de la izquierda aunque aparezca otra |
+| `DistanceHandler` | Congela la primera unión medida que llegó después de la orden (o hasta `accept_before_s` antes) y responde solo desde ella. Sin objeto nombrado: el guiado en los últimos 5 s o el que está al frente. Varios iguales: los enumera de izquierda a derecha | Nunca responde con un frame anterior a la orden; una sola respuesta; explica en vez de inventar |
+| `measure` | Metros solo con la política SPEAK_METERS de quien ubicó el objeto y dentro de `depth.range_m`. Fuera: «muy cerca, a menos de…»/«lejos, a más de…»; reencuadrar; «no puedo medir su distancia» | Ningún metro con DIRECTION_ONLY, ABSTAIN, sin Z o fuera de rango |
+| `simulate` + `python -m visionx.modes simular` | Corre los modos sobre una grabación con el tiempo grabado (`ManualClock`) y latencias de detector/profundidad emuladas. Imprime qué diría y en qué segundo | Misma entrada, misma transcripción |
+
+**Ubicación por objeto provisoria (`app/spatial.py`, BITACORA 2026-11-15).** La definitiva
+es de A (`depth/spatial/`, T09/T13). Mientras tanto, `ProvisionalSpatialEstimator`, con la
+sección `spatial_provisional`, agrupa la Z de la máscara en **capas** (histograma con bins de
+3 %; los bins casi vacíos separan capas). Toma la capa más cercana que tenga al menos 25 % de la
+máscara e informa su **percentil 20**, que corresponde a la superficie del frente. Así el fondo
+que se ve a través de un objeto calado no arrastra la medida: en `acercarse-1`, con la silla a
+~0,5 m, la mediana de toda la máscara daba 0,84 m y la capa cercana 0,59 m. En vaso y botella,
+el percentil 20 bajó el error contra la cinta entre 1,3 y 2,6 cm, pero sigue quedando +3 a
++5 cm (¿el centro óptico detrás del vidrio desde donde se midió?).
+
+Política candidata:
+- caja contra el borde lateral → ASK_REFRAME;
+- menos de 50 % de la máscara con profundidad, o sin capa → DIRECTION_ONLY;
+- IQR de la capa > max(50 % de Z, 0,4 m) → DIRECTION_ONLY. Una silla tiene ~0,2–0,4 m de
+  profundidad propia: el 25 % sobre toda la máscara que se usaba antes la dejaba sin metros, y
+  sin el mínimo absoluto, de cerca (Z 0,6 m, IQR 0,33 m) tampoco los daba. Como se informa el
+  frente (p20), ese espesor no cambia la medida.
+
+Cuando A entregue su `SpatialEstimator`, se reemplaza en `app/__main__.py::build_depth` sin tocar
+los modos, que solo leen `policy` y `z_m`.
+
+**Voz de la guía.**
+- En distancia, el acuse es `sonido:ok` y no «Mido la distancia a taza.»: la respuesta ya nombra
+  el objeto, y la frase la demoraba ~2 s.
+- Todo sale con prioridad SHORT: el bip y la dirección suenan después del «Busco taza.» de
+  confirmación, sin cortarlo.
+- Una frase de guía no se dice mientras la anterior todavía estaría sonando. La duración se
+  estima en `speech_base_s` + `speech_s_per_char`·caracteres (Piper es_AR: 50–70 ms por
+  carácter). Si no, las frases se encolan y la dirección llega tarde: la demo lo mostró con
+  «un poco a la izquierda» sonando con la taza ya al frente.
+- Lo vertical («arriba»/«abajo») se agrega solo con |ángulo| > `vertical_deg` (15°) respecto
+  del eje de la cámara.
+- Las zonas tienen histéresis (`hysteresis_deg`, 3°): sin ella, un ángulo cerca de un límite
+  alternaba «…, abajo» y «…» en cada frase.
+- Metros y «Llegaste» valen con el objeto al frente o «un poco» a un lado (|h| ≤ `side_deg`).
+  Caminando hacia la silla, esta quedaba a 9–20° y nunca «llegaba».
+- «Perdí…» dice hacia dónde quedó si salió por un costado («Perdí botella: quedó a la izquierda.»).
+- La guía solo habla en frames donde el objetivo aparece.
+
+**Demos (`python -m visionx.modes demo`).** Misma simulación, más un MP4 de 1280×720:
+- imagen rectificada con las detecciones (gris), la clase pedida (amarillo) y el objetivo
+  (verde, con flecha desde el centro);
+- panel de profundidad y estado del modo;
+- orden y subtítulos;
+- voz de Piper y bips programados como `AudioOutput`: en cola, y una orden nueva corta lo
+  anterior y descarta lo pendiente.
+
+Usa ffmpeg del sistema para H.264 + AAC; sin ffmpeg deja el video mudo y el WAV. Las demos van
+a Drive `VisionX-artefactos/demos/`, no a Git.
+
+```text
+uv run python -m visionx.modes simular --fuente recordings/dev-1114-buscar-a
+    --orden "4.3:buscá la botella" --latencia-detector 0.2 --latencia-profundidad 1.0
+uv run python -m visionx.app ejecutar --fuente recordings/dev-1114-distancias
+    --detector yolo --profundidad B0 --consola        # escribir órdenes en la terminal
+uv run python -m visionx.modes demo --fuente recordings/dev-1114-buscar-a
+    --orden "4.3:buscá la botella" --latencia-detector 0.2 --latencia-profundidad 1.0
+    --salida outputs/demos/buscar-a.mp4                # --sin-voz: subtítulos sin Piper
+```
+
 ### Leer — T10
 
 **OCR**, reconocimiento óptico de caracteres, convierte imagen en texto. Usar un motor
@@ -539,11 +628,12 @@ monotónicos de Pi y PC sin sincronización y error conocido.
 |---|---|---|
 | `Pipeline` | Hilo de captura que nunca espera a los modelos; buzón de un lugar (`LatestMailbox`) por modelo; caché acotada. El detector toma el último frame capturado; la profundidad, el último frame **ya detectado** | Colas de tamaño fijo bajo sobrecarga; frames salteados contados; un `EstimatorError` cuenta y sigue; `SourceError` detiene con `error` |
 | `ResultBoard` + `Joint` | Últimos resultados por `FrameKey`; cada detección guarda su frame. La unión es el frame más nuevo con detección y profundidad propias, y nunca retrocede | `check_same_frame` sobre frame, detección, profundidad y objetos de cada unión |
-| `Controller` | Frase → `Interpretation` → `Command` con `request_id` y vigencia por modo; la orden nueva cancela el audio de la anterior; cancelar corta todo; aclarar no interrumpe; repetir. Los modos son `ModeHandler` (T09–T11); sin uno, dice que no está disponible | Vencimiento con `ManualClock`, cancelación con audio en curso |
+| `Controller` | Frase → `Interpretation` → `Command` con `request_id` y vigencia por modo; la orden nueva cancela el audio de la anterior; cancelar corta todo; aclarar no interrumpe; repetir. Los modos son `ModeHandler` (T09–T11) y reciben una `View` (lo visto y lo medido); sin uno, dice que no está disponible. Elegir («la de la izquierda») se entrega al modo activo sin reemplazarlo | Vencimiento con `ManualClock`, cancelación con audio en curso; `Pipeline.view()` trae la detección antes que una profundidad lenta |
 | `dashboard.render` | Ojo izquierdo con detecciones, profundidad del **mismo frame** con escala fija `depth.range_m`, vista de arriba de la nube del frame (con la geometría real; sin ella no se dibuja), edad/latencia/FPS/errores, salteados y colas | Solo dibuja resultados ya calculados |
 | `science.compare` | Todos los métodos sobre todos los pares, en orden fijo y sin descartes; CSV por frame y método con tiempo y estado; los fallos quedan como filas | 12 frames × 2 métodos = 24 filas, con un fallo registrado |
 | `TraceWriter` | JSONL de eventos (frames, resultados con latencia y edad, uniones, órdenes, audio, resumen) | Seguro entre hilos |
-| `fakes.py` | `SyntheticStereoSource` (par rectificado con el ojo derecho corrido según Z), `ScriptedDetector`, `FakeDepthEstimator`, `FakeSpatialEstimator`. Todos con `model_id` `fake-…` | No miden nada: sustituyen la ELP y lo que entrega A (T05, T09/T13) |
+| `fakes.py` | `SyntheticStereoSource` (par rectificado con el ojo derecho corrido según Z), `ScriptedDetector`, `FakeDepthEstimator`. Todos con `model_id` `fake-…` | No miden nada: sustituyen la ELP y la profundidad real |
+| `spatial.py` | `ProvisionalSpatialEstimator`: capa más cercana de la máscara, percentil 20 y política candidata (ver T09) | Provisoria hasta que A entregue la suya (T09/T13) |
 
 Por qué la profundidad sigue al detector: si cada modelo tomara su propio último frame, con la
 cámara más rápida que ambos casi nunca coincidirían y no habría unión del mismo frame. El costo
@@ -566,7 +656,7 @@ uv run python -m visionx.app comparar --fuente recordings/X --detector yolo
 Con `--fuente` grabación o `usb` se rectifica con `camera.calibration`. `--profundidad
 B0|B1|B2` usa el `SgbmEstimator` de T05 con la sección `depth` (cómputo en `depth.compute`,
 1280×720): la máscara del detector (1920×1080) se reduce a esa resolución por vecino más
-cercano antes de tomar la mediana de Z (`FakeSpatialEstimator(depth_geometry=…)`), y el ángulo
+cercano antes de tomar la mediana de Z (`ProvisionalSpatialEstimator(depth_geometry=…)`), y el ángulo
 sale de la caja en la geometría del frame. Esa ubicación por objeto sigue siendo provisoria
 hasta T09/T13. `fake` solo tiene sentido con la fuente sintética: con una grabación da un plano.
 Cada unión queda en la traza con clase, ID, Z, dispersión, fracción válida, ángulo y política;

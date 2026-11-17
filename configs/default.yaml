@@ -69,16 +69,55 @@ depth:
       instereo2k: 272       # README y auditoría T04: disparidad 20-265 px
 
 detection:
-  model: yolo26n-seg        # yolo26n-seg | yolo11n-seg (referencia); comparar con `python -m visionx.detection medir`
+  # yolo26s + 960 px (BITACORA T09 mejoras): en clips ELP detecta la taza blanca a 1 m y el bolso
+  # a 3 m en 100 % de los frames (yolo26n a 640: 2 % y 0 %) y la mochila en mano en 36 % (2 %).
+  # Cuesta ~0,5 s/frame en la CPU de Windows; en la Mac (MPS) falta medirlo (M1). Para una
+  # máquina lenta, pisar en configs/local.yaml con yolo26n-seg e imgsz 640.
+  model: yolo26s-seg        # yolo26s-seg | yolo26n-seg | yolo11n-seg; comparar con `python -m visionx.detection medir`
   weights_dir: weights      # carpeta local, ignorada por Git; `python -m visionx.detection descargar` deja ahí el .pt
   device: cpu               # cpu | mps (Mac) | cuda:0 | auto
-  imgsz: 640                # lado mayor de la imagen que entra a la red, px (la salida vuelve a la resolución original)
+  imgsz: 960                # lado mayor de la imagen que entra a la red, px (la salida vuelve a la resolución original)
   conf: 0.25                # score mínimo para informar un objeto, en [0, 1]; candidato, falta fijarlo con clips anotados
   iou: 0.7                  # solapamiento del NMS (YOLO26 no usa NMS y lo ignora)
   threads: null             # hilos de torch en CPU; null = lo que elige Ultralytics (núcleos lógicos - 1)
   track: true               # IDs temporales con ByteTrack
   tracker: bytetrack.yaml   # config de Ultralytics; su búfer de pérdida está en frames, no en segundos
   classes: null             # lista de clases del modelo a conservar (ej. [cup, bottle]); null = todas
+
+# Ubicación por objeto PROVISORIA (app/spatial.py) hasta que A entregue depth/spatial (T09/T13).
+# Z = percentil front_percentile de la capa más cercana de la máscara. Candidatos medidos en
+# clips de desarrollo, sin calibrar; ver BITACORA T09.
+spatial_provisional:
+  min_valid: 0.5            # fracción mínima de la máscara con profundidad para decir metros
+  layer_min_frac: 0.25      # una capa de profundidad cuenta como objeto con al menos esto de la máscara
+  front_percentile: 20      # percentil de Z dentro de la capa: la superficie del frente
+  max_rel_spread: 0.5       # IQR de la capa / Z; más que esto es una capa difusa: solo dirección
+  spread_allowance_m: 0.4   # ...salvo que la IQR no pase esto (m): profundidad propia de un objeto (silla de cerca)
+  border_px: 2              # caja a esta distancia del borde lateral: objeto cortado, reencuadrar
+
+# Modos buscar y distancia (T09, src/visionx/modes/). Candidatos sin medir: M1/M7/M8 los fijan.
+# El rango que se anuncia en metros sale de depth.range_m.
+modes:
+  center_deg: 8.0           # |ángulo| <= esto: "al frente" (grados; + a la derecha)
+  side_deg: 25.0            # <= esto: "un poco a la izquierda/derecha"; más: "a la izquierda"
+  vertical_deg: 15.0        # |ángulo vertical| > esto: se agrega "arriba"/"abajo" (respecto de la cámara)
+  hysteresis_deg: 3.0       # margen para cambiar de zona (izq./frente/abajo): no alternar en un límite
+  confirm_hits: 2           # presencia: frames con el objeto...
+  confirm_s: 1.0            # ...dentro de esta ventana, s (en tiempo, no en frames)
+  max_age_s: 1.0            # observación más vieja que esto no guía, s
+  max_measure_age_s: 3.0    # Z más viejo que esto no se dice, s (la profundidad tarda más)
+  gate_deg: 15.0            # salto de ángulo aceptado para seguir al mismo objetivo...
+  gate_deg_per_s: 60.0      # ...más esto por segundo sin verlo (la cámara gira)
+  lost_s: 2.5               # sin ver el objetivo durante esto: "Perdí ...", s (clips buscar: menos avisos falsos)
+  min_interval_s: 1.2       # mínimo entre dos frases de guía, s
+  repeat_s: 4.0             # repetir la dirección aunque no cambie, s
+  speech_base_s: 0.3        # duración estimada de una frase: base...
+  speech_s_per_char: 0.065  # ...más esto por carácter (Piper es_AR: 50–70 ms/car); la guía no habla encima
+  end_margin_s: 1.0         # frase de cierre antes del vencimiento de la orden, s
+  round_m: 0.1              # redondeo de los metros que se dicen
+  arrive_m: 0.6             # al frente y a esto o menos: "Llegaste", m
+  accept_before_s: 0.5      # distancia: frame medido hasta esto ANTES de la orden, s
+  max_listed: 3             # a lo sumo cuántos iguales se enumeran
 
 calibration:
   board: charuco

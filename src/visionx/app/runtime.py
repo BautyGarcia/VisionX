@@ -155,6 +155,18 @@ class Joint:
     objects: tuple[SpatialObject, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class View:
+    """Lo último observado, para los modos (T09–T11). Cualquiera puede faltar.
+
+    `seen`: frame + detección más nuevos, sin profundidad (presencia y dirección no esperan
+    metros). `measured`: la unión más nueva con profundidad y objetos del mismo frame.
+    """
+
+    seen: Joint | None = None
+    measured: Joint | None = None
+
+
 class ResultBoard:
     """Guarda los últimos resultados de cada modelo por FrameKey y arma uniones del mismo frame."""
 
@@ -242,6 +254,7 @@ class Pipeline:
         self._stop = threading.Event()
         self._joint_lock = threading.Lock()
         self._joint: Joint | None = None
+        self._seen: Joint | None = None  # caché de latest_seen()
         self._threads: list[threading.Thread] = []
 
     # -- control ---------------------------------------------------------------------------
@@ -386,6 +399,31 @@ class Pipeline:
                 self.spatial_errors += 1
                 self._on_event("error", {"modulo": "espacial", "error": str(exc)})
         return Joint(frame, det, depth, objects)
+
+    def latest_seen(self) -> Joint | None:
+        """Frame + detección más nuevos, sin profundidad. Con profundidad configurada, la unión
+        completa llega más tarde: buscar no la espera para avisar presencia."""
+        key = self.board.latest_detection_key()
+        if key is None:
+            return None
+        with self._joint_lock:
+            cached = self._seen
+        if cached is not None and cached.frame.key == key:
+            return cached
+        det, _ = self.board.get(key)
+        frame = self.board.frame(key)
+        if det is None or frame is None:
+            return cached
+        seen = Joint(frame, det, None, ())
+        with self._joint_lock:
+            if self._seen is None or _newer(key, self._seen.frame.key):
+                self._seen = seen
+        return seen
+
+    def view(self) -> View:
+        """Lo que reciben los modos en cada tick del controlador."""
+        measured = self.latest_joint()
+        return View(self.latest_seen(), measured if self.depth is not None else None)
 
     def _update_joint(self) -> None:
         if self.depth is None:

@@ -20,13 +20,13 @@ from visionx.app.controller import Controller, Say, UnavailableHandler
 from visionx.app.dashboard import DashboardState, depth_colormap, render, top_view
 from visionx.app.fakes import (
     FakeDepthEstimator,
-    FakeSpatialEstimator,
     ScriptedDetector,
     SyntheticObject,
     SyntheticStereoSource,
 )
 from visionx.app.runtime import FrameCache, LatestMailbox, Pipeline, ResultBoard
 from visionx.app.science import TraceWriter, compare
+from visionx.app.spatial import ProvisionalSpatialEstimator
 from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
 from visionx.shared.clock import ManualClock
 from visionx.shared.contracts import (
@@ -100,7 +100,7 @@ def test_fakes_satisfy_interfaces_and_contract_checks():
     frame = source.read()
     det = ScriptedDetector(source)
     depth = FakeDepthEstimator(source.geometry, source=source)
-    spatial = FakeSpatialEstimator(source.geometry)
+    spatial = ProvisionalSpatialEstimator(source.geometry)
     assert isinstance(source, FrameSource) and isinstance(det, Detector)
     assert isinstance(depth, DepthEstimator) and isinstance(spatial, SpatialEstimator)
     d = det.predict(frame)
@@ -123,8 +123,10 @@ def test_spatial_accepts_depth_in_a_resized_geometry():
     depth = FakeDepthEstimator(half, background_m=2.0).predict(frame)
     d = ScriptedDetector(source).predict(frame)
     with pytest.raises(IdentityMismatch):  # sin declarar la geometría reducida, se rechaza
-        FakeSpatialEstimator(source.geometry).locate(frame, depth, d)
-    (obj,) = FakeSpatialEstimator(source.geometry, depth_geometry=half).locate(frame, depth, d)
+        ProvisionalSpatialEstimator(source.geometry).locate(frame, depth, d)
+    (obj,) = ProvisionalSpatialEstimator(source.geometry, depth_geometry=half).locate(
+        frame, depth, d
+    )
     assert obj.z_m == pytest.approx(2.0, rel=1e-3) and obj.valid_fraction == 1.0
     # el ángulo sale de la caja en la geometría del frame, no de la reducida
     x1, y1, x2, y2 = d.boxes[0]
@@ -154,7 +156,7 @@ def test_pipeline_under_overload_keeps_bounded_queues_and_never_mixes_frames():
         source,
         det,
         depth,
-        FakeSpatialEstimator(source.geometry),
+        ProvisionalSpatialEstimator(source.geometry),
         cache_frames=10,
         on_event=lambda kind, data: events.append((kind, data)),
     )
@@ -176,6 +178,26 @@ def test_pipeline_under_overload_keeps_bounded_queues_and_never_mixes_frames():
     frame_ids = [j.frame.frame_id for j in joints]
     assert frame_ids == sorted(frame_ids)  # la unión publicada nunca retrocede
     assert any(kind == "union" for kind, _ in events)
+
+
+def test_view_gives_detection_before_slow_depth():
+    # Buscar (T09) avisa presencia con la detección sola: la vista la trae aunque la
+    # profundidad todavía no haya terminado ese frame.
+    source = SyntheticStereoSource(fps=60, n_frames=60)
+    depth = FakeDepthEstimator(source.geometry, source=source, delay_ms=400)
+    pipeline = Pipeline(
+        source, ScriptedDetector(source), depth, ProvisionalSpatialEstimator(source.geometry)
+    )
+    pipeline.start()
+    assert wait_for(lambda: pipeline.view().seen is not None, timeout=2)
+    first = pipeline.view()
+    assert first.measured is None or first.measured.frame.frame_id <= first.seen.frame.frame_id
+    assert wait_for(lambda: pipeline.view().measured is not None, timeout=5)
+    view = pipeline.view()
+    pipeline.stop()
+    assert view.seen.depth is None and view.measured.depth is not None
+    assert view.seen.frame.frame_id >= view.measured.frame.frame_id
+    check_same_frame(view.measured.frame, view.measured.detection, view.measured.depth)
 
 
 def test_model_failure_is_counted_and_pipeline_continues():
@@ -249,7 +271,8 @@ def test_new_command_invalidates_previous_and_sets_deadline():
     assert controller.active is second and second.mode is Mode.DISTANCE
     assert second.deadline_ns == 1_000 + 5 * 10**9
     texts = spoken(output)
-    assert "Busco taza." in texts and "Mido la distancia a botella." in texts
+    # distancia confirma con un sonido: la respuesta ya nombra el objeto (T09)
+    assert "Busco taza." in texts and "sonido:ok" in texts
     assert "Esa función todavía no está disponible." in texts  # sin handler: no inventa
     output.close()
 
@@ -268,10 +291,10 @@ def test_cancel_cuts_audio_and_clears_active():
     output.player = FakePlayer(realtime=True, block_ms=5)
 
     class Talkative(UnavailableHandler):
-        def start(self, command, joint):
+        def start(self, command, view, now_ns):
             return [Say("x" * 3000, cancelable=True)]  # 3 s a 1 kHz
 
-        def tick(self, command, joint, now_ns):
+        def tick(self, command, view, now_ns):
             return [], False
 
     controller.handlers = {Mode.SEARCH: Talkative()}
@@ -291,21 +314,21 @@ def test_expired_command_stops_ticking_and_repeat_works():
     calls = []
 
     class Counting(UnavailableHandler):
-        def start(self, command, joint):
+        def start(self, command, view, now_ns):
             return []
 
-        def tick(self, command, joint, now_ns):
+        def tick(self, command, view, now_ns):
             calls.append(now_ns)
             return [], False
 
-    controller, output = make_controller(handlers={Mode.DISTANCE: Counting()}, clock=clock)
-    controller.handle_text("distancia")
+    controller, output = make_controller(handlers={Mode.SEARCH: Counting()}, clock=clock)
+    controller.handle_text("buscá la taza")
     controller.tick()
-    clock.advance(6 * 10**9)  # vence a los 5 s
+    clock.advance(31 * 10**9)  # vence a los 30 s
     controller.tick()
     assert len(calls) == 1 and controller.active is None
     controller.handle_text("repetí")
-    assert spoken(output)[-1] == "Mido la distancia."
+    assert spoken(output)[-1] == "Busco taza."
     output.close()
 
 
@@ -318,7 +341,7 @@ def test_dashboard_renders_with_and_without_results():
         source,
         ScriptedDetector(source),
         FakeDepthEstimator(source.geometry, source=source),
-        FakeSpatialEstimator(source.geometry),
+        ProvisionalSpatialEstimator(source.geometry),
     )
     empty = render(DashboardState(None, (pipeline.detector_status,), now_ns=0))
     assert empty.ndim == 3

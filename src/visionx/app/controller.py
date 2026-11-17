@@ -7,8 +7,13 @@ Reglas (TECNICO T07):
 - Cancelar no depende del modo: corta todo el audio cancelable y deja el controlador inactivo.
 - Una frase que necesita aclaración se responde sin cancelar lo que estaba en curso.
 
+- Elegir ("la de la izquierda") no es una orden nueva: se entrega al modo activo si sabe
+  elegir (buscar, con varios iguales a la vista). Sin nada para elegir, se dice.
+
 Qué hace cada modo lo implementan T09 (buscar/distancia), T10 (leer) y T11 (describir) como
 `ModeHandler`. Mientras no estén, el controlador avisa que la función no está disponible.
+Los modos reciben una vista (`modes.common.View`): lo último visto (frame + detección, sin
+esperar profundidad) y lo último medido (unión con profundidad del mismo frame).
 """
 
 from __future__ import annotations
@@ -18,7 +23,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from visionx.app.runtime import Joint
 from visionx.shared.clock import Clock, MonotonicClock
 from visionx.shared.contracts import AudioEvent, Command, Mode, Priority
 from visionx.shared.interfaces import AudioSink
@@ -41,11 +45,11 @@ class Say:
 
 
 class ModeHandler(Protocol):
-    """Comportamiento de un modo. Recibe la unión más reciente en cada tick."""
+    """Comportamiento de un modo. `view` es lo último observado (modes.common.View)."""
 
-    def start(self, command: Command, joint: Joint | None) -> list[Say]: ...
+    def start(self, command: Command, view: Any, now_ns: int) -> list[Say]: ...
 
-    def tick(self, command: Command, joint: Joint | None, now_ns: int) -> tuple[list[Say], bool]:
+    def tick(self, command: Command, view: Any, now_ns: int) -> tuple[list[Say], bool]:
         """(qué decir, terminó)."""
         ...
 
@@ -53,10 +57,10 @@ class ModeHandler(Protocol):
 class UnavailableHandler:
     """Modo todavía no implementado: lo dice y termina, sin inventar una respuesta."""
 
-    def start(self, command: Command, joint: Joint | None) -> list[Say]:
+    def start(self, command: Command, view: Any, now_ns: int) -> list[Say]:
         return [Say("Esa función todavía no está disponible.")]
 
-    def tick(self, command: Command, joint: Joint | None, now_ns: int) -> tuple[list[Say], bool]:
+    def tick(self, command: Command, view: Any, now_ns: int) -> tuple[list[Say], bool]:
         return [], True
 
 
@@ -66,7 +70,7 @@ class Controller:
         parser: CommandParser,
         output: AudioSink,
         *,
-        latest_joint: Callable[[], Joint | None] = lambda: None,
+        latest_view: Callable[[], Any] = lambda: None,
         handlers: dict[Mode, ModeHandler] | None = None,
         deadlines_s: dict[str, float] | None = None,
         clock: Clock | None = None,
@@ -74,7 +78,7 @@ class Controller:
     ) -> None:
         self.parser = parser
         self.output = output
-        self.latest_joint = latest_joint
+        self.latest_view = latest_view
         self.handlers = handlers or {}
         self.deadlines_s = deadlines_s or {}
         self.clock = clock or MonotonicClock()
@@ -115,6 +119,18 @@ class Controller:
                 self._say(Say(interp.reply or "No entendí."), self._new_id(), now)
                 self.history.append((None, interp))
                 return None
+            if interp.mode is Mode.CHOOSE:
+                # Elegir completa la orden activa; no la reemplaza ni le cambia la vigencia.
+                active = self.active
+                handler = self.handlers.get(active.mode) if active is not None else None
+                choose = getattr(handler, "choose", None)
+                if active is None or choose is None:
+                    self._say(Say("No hay nada para elegir ahora."), self._new_id(), now)
+                else:
+                    for say in choose(active, interp.target, self.latest_view(), now):
+                        self._say(say, active.request_id, now)
+                self.history.append((None, interp))
+                return None
 
             if self.active is not None:
                 self.output.cancel(self.active.request_id)  # la orden nueva invalida la vieja
@@ -125,10 +141,15 @@ class Controller:
             self.active = command
             self.history.append((command, interp))
             ack = acknowledgement(interp, self.parser.catalog)
+            if command.mode is Mode.DISTANCE:
+                # La respuesta ya nombra el objeto ("Taza a la izquierda, a 1,1 metros"): decir
+                # antes "Mido la distancia a taza." la demoraba ~2 s (se ve en las demos de T09).
+                # Un sonido corto confirma que se entendió sin hacer esperar el número.
+                ack = "sonido:ok"
             if ack:
                 self._say(Say(ack), request_id, now)
             handler = self.handlers.get(command.mode, UnavailableHandler())
-            for say in handler.start(command, self.latest_joint()):
+            for say in handler.start(command, self.latest_view(), now):
                 self._say(say, request_id, now)
             return command
 
@@ -155,7 +176,7 @@ class Controller:
                 self._on_event("vencido", {"request_id": command.request_id})
                 return
             handler = self.handlers.get(command.mode, UnavailableHandler())
-            says, done = handler.tick(command, self.latest_joint(), now)
+            says, done = handler.tick(command, self.latest_view(), now)
             for say in says:
                 self._say(say, command.request_id, now)
             if done:

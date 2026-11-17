@@ -329,8 +329,9 @@ def test_missing_weights_explain_how_to_download(tmp_path):
 
 def test_settings_from_default_config():
     settings = DetectorSettings.from_config(load_config())
-    assert settings.model == "yolo26n-seg" and settings.track is True
-    assert settings.weights_path == ROOT / "weights" / "yolo26n-seg.pt"
+    # default elegido con clips ELP (BITACORA T09 mejoras): yolo26s a 960 px
+    assert settings.model == "yolo26s-seg" and settings.imgsz == 960 and settings.track is True
+    assert settings.weights_path == ROOT / "weights" / "yolo26s-seg.pt"
 
 
 def test_download_rejects_error_pages_and_keeps_existing(monkeypatch, tmp_path):
