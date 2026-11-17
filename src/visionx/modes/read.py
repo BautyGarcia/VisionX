@@ -20,11 +20,15 @@ class ReadHandler:
         reader: TextReader | None = None,
         settings: ReadingSettings | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        *,
+        prewarm: bool = False,
     ) -> None:
         self.s = settings or ReadingSettings()
         self.reader = reader if reader is not None else RapidReader(self.s)
         self._event = on_event or (lambda kind, data: None)
-        self._worker: ReadingWorker | None = None  # ni hilo ni modelos antes de la primera orden
+        self._worker: ReadingWorker | None = (
+            ReadingWorker(self.reader, self.s, prewarm=True) if prewarm else None
+        )
         self._job: ReadJob | None = None
         self._chunks: deque[str] = deque()
         self._last_key = None
@@ -33,14 +37,21 @@ class ReadHandler:
 
     def start(self, command: Command, view: View, now_ns: int) -> list[Say]:
         self.cancel()
-        self._job = ReadJob(command.request_id)
+        self._job = ReadJob(
+            command.request_id,
+            earliest_ns=max(
+                command.issued_ns - int(self.s.pre_s * 1e9),
+                now_ns - int(self.s.max_age_s * 1e9),
+            ),
+            end_ns=command.issued_ns + int(self.s.window_s * 1e9),
+        )
         self._loaded = False
-        self._last_key = None
         self._next_say_ns = now_ns
+        self._last_key = None  # el pedido conserva también la captura actual durante warmup
         if self._worker is None:
-            self._worker = ReadingWorker(self.reader)
+            self._worker = ReadingWorker(self.reader, self.s)
+        self.observe(view, now_ns)
         self._worker.submit(self._job)
-        self._observe(command, view, now_ns)
         # Controller ya confirma READ con «Leo.» (precacheada por T08).
         return []
 
@@ -62,7 +73,8 @@ class ReadHandler:
             self.cancel()
             return [], True
         end_ns = command.issued_ns + int(self.s.window_s * 1e9)
-        self._observe(command, view, now_ns)
+        if not job.complete.is_set():
+            self.observe(view, now_ns)
         if now_ns >= end_ns:
             job.complete.set()
         if not self._loaded:
@@ -82,6 +94,7 @@ class ReadHandler:
                     "frame_key": str(job.selected_key),
                     "ruta": self.s.image_source,
                     "nitidez": job.sharpness,
+                    "corte_temprano": job.early,
                     "bloques": len(ordered),
                     "modelo": self.reader.model_id,
                 },
@@ -116,12 +129,12 @@ class ReadHandler:
         fallback = view.captured or (view.seen.frame if view.seen else None)
         return fallback if fallback is not None and fallback.rectified else None
 
-    def _observe(self, command: Command, view: View, now_ns: int) -> None:
+    def observe(self, view: View, now_ns: int) -> None:
+        """Buzón de captura aun sin orden; el worker calcula y conserva la nitidez."""
         frame = self._frame(view)
-        if frame is None or self._job is None or self._job.complete.is_set():
+        if frame is None:
             return
-        end_ns = command.issued_ns + int(self.s.window_s * 1e9)
-        if not command.issued_ns <= frame.received_ns <= min(now_ns, end_ns):
+        if frame.received_ns > now_ns:
             return
         if now_ns - frame.received_ns > self.s.max_age_s * 1e9 or frame.key == self._last_key:
             return
@@ -147,4 +160,23 @@ class ReadHandler:
                         ),
                     )
                     object_box = tuple(float(v) for v in box)
-        self._job.offer(frame.key, frame.left, object_box)
+        if self._worker is None:
+            self._worker = ReadingWorker(self.reader, self.s)
+        candidate = (
+            frame.received_ns,
+            frame.key,
+            frame.left,
+            (frame.session_id, frame.geometry_id, frame.calibration_id, frame.left.shape),
+            object_box,
+        )
+        job = self._job
+        if job is not None and not job.cancelled.is_set() and not job.complete.is_set():
+            if job.earliest_ns <= frame.received_ns <= job.end_ns:
+                job.latest = candidate
+        self._worker.offer(
+            frame.key,
+            frame.left,
+            frame.received_ns,
+            candidate[3],
+            object_box,
+        )

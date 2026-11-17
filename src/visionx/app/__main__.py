@@ -184,7 +184,9 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
         CommandParser(catalog),
         output,
         latest_view=pipeline.view,
-        handlers=build_handlers(cfg, geometry, catalog.spoken, on_event),
+        handlers=build_handlers(
+            cfg, geometry, catalog.spoken, on_event, prewarm_reading=synthetic is None
+        ),
         deadlines_s={str(k): float(v) for k, v in (voice_cfg.get("deadlines_s") or {}).items()},
         on_event=on_event,
     )

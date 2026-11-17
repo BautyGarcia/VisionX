@@ -181,6 +181,13 @@ class Controller:
                 # La vigencia también corta su último bloque que aún esté sonando/en cola.
                 self.output.cancel(self._audio_request_id)
                 self._audio_deadline_ns = None
+            view = self.latest_view()
+            # Hook liviano: LEER conserva capturas previas aun sin una orden activa.
+            # Cálculo de nitidez/modelos quedan fuera del lock, en su worker.
+            for observer in self.handlers.values():
+                observe = getattr(observer, "observe", None)
+                if observe is not None:
+                    observe(view, now)
             command = self.active
             if command is None:
                 return
@@ -190,7 +197,7 @@ class Controller:
                 self._on_event("vencido", {"request_id": command.request_id})
                 return
             handler = self.handlers.get(command.mode, UnavailableHandler())
-            says, done = handler.tick(command, self.latest_view(), now)
+            says, done = handler.tick(command, view, now)
             for say in says:
                 self._say(say, command.request_id, now)
             if done:
