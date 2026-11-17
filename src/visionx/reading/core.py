@@ -256,26 +256,48 @@ def speech_chunks(blocks: Sequence[TextBlock], max_chars: int) -> list[str]:
     return chunks
 
 
+_SPEECH_GAP = "(ilegible)"
+
+
+def _spoken_number(token: str) -> str | None:
+    """Conserva separadores; explicita solo lo que Piper puede callar o confundir.
+
+    La voz es-419 de Piper ya pronuncia «barra», coma decimal y porcentaje.
+    Su fonemizador omite el menos inicial y no explicita el separador de horas.
+    No interpretar 1/2 como una dosis ni 11/2026 como una fecha: leer lo impreso.
+    """
+    if re.fullmatch(r"\d{1,2}:\d{2}(?::\d{2})?", token):
+        parts = token.split(":")
+        spoken = f"{parts[0]} horas {parts[1]}"
+        return spoken if len(parts) == 2 else f"{spoken} minutos {parts[2]} segundos"
+    if re.fullmatch(r"[-−]?\d+(?:[.,]\d+)?(?:/\d+)?%?", token):
+        return f"menos {token[1:]}" if token[0] in "-−" else token
+    return token if token == "%" else None
+
+
 def _plausible_line(text: str, *, context: bool = False) -> str:
     """Filtro ortográfico de habla, sin diccionario ni correcciones.
 
     Palabras de 3–30 letras: >=80 % letras, vocal y solo letras con guion/apóstrofo
     internos. Tokens de 1–2 letras requieren otro token largo o numérico en el
-    mismo renglón (incluye unidades como g). Números decimales y % se conservan.
+    mismo renglón (incluye unidades como g), salvo negaciones. Números con signo,
+    fracciones, fechas, horas, decimales y % se conservan. Un rechazo entre palabras
+    legibles se anuncia; si no queda nada legible, el llamador informa falta de confianza.
     No certifica que una palabra exista: errores plausibles pueden pasar.
     """
     tokens = normalize_text(text).split()
-    candidates: list[tuple[str, bool]] = []
+    candidates: list[tuple[str | None, bool]] = []
     for token in tokens:
         token = token.strip('.,;:!?¿¡()[]{}«»"“”‘’…')
-        if re.fullmatch(r"\d+(?:[.,]\d+)?%?", token):
-            candidates.append((token, True))
-            continue
-        if token == "%":
-            candidates.append((token, True))
+        if not token:
+            continue  # puntuación sola no es texto rechazado
+        number = _spoken_number(token)
+        if number is not None:
+            candidates.append((number, True))
             continue
         letters = [c for c in token if c.isalpha()]
-        if not token or not 1 <= len(letters) <= 30 or len(letters) / len(token) < 0.8:
+        if not 1 <= len(letters) <= 30 or len(letters) / len(token) < 0.8:
+            candidates.append((None, False))
             continue
         if any(
             not c.isalpha()
@@ -287,14 +309,27 @@ def _plausible_line(text: str, *, context: bool = False) -> str:
             )
             for i, c in enumerate(token)
         ):
+            candidates.append((None, False))
             continue
         folded = unicodedata.normalize("NFD", token.casefold())
-        if len(letters) <= 2:
+        if token.casefold() in {"no", "ni", "sin"}:
+            candidates.append((token, True))
+        elif len(letters) <= 2:
             candidates.append((token, False))
         elif any(c in "aeiou" for c in folded):
             candidates.append((token, True))
+        else:
+            candidates.append((None, False))
     context = context or any(long_or_number for _, long_or_number in candidates)
-    return " ".join(t for t, long_or_number in candidates if long_or_number or context)
+    accepted = [t if strong or context else None for t, strong in candidates]
+    if not any(accepted):
+        return ""
+    words = []
+    for token in accepted:
+        token = token or _SPEECH_GAP
+        if token != _SPEECH_GAP or not words or words[-1] != _SPEECH_GAP:
+            words.append(token)
+    return " ".join(words)
 
 
 def spoken_chunks(blocks: Sequence[TextBlock], settings: ReadingSettings) -> list[str]:
@@ -306,14 +341,34 @@ def spoken_chunks(blocks: Sequence[TextBlock], settings: ReadingSettings) -> lis
     regions = []
     for region in _reading_regions(blocks, settings, separate_lines=False):
         filtered = []
-        confident = [b for b in region if b.score >= settings.speech_min_score]
-        for line in _line_groups(confident, settings):
-            context = bool(_plausible_line(" ".join(b.text for b in line)))
+        for line in _line_groups(region, settings):
+            confident = [b for b in line if b.score >= settings.speech_min_score]
+            context = bool(_plausible_line(" ".join(b.text for b in confident)))
             filtered.extend(
-                TextBlock(text, b.score, b.box)
+                TextBlock(
+                    _plausible_line(b.text, context=context)
+                    if b.score >= settings.speech_min_score
+                    else "",
+                    b.score,
+                    b.box,
+                )
                 for b in line
-                if (text := _plausible_line(b.text, context=context))
             )
+        # Solo señalar bloques enteros rechazados si separan fragmentos que se unirían.
+        # Detalles sueltos descartados en los extremos no agregan avisos al caso normal.
+        kept = [i for i, b in enumerate(filtered) if b.text]
+        if kept:
+            filtered = filtered[kept[0] : kept[-1] + 1]
+            marked = []
+            for b in filtered:
+                text = b.text or _SPEECH_GAP
+                if marked and marked[-1].text.endswith(_SPEECH_GAP):
+                    text = text.removeprefix(_SPEECH_GAP).strip()
+                if text:
+                    marked.append(TextBlock(text, b.score, b.box))
+            filtered = marked
+        else:
+            filtered = []
         if filtered:
             regions.append(filtered)
     if not regions:

@@ -374,6 +374,9 @@ class SearchHandler:
             match = previous.match(self._choices, self.s)
             if match is not None:
                 return match
+            if any(previous.match([choice], self.s) is not None for choice in self._choices):
+                # Hay asociaciones plausibles pero ambiguas: no saltar a una más lejana.
+                return None
         return None
 
     def _event(self, kind: str, data: dict[str, Any]) -> None:
