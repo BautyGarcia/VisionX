@@ -37,11 +37,12 @@ from visionx.voice.commands import (
 
 @dataclass(frozen=True, slots=True)
 class Say:
-    """Algo que un modo quiere decir. El controlador le pone request_id y vigencia."""
+    """Algo que decir; vigencia opcional del hecho en el reloj monotónico local."""
 
     text_or_sound: str
     priority: Priority = Priority.SHORT
     cancelable: bool = True
+    valid_until_ns: int | None = None
 
 
 class ModeHandler(Protocol):
@@ -89,6 +90,7 @@ class Controller:
         self._next_id = 0
         self.active: Command | None = None
         self.last_spoken: str | None = None
+        self._last_spoken_valid_until_ns: int | None = None
         self.history: list[tuple[Command | None, Interpretation]] = []
 
     # -- entrada -----------------------------------------------------------------------------
@@ -113,7 +115,12 @@ class Controller:
                 return None
             if interp.mode is Mode.CONTROL and interp.target == REPEAT:
                 if self.last_spoken:
-                    self._say(Say(self.last_spoken), self._new_id(), now, remember=False)
+                    self._say(
+                        Say(self.last_spoken, valid_until_ns=self._last_spoken_valid_until_ns),
+                        self._new_id(),
+                        now,
+                        remember=False,
+                    )
                 self.history.append((None, interp))
                 return None
             if not interp.ok:
@@ -239,7 +246,10 @@ class Controller:
                 created_ns=now,
                 deadline_ns=deadline,
                 cancelable=say.cancelable,
+                valid_until_ns=say.valid_until_ns,
             )
         )
         if remember and not say.text_or_sound.startswith("sonido:"):
             self.last_spoken = say.text_or_sound
+            # Repetir una guía no rejuvenece el hecho que la originó.
+            self._last_spoken_valid_until_ns = say.valid_until_ns

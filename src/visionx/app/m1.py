@@ -145,6 +145,7 @@ class AuditSink:
                 "texto": event.text_or_sound,
                 "created_ns": event.created_ns,
                 "deadline_ns": event.deadline_ns,
+                "valid_until_ns": event.valid_until_ns,
                 "observed_ns": observed,
                 "frame_id": reference.frame.frame_id if observed is not None else None,
                 "tipo_edad": "historica" if event.text_or_sound.startswith("Perdí") else "actual",

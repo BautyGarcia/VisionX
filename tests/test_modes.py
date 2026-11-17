@@ -239,6 +239,33 @@ def test_presence_needs_confirmation_in_time_not_one_frame():
     assert [t for _, t in out] == ["sonido:bip", "Taza a la izquierda."]
 
 
+def test_guidance_and_presence_expire_from_observation_not_tick():
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    h.tick(c, View(joint(0.1, 1, [("cup", -30, None)])), int(0.1 * SEC))
+    says, _ = h.tick(c, View(joint(0.2, 2, [("cup", -30, None)])), int(0.8 * SEC))
+    assert texts(says) == ["sonido:bip", "Taza a la izquierda."]
+    assert [s.valid_until_ns for s in says] == [int(1.2 * SEC)] * 2
+    # La pérdida narra historia: no afirma que la dirección antigua siga vigente.
+    says, _ = h.tick(c, View(joint(3.0, 30, [])), 3 * SEC)
+    assert texts(says) == ["Perdí taza: quedó a la izquierda."]
+    assert says[0].valid_until_ns is None
+
+
+@pytest.mark.parametrize("z_m", [0.55, 1.4])
+@pytest.mark.parametrize("measured_at,expected_until", [(2.0, 5.0), (4.1, 5.2)])
+def test_metric_guidance_expires_with_first_expiring_fact(z_m, measured_at, expected_until):
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("cup", 0, None)]), joint(0.2, 2, [("cup", 0, None)])])
+    seen = joint(4.2, 42, [("cup", 0, None)])
+    measured = joint(measured_at, 40, [("cup", 0, None, z_m, SPEAK)], measured=True)
+    says, done = h.tick(c, View(seen, measured), int(4.3 * SEC))
+    assert len(says) == 1 and "metro" in says[0].text_or_sound
+    assert done == (z_m == 0.55)
+    assert says[0].valid_until_ns == int(expected_until * SEC)
+
+
 def test_stale_observation_does_not_guide():
     h, c = search(), cmd(Mode.SEARCH, "cup")
     h.start(c, View(), 0)

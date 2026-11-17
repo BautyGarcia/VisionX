@@ -24,18 +24,11 @@ def test_reduced_bank_covers_contract_and_faults(reduced):
     summary, rows = reduced
     assert summary["base_total"] == 8
     assert {r["caso"] for r in summary["corridas"]} == set(CORE_CASES + EXTRA_CASES)
-    # Deuda hallada por M1: AudioEvent conserva deadline de orden, no de observación.
-    # CI exige que se declare FALLA; admite que el coordinador repare esa vigencia.
     for run in summary["corridas"]:
-        unexpected = {key for key, passed in run["criterios"].items() if not passed}
-        assert unexpected <= (
-            {"guia_en_cola_vieja_no_suena"} if run["caso"] == "vencido" else set()
-        )
-    stale = next(r for r in summary["corridas"] if r["caso"] == "vencido")
-    has_stale_audio = not stale["criterios"]["guia_en_cola_vieja_no_suena"]
-    assert summary["resultado"] == ("FALLA" if has_stale_audio else "PASA")
-    assert summary["base_correctos"] == (7 if has_stale_audio else 8)
-    assert summary["criterios"]["cero_audio_viejo"] == ("FALLA" if has_stale_audio else "PASA")
+        assert all(run["criterios"].values()), run
+    assert summary["resultado"] == "PASA"
+    assert summary["base_correctos"] == 8
+    assert summary["criterios"]["cero_audio_viejo"] == "PASA"
     runs = {r["caso"]: r for r in summary["corridas"]}
     assert runs["presente"]["frases_iniciadas"] == [
         "Busco taza.",
@@ -78,6 +71,7 @@ def test_report_contains_replayable_event_details(tmp_path, reduced):
     assert len(events) == len(rows)
     played = [json.loads(r["datos_json"]) for r in events if r["evento"] == "audio-record"]
     assert any(p["outcome"] == "cancelado" and p["started_ns"] is None for p in played)
+    assert any(p["outcome"] == "vencido-hecho" and p["started_ns"] is None for p in played)
     assert "| presente | PASA 1/1 |" in (tmp_path / "tabla.md").read_text(encoding="utf-8")
 
 

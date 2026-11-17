@@ -4,7 +4,7 @@ Un hilo propio sintetiza y reproduce los AudioEvent de a uno:
 - El de mayor prioridad sale primero; a igual prioridad, el más viejo.
 - Un evento más prioritario que el que está sonando lo corta si el actual es cancelable
   (una alerta interrumpe una descripción). Lo cortado no se retoma: sería información vieja.
-- Antes de sonar se revisa el deadline con el reloj elegido: lo vencido no se reproduce.
+- Antes de sonar se revisan orden y hecho con el reloj elegido: lo vencido no se reproduce.
 - cancel(request_id) saca lo pendiente de ese pedido y corta lo que suena. El corte se revisa
   entre bloques de `block_ms`: esa es la demora lógica máxima, más el búfer del dispositivo.
 
@@ -131,6 +131,7 @@ class Outcome(StrEnum):
     CANCELLED = "cancelado"  # cancel() del pedido o cancel_all()
     PREEMPTED = "desplazado"  # lo cortó o lo sacó de la cola algo más prioritario
     EXPIRED = "vencido"  # pasó su deadline antes de sonar
+    FACT_EXPIRED = "vencido-hecho"  # envejeció la observación que respalda el audio
     DROPPED = "descartado"  # la cola estaba llena
     FAILED = "error"  # falló la síntesis o el dispositivo
 
@@ -203,6 +204,9 @@ class AudioOutput:
             self.records.append(record)
             if event.deadline_ns is not None and now > event.deadline_ns:
                 self._finish(record, Outcome.EXPIRED, now)
+                return
+            if event.valid_until_ns is not None and now > event.valid_until_ns:
+                self._finish(record, Outcome.FACT_EXPIRED, now)
                 return
             heapq.heappush(
                 self._queue, _Queued((-event.priority, next(self._order)), event, record)
@@ -307,12 +311,14 @@ class AudioOutput:
         except Exception as exc:  # una frase que no se puede sintetizar no tumba la salida
             return Outcome.FAILED, f"síntesis: {exc}"
         with self._cond:
-            # La síntesis tarda: mientras tanto pudo llegar un cancel o vencer el pedido.
+            # La síntesis tarda: pudo llegar un cancel o vencer la orden o el hecho.
             if self._current_outcome is not None:
                 return self._current_outcome, None
             now = self.clock.now_ns()
             if event.deadline_ns is not None and now > event.deadline_ns:
                 return Outcome.EXPIRED, None
+            if event.valid_until_ns is not None and now > event.valid_until_ns:
+                return Outcome.FACT_EXPIRED, None
             record.started_ns = now
         try:
             completed = self.player.play(samples, rate, self._stop_current)
