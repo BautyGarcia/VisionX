@@ -365,3 +365,18 @@ def test_wav_round_trip(tmp_path: Path):
     write_wav(tmp_path / "x.wav", samples, 16_000)
     back, rate = read_wav(tmp_path / "x.wav")
     assert rate == 16_000 and np.allclose(back, samples, atol=1e-4)
+
+
+def test_whisper_variants_of_search_and_describe():
+    """Transcripciones de Whisper vistas en el bucle con Piper (BITACORA 2026-11-17)."""
+    parser = CommandParser(ClassCatalog(COCO_CLASSES))
+    cases = {
+        "Encontre la botella.": ("search", "bottle"),
+        "Encuéntrame la taza.": ("search", "cup"),
+        "Descríme lo que hay.": ("describe", ""),
+        "Cuéntame qué tengo enfrente.": ("describe", ""),
+        "Describime lo que hay.": ("describe", ""),
+        "Describí.": ("describe", ""),
+    }
+    for phrase, expected in cases.items():
+        assert outcome(parser.parse(phrase)) == expected, phrase

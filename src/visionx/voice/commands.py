@@ -85,10 +85,13 @@ _DISTANCE = re.compile(
     r"que tan cerca|lejos (esta|queda|estoy))\b"
 )
 _READ = re.compile(r"^(lee\w*|leer|lei)\b|\b(que dice|que pone|que esta escrito)\b")
-_DESCRIBE = re.compile(r"^(describi\w*|describe|describir|contame)\b|^que (hay|ves|tengo|veo)\b")
+# "descri\w*" también cubre transcripciones con una sílaba comida ("descríme"); "cuentame" es la
+# forma neutra que Whisper suele escribir por "contame" (bucle con Piper, BITACORA 2026-11-17).
+_DESCRIBE = re.compile(r"^(descri\w*|contame|cuentame)\b|^que (hay|ves|tengo|veo)\b")
 _SEARCH = re.compile(
     # Guiar empieza buscando (TECNICO T09): "llevame a la silla" es una búsqueda con guía.
-    r"^(busca\w*|buscar|encontra\w*|encontrar|ubica\w*|ubicar|hay|guia\w*|llevame|acercame)\b|"
+    # "encontr\w*" y "encuentr\w*" aceptan "encontré" y "encuéntrame", que Whisper escribe a veces.
+    r"^(busca\w*|buscar|encontr\w*|encuentr\w*|ubica\w*|ubicar|hay|guia\w*|llevame|acercame)\b|"
     r"^donde (esta|estan|hay|quedo|dejo|deje)\b"
 )
 _CHOOSE = {
@@ -103,6 +106,7 @@ _CHOOSE = {
 # Palabras de orden que no forman parte del nombre del objeto pedido.
 _COMMAND_WORDS = {
     "busca", "buscame", "buscar", "buscalo", "buscala", "encontra", "encontrame", "encontrar",
+    "encontre", "encuentra", "encuentrame",
     "ubica", "ubicame", "ubicar", "hay", "donde", "esta", "estan", "quedo", "dejo", "deje",
     "a", "que", "distancia", "tan", "lejos", "cerca", "cuan", "cuanto", "cuantos", "metros",
     "queda", "estoy", "de", "hasta", "me", "se", "en", "algun", "alguna", "aca", "guiame",
