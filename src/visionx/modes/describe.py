@@ -23,9 +23,10 @@ from visionx.modes.common import (
     horizontal,
     measure,
     measure_phrase,
+    speech_s,
 )
 from visionx.modes.target import Target, plural
-from visionx.shared.contracts import Command
+from visionx.shared.contracts import Command, FrameKey
 from visionx.shared.geometry import StereoGeometry
 
 
@@ -34,6 +35,10 @@ class DescribeSettings:
     max_objects: int = 5
     wait_measure_s: float = 3.0
     large_area_fraction: float = 0.1
+    min_score: float = 0.6
+    persist_hits: int = 2
+    persist_s: float = 3.0
+    max_speech_s: float = 8.0
 
     def __post_init__(self) -> None:
         if isinstance(self.max_objects, bool) or not isinstance(self.max_objects, int):
@@ -44,6 +49,16 @@ class DescribeSettings:
             raise ValueError("describe.wait_measure_s debe ser finito y no negativo")
         if not 0 < self.large_area_fraction <= 1:
             raise ValueError("describe.large_area_fraction debe estar en (0, 1]")
+        if not 0 <= self.min_score <= 1:
+            raise ValueError("describe.min_score debe estar en [0, 1]")
+        if isinstance(self.persist_hits, bool) or not isinstance(self.persist_hits, int):
+            raise ValueError("describe.persist_hits debe ser un entero")
+        if not 1 <= self.persist_hits <= 256:
+            raise ValueError("describe.persist_hits debe estar entre 1 y 256")
+        for name in ("persist_s", "max_speech_s"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"describe.{name} debe ser finito y positivo")
 
     @classmethod
     def from_config(cls, cfg: dict[str, Any]) -> DescribeSettings:
@@ -134,6 +149,7 @@ FEMININE = frozenset(
         "sink",
         "refrigerator",
         "scissors",
+        "tv",  # en DESCRIBIR decimos "pantalla": COCO también etiqueta así los monitores
     }
 )
 COMPOUND_PLURALS = {
@@ -147,6 +163,21 @@ COMPOUND_PLURALS = {
     "broccoli": "brócolis",
     "snowboard": "snowboards",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class _SeenInstance:
+    label: str
+    track_id: int | None
+    box: tuple[float, ...]
+
+
+def _overlap(a: _SeenInstance, b: _SeenInstance) -> float:
+    ax, ay, ar, ab = a.box
+    bx, by, br, bb = b.box
+    intersection = max(0.0, min(ar, br) - max(ax, bx)) * max(0.0, min(ab, bb) - max(ay, by))
+    union = (ar - ax) * (ab - ay) + (br - bx) * (bb - by) - intersection
+    return intersection / union if union else 0.0
 
 
 class DescribeHandler:
@@ -169,12 +200,15 @@ class DescribeHandler:
         self.facts: SceneFacts | None = None
         self._answered = False
         self._zones: list[tuple[Target, str]] = []
+        # Solo cajas/clases/IDs: no retener imágenes ni profundidad. Se reinicia por orden.
+        self._history: dict[FrameKey, tuple[int, dict[int, _SeenInstance]]] = {}
 
     def start(self, command: Command, view: View, now_ns: int) -> list[Say]:
         self.request_id = command.request_id
         self.facts = None
         self._answered = False
         self._zones = []
+        self._history = {}
         says, _ = self.tick(command, view, now_ns)
         return says
 
@@ -192,6 +226,16 @@ class DescribeHandler:
             self._answered = True
             return [], True
 
+        # El frame reciente anterior a la orden puede confirmar presencia, nunca dar metros.
+        # seen y measured del mismo frame cuentan UNA vez; tampoco cuentan ticks repetidos.
+        for observation in (view.seen, view.measured):
+            if observation is not None:
+                self._observe(observation, now_ns)
+
+        limit = command.issued_ns + int(self.describe.wait_measure_s * 1e9)
+        if command.deadline_ns is not None:
+            limit = min(limit, command.deadline_ns - int(self.s.end_margin_s * 1e9))
+
         # Mantener zonas mientras esperamos profundidad. Nunca copiar sus objetos ubicados:
         # la máscara y la Z que se describen deben seguir perteneciendo a la unión elegida.
         if self._usable(view.seen, command, now_ns, self.s.max_age_s):
@@ -202,11 +246,10 @@ class DescribeHandler:
             and joint is not None
             and joint.depth is not None
         ):
-            return self._finish(joint, measured=True)
+            # Si todavía falta confirmación, aprovechar la espera ya acotada por el pedido.
+            if self._confirmed(joint) or not joint.detection.classes or now_ns >= limit:
+                return self._finish(joint, measured=True)
 
-        limit = command.issued_ns + int(self.describe.wait_measure_s * 1e9)
-        if command.deadline_ns is not None:
-            limit = min(limit, command.deadline_ns - int(self.s.end_margin_s * 1e9))
         if now_ns < limit:
             return [], False
         if self._usable(view.seen, command, now_ns, self.s.max_age_s):
@@ -214,6 +257,60 @@ class DescribeHandler:
         self._answered = True
         self._event({"motivo": "sin-vista-reciente"})
         return [Say("No pude obtener una imagen reciente para describir.")], True
+
+    def _instances(self, joint: Joint) -> dict[int, _SeenInstance]:
+        return {
+            c.index: _SeenInstance(
+                c.label, c.track_id, tuple(float(v) for v in joint.detection.boxes[c.index])
+            )
+            for c in candidates(joint, None, self.geometry)
+            if c.score >= self.describe.min_score
+        }
+
+    def _observe(self, joint: Joint, now_ns: int) -> None:
+        retention = self.describe.persist_s + self.s.max_measure_age_s
+        cutoff = now_ns - int(retention * 1e9)
+        self._history = {key: item for key, item in self._history.items() if item[0] >= cutoff}
+        if cutoff <= joint.frame.received_ns <= now_ns:
+            self._history.setdefault(
+                joint.frame.key, (joint.frame.received_ns, self._instances(joint))
+            )
+        # Además del límite temporal, un tope duro evita crecer con FPS muy altos.
+        while len(self._history) > 256:
+            oldest = min(self._history, key=lambda key: self._history[key][0])
+            del self._history[oldest]
+
+    def _confirmed(self, joint: Joint) -> set[int]:
+        current = self._instances(joint)
+        hits = dict.fromkeys(current, 0)
+        end = joint.frame.received_ns
+        start = end - int(self.describe.persist_s * 1e9)
+        for key, (timestamp, previous) in self._history.items():
+            if key.session_id != joint.frame.session_id or not start <= timestamp <= end:
+                continue
+            # Asociación uno a uno por frame: una silla anterior no confirma dos actuales.
+            # ID estable o IoU >= 0,3 sin ID: evita sumar cualquier instancia de la clase.
+            pairs = []
+            for i, instance in current.items():
+                for j, old in previous.items():
+                    if instance.label != old.label:
+                        continue
+                    same_id = instance.track_id is not None and instance.track_id == old.track_id
+                    different_ids = (
+                        instance.track_id is not None
+                        and old.track_id is not None
+                        and instance.track_id != old.track_id
+                    )
+                    overlap = _overlap(instance, old)
+                    if same_id or (not different_ids and overlap >= 0.3):
+                        pairs.append((same_id, overlap, i, j))
+            used_current, used_previous = set(), set()
+            for _, _, i, j in sorted(pairs, reverse=True):
+                if i not in used_current and j not in used_previous:
+                    hits[i] += 1
+                    used_current.add(i)
+                    used_previous.add(j)
+        return {i for i, n in hits.items() if n >= self.describe.persist_hits}
 
     def _presence(self, joint: Joint, *, update: bool = False) -> tuple[PresenceFact, ...]:
         cands = candidates(joint, None, self.geometry)
@@ -247,12 +344,13 @@ class DescribeHandler:
         return tuple(facts)
 
     def _finish(self, joint: Joint, *, measured: bool) -> tuple[list[Say], bool]:
-        presence = self._presence(joint)
+        confirmed = self._confirmed(joint)
+        presence = tuple(p for p in self._presence(joint) if p.detection_index in confirmed)
         metrics = []
         if measured:
             for c in candidates(joint, None, self.geometry):
                 m = measure(c.obj, self.s)
-                if m.ok and m.z_m is not None:
+                if c.index in confirmed and m.ok and m.z_m is not None:
                     metrics.append(MetricFact(c.index, m.z_m))
         self.facts = SceneFacts(
             joint.frame.session_id,
@@ -261,18 +359,22 @@ class DescribeHandler:
             tuple(metrics),
             joint.depth.model_id if measured and joint.depth else None,
         )
-        phrases = self._render(self.facts)
-        if not measured:
-            phrases.insert(0, "No pude medir las distancias a tiempo.")
+        phrases = self._render(self.facts, measured=measured)
         self._answered = True
         self._event(
-            {"hechos": asdict(self.facts), "solo_presencia": not measured, "texto": phrases}
+            {
+                "hechos": asdict(self.facts),
+                "solo_presencia": not measured,
+                "texto": phrases,
+                "caracteres": len(" ".join(phrases)),
+                "duracion_estimada_s": sum(speech_s(p, self.s) for p in phrases),
+            }
         )
         return [Say(p) for p in phrases], True
 
-    def _render(self, scene: SceneFacts) -> list[str]:
+    def _render(self, scene: SceneFacts, *, measured: bool = True) -> list[str]:
         if not scene.presence:
-            return ["No reconozco objetos al frente."]
+            return ["No reconozco objetos con suficiente confianza."]
         distances = {m.detection_index: m.z_m for m in scene.measured}
 
         def relevance(f: PresenceFact) -> tuple:
@@ -284,14 +386,26 @@ class DescribeHandler:
             return bucket, not important, -f.area_fraction, f.detection_index
 
         selected = tuple(sorted(scene.presence, key=relevance)[: self.describe.max_objects])
+        while True:
+            parts = self._compose(selected, distances, len(scene.presence))
+            if not measured:
+                parts.insert(0, "No pude medir distancias.")
+            if sum(speech_s(p, self.s) for p in parts) <= self.describe.max_speech_s:
+                return parts
+            if len(selected) == 1:
+                # Un presupuesto local muy pequeño puede no admitir ni un nombre completo.
+                return ["No pude resumir la escena a tiempo."]
+            selected = selected[:-1]  # retirar primero la instancia de menor relevancia
+
+    def _compose(
+        self, selected: tuple[PresenceFact, ...], distances: dict[int, float], total: int
+    ) -> list[str]:
         by_index = {f.detection_index: f for f in selected}
         plan = self.narrator.plan(selected)
         flat = [i for group in plan for i in group]
         if len(flat) != len(selected) or set(flat) != set(by_index):
             raise ValueError("SceneNarrator debe conservar exactamente los índices seleccionados")
-        parts = [
-            f"Veo {len(scene.presence)} " + ("cosa." if len(scene.presence) == 1 else "cosas.")
-        ]
+        zones: dict[str, list[str]] = {}
         for group in plan:
             if not group:
                 raise ValueError("SceneNarrator devolvió un grupo vacío")
@@ -300,15 +414,20 @@ class DescribeHandler:
                 (by_index[i].label, by_index[i].zone) != (first.label, first.zone) for i in group
             ):
                 raise ValueError("SceneNarrator mezcló clases o zonas")
-            name = self.spoken(first.label)
+            # El score alto no distingue monitor de TV: usar el término visual compartido.
+            # Buscar conserva el nombre y el umbral de su catálogo, sin cambios en T06.
+            name = "pantalla" if first.label == "tv" else self.spoken(first.label)
             if first.label == "skis" and name == "esquís":
                 name = "esquí"  # el nombre COCO del catálogo viene en plural
             feminine = first.label in FEMININE
             if len(group) == 1:
                 noun = ("una " if feminine else "un ") + name
             else:
-                noun = f"{len(group)} {COMPOUND_PLURALS.get(first.label, plural(name))}"
-            phrase = f"{first.zone.capitalize()}, {noun}"
+                count = {2: "dos", 3: "tres", 4: "cuatro", 5: "cinco"}.get(
+                    len(group), str(len(group))
+                )
+                noun = f"{count} {COMPOUND_PLURALS.get(first.label, plural(name))}"
+            phrase = noun
             # "la más cercana" solo si TODAS las instancias del grupo tienen metros válidos.
             # Con medidas parciales no podemos afirmar cuál de ellas está más cerca.
             if all(i in distances for i in group):
@@ -316,10 +435,24 @@ class DescribeHandler:
                 if len(group) > 1:
                     phrase += ", la más cercana" if feminine else ", el más cercano"
                 phrase += " " + measure_phrase(m, self.s)
-            parts.append(phrase + ".")
-        omitted = len(scene.presence) - len(selected)
+            zones.setdefault(first.zone, []).append(phrase)
+        parts = []
+        for zone in ("al frente", "a la izquierda", "a la derecha"):
+            elements = zones.pop(zone, [])
+            if elements:
+                listing = (
+                    elements[0]
+                    if len(elements) == 1
+                    else ", ".join(elements[:-1]) + " y " + elements[-1]
+                )
+                parts.append(f"{zone.capitalize()}, {listing}.")
+        if zones:
+            raise ValueError("SceneNarrator devolvió una zona desconocida")
+        omitted = total - len(selected)
         if omitted:
-            parts.append(f"Y {omitted} " + ("cosa más." if omitted == 1 else "cosas más."))
+            parts[-1] = (
+                parts[-1][:-1] + f", y {omitted} " + ("cosa más." if omitted == 1 else "cosas más.")
+            )
         return parts
 
     def _event(self, data: dict[str, Any]) -> None:

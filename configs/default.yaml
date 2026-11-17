@@ -122,6 +122,10 @@ modes:
 # Descripción local de una escena (T11). Sin VLM ni conexión a internet.
 describe:
   max_objects: 5            # instancias mencionadas (no grupos); el resto se cuenta como "cosas más"
+  min_score: 0.6            # solo describir; detection.conf/buscar conservan 0.25
+  persist_hits: 2          # frames distintos con score suficiente; una instancia no confirma otra
+  persist_s: 3.0           # ventana de presencia antes del frame descrito (segundos)
+  max_speech_s: 8.0        # presupuesto estimado con modes.speech_s_per_char; reduce el listado
   wait_measure_s: 3.0       # s desde la orden para esperar una unión posterior; después, solo presencia
   large_area_fraction: 0.1  # fracción de imagen ocupada por la caja; desempata relevancia sin inferir tamaño real
 
