@@ -1,4 +1,4 @@
-"""Adaptadores offline. Único punto de construcción por nombre: build_estimator."""
+"""Adaptadores offline sobre el registro público de estimadores de la app."""
 
 from __future__ import annotations
 
@@ -8,30 +8,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from visionx.app.depth_registry import build_estimator
+
 from .common import number, sha
-
-
-def build_estimator(name: str, cfg: dict, geometry):
-    """Unificar con el registro de app cuando esté disponible; no importar CLI privados."""
-    from visionx.depth.stereo import SgbmEstimator, SgbmParams
-
-    if name not in ("B0", "B1", "B2", "B3", "B4"):
-        raise ValueError(f"método desconocido: {name}")
-    d = cfg["depth"]
-    size = tuple(d["compute"]) if d.get("compute") else None
-    params = SgbmParams.from_config(d.get("sgbm") or {})
-    coverage = float(d.get("min_coverage", 0))
-    if name in ("B0", "B1", "B2"):
-        return SgbmEstimator(name, params, geometry, size, coverage)
-    from visionx.depth.align import AlignParams
-    from visionx.depth.hybrid import HybridEstimator, HybridMatcher
-    from visionx.depth.mono import DepthAnythingV2, MonoConfig
-
-    mono = DepthAnythingV2(MonoConfig.from_config(d["mono"]))
-    matcher = HybridMatcher(
-        name, d["b4"]["estereo"], params, mono, AlignParams.from_config(d["alineacion"])
-    )
-    return HybridEstimator(matcher, geometry, size, coverage)
 
 
 def sample_entries(clip: Path, t_s: float, window_s: float, samples: int):

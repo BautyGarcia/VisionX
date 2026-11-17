@@ -9,6 +9,40 @@ import numpy as np
 from .common import number, percentile, read_csv, report, resolve
 
 
+def object_uncertainty(depth, detection, index):
+    """Mediana sobre la máscara válida del objeto; menor significa mayor confianza.
+
+    Ambos tipos actuales del contrato se expresan en píxeles de disparidad. No se
+    interpretan como probabilidades ni como intervalos calibrados de Z.
+    """
+    from visionx.shared.geometry import resize_mask
+
+    if depth.uncertainty is None or detection.masks is None:
+        return None
+    mask = resize_mask(detection.masks[index], *depth.size) & depth.valid_mask
+    values = depth.uncertainty[mask]
+    return float(np.median(values)) if values.size else None
+
+
+def risk_coverage(group):
+    scored = [
+        r for r in group if r["z_pred_m"] is not None and r.get("incertidumbre_px") is not None
+    ]
+    kinds = {r["tipo_incertidumbre"] for r in scored}
+    result = {"n_con_incertidumbre": len(scored), "tipo_incertidumbre": ",".join(sorted(kinds))}
+    # No comparar escalas semánticamente distintas en una misma curva.
+    ranked = sorted(scored, key=lambda r: r["incertidumbre_px"]) if len(kinds) == 1 else []
+    for percent in (100, 90, 75, 50):
+        chosen = ranked[: int(np.ceil(len(ranked) * percent / 100))]
+        result[f"cobertura_confianza_{percent}"] = len(chosen) / len(group) if chosen else None
+        result[f"mae_confianza_{percent}_m"] = (
+            float(np.mean([abs(r["z_pred_m"] - r["referencia_z_m"]) for r in chosen]))
+            if chosen
+            else None
+        )
+    return result
+
+
 def summarize(rows: list[dict]) -> list[dict]:
     groups = defaultdict(list)
     for r in rows:
@@ -28,6 +62,7 @@ def summarize(rows: list[dict]) -> list[dict]:
                 "p95_error_absoluto_m": percentile(np.abs(errors), 95),
                 "cobertura": len(errors) / len(group),
                 "abstencion": 1 - len(errors) / len(group),
+                **risk_coverage(group),
             }
         )
     return out
@@ -42,8 +77,6 @@ def evaluate(sheet: Path, out: Path, cfg: dict, methods, *, window_s=0.4, sample
     annotations = read_csv(sheet)
     if not methods or len(set(methods)) != len(methods):
         raise ValueError("lista de métodos vacía o repetida")
-    if any(m not in ("B0", "B1", "B2", "B3", "B4") for m in methods):
-        raise ValueError("métodos válidos: B0 B1 B2 B3 B4")
     # Validar toda la planilla antes de cargar pesos/inferir.
     keys = set()
     for r in annotations:
@@ -71,6 +104,8 @@ def evaluate(sheet: Path, out: Path, cfg: dict, methods, *, window_s=0.4, sample
     try:
         for r in annotations:
             values = {m: [] for m in methods}
+            uncertainties = {m: [] for m in methods}
+            kinds = {m: set() for m in methods}
             detail = {m: [] for m in methods}
             frames = list(
                 backend.frames(resolve(sheet, r["clip"]), float(r["t_s"]), window_s, samples)
@@ -92,7 +127,7 @@ def evaluate(sheet: Path, out: Path, cfg: dict, methods, *, window_s=0.4, sample
                         and detection.boxes[i][1] <= y <= detection.boxes[i][3]
                     ]
                 for method in methods:
-                    _, objects = predictions[method]
+                    depth, objects = predictions[method]
                     obj = next(
                         (
                             o
@@ -103,12 +138,19 @@ def evaluate(sheet: Path, out: Path, cfg: dict, methods, *, window_s=0.4, sample
                     )
                     valid = obj is not None and obj.policy == DistancePolicy.SPEAK_METERS
                     z = obj.z_m if valid else None
+                    uncertainty = None
                     if z is not None and np.isfinite(z) and z > 0:
                         values[method].append(z)
+                        uncertainty = object_uncertainty(depth, detection, matches[0])
+                        if uncertainty is not None:
+                            uncertainties[method].append(uncertainty)
+                            kinds[method].add(depth.uncertainty_kind.value)
                     detail[method].append(
                         {
                             "frame_id": frame.frame_id,
                             "z_m": z,
+                            "incertidumbre_px": uncertainty,
+                            "tipo_incertidumbre": depth.uncertainty_kind.value,
                             "motivo": "ok"
                             if z is not None
                             else "deteccion_ausente_o_ambigua"
@@ -123,6 +165,10 @@ def evaluate(sheet: Path, out: Path, cfg: dict, methods, *, window_s=0.4, sample
                         "metodo": method,
                         "referencia_z_m": float(r["distancia_cinta_m"]) + float(r["z_offset_m"]),
                         "z_pred_m": float(np.median(values[method])) if values[method] else None,
+                        "incertidumbre_px": float(np.median(uncertainties[method]))
+                        if uncertainties[method] and len(kinds[method]) == 1
+                        else None,
+                        "tipo_incertidumbre": ",".join(sorted(kinds[method])),
                         "n_frames": len(frames),
                         "n_frames_con_respuesta": len(values[method]),
                         "frames": json.dumps(detail[method]),
@@ -139,6 +185,12 @@ def evaluate(sheet: Path, out: Path, cfg: dict, methods, *, window_s=0.4, sample
             "ventana_s": window_s,
             "frames_solicitados": samples,
             "agregacion": "mediana de respuestas válidas en la ventana",
+            "riesgo_cobertura": (
+                "mediana de incertidumbre en máscara válida, luego mediana entre frames; "
+                "menor es más confiable; retener ceil(n*100/90/75/50%); empates por orden "
+                "de planilla; cobertura sobre todas las filas; sin incertidumbre queda vacío; "
+                "tipos distintos no se comparan; no es confianza probabilística calibrada"
+            ),
             "tabla": summarize(rows),
         },
         [sheet, *backend.inputs],
