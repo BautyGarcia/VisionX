@@ -245,7 +245,9 @@ def test_parity_uses_same_masks_spatial_settings_and_catches_units(delivery, mon
     entry.update(broken=None, disparity_only=True, z_m=1.0, uncertainty=False)
     code, report = run()
     assert code == 0
-    assert report["metodos"][0]["objetos"][0]["politica"] == "direction_only"
+    # La ubicación de A mide en disparidad: sin depth_m también da metros.
+    obj = report["metodos"][0]["objetos"][0]
+    assert obj["politica"] == "speak_meters" and obj["z_m"] == pytest.approx(1.0, abs=0.05)
     assert not report["metodos"][0]["pares"][0]["incertidumbre"]["presente"]
 
 

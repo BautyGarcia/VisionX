@@ -759,11 +759,37 @@ sin audio real medido todavía. Tests sin dispositivos/modelos; los clips no sus
 
 ### Interactivo y científico — T07
 
-La app construye B0–B4 en `app.depth_registry.build_estimator`. Para agregar otro método,
-declarar `depth.estimadores.NOMBRE: {fabrica: "paquete.modulo:funcion", ...}`: la fábrica recibe
+La app construye B0–B5 y Fusion en `app.depth_registry.build_estimator`. B5 lee `depth.b5`
+(anclas de `depth.b4.estereo`). `fusion` llama a `load_estimator(cfg, geometry)` de A con la
+config completa y el paquete de `depth.fusion.paquete`; una entrada
+`depth.estimadores.NOMBRE: {tipo: fusion, paquete: carpeta}` arma otro paquete con la misma config
+(para comparar candidatos). Cualquier otro método se declara como
+`depth.estimadores.NOMBRE: {fabrica: "paquete.modulo:funcion", ...}`: la fábrica recibe
 `(cfg: dict, geometry: StereoGeometry)` con los parámetros de esa entrada sin `fabrica`, y
 devuelve un `DepthEstimator`. Si reescala el mapa, expone su geometría de salida en `geometry`.
-`--profundidad` admite esos nombres. No hace falta editar la app para integrar Fusion.
+`--profundidad`, `--profundidad-precisa`, `recibir-profundidad` y los protocolos admiten esos nombres.
+
+**Recepción de un estimador** (`app/recepcion.py`), antes de usarlo en la app:
+
+```text
+uv run python -m visionx.app recibir-profundidad fusion --config configs/local.yaml
+    --clip recordings/dev-1114-distancias --pares 5 --contra B0 B4 B5
+```
+
+Verifica el contrato sobre pares reales (`DepthResult` del mismo frame, dtype, geometría si
+reescala, finitos donde es válido, `status`/`reason`, `model_id` estable, `close()`), informa la
+incertidumbre si viene, latencia P50/P95 de `predict` y RAM pico, y los metros por objeto con la
+ubicación de la app en las marcas con cinta del clip (vaso/taza frame 152, botella frame 240;
+0,50/1,00/1,00 m), lado a lado con `--contra`. Salida en `outputs/recepcion/FECHA-NOMBRE/`
+(`tabla.md`, `recepcion.json`); código ≠ 0 si falla el contrato o la carga. Una sospecha de
+unidades (metros donde va disparidad) se avisa por rango. 0 es recepción técnica correcta, no
+aceptación científica; no equivale a M9. Primera corrida (17/11): B0 246 ms, B4 1269 ms por par
+a 1280×720; 0,53/1,07/1,04 m contra cinta 0,50/1,00/1,00.
+
+Para Fusion, en `configs/local.yaml`: `depth.fusion.paquete: <carpeta del paquete>` (con
+`modelo.pt`, `paquete.yaml` y su sha256: `load_package` rechaza hash, canales o base distintos) y,
+en Windows sin CUDA, `depth.fusion.dispositivo: cpu`. Después,
+`ejecutar ... --profundidad B0 --profundidad-precisa fusion`.
 
 `--profundidad-precisa NOMBRE|ninguna` pisa `depth.precisa.estimador` (default `ninguna`).
 Distancia y describir solicitan una medición en un worker independiente; buscar/guiar conserva
@@ -807,7 +833,7 @@ monotónicos de Pi y PC sin sincronización y error conocido.
 | `science.compare` | Todos los métodos sobre todos los pares, en orden fijo y sin descartes; CSV por frame y método con tiempo y estado; los fallos quedan como filas | 12 frames × 2 métodos = 24 filas, con un fallo registrado |
 | `TraceWriter` | JSONL de eventos (frames, resultados con latencia y edad, uniones, órdenes, audio, resumen) | Seguro entre hilos |
 | `fakes.py` | `SyntheticStereoSource` (par rectificado con el ojo derecho corrido según Z), `ScriptedDetector`, `FakeDepthEstimator`. Todos con `model_id` `fake-…` | No miden nada: sustituyen la ELP y la profundidad real |
-| `spatial.py` | `ProvisionalSpatialEstimator`: capa más cercana de la máscara, percentil 20 y política candidata (ver T09) | Provisoria hasta que A entregue la suya (T09/T13) |
+| `spatial.py` | `ProvisionalSpatialEstimator`: capa más cercana de la máscara, percentil 20 y política candidata (ver T09). Desde el 17/11 la app usa `build_locator` de A (`depth/spatial`); la provisoria queda con `spatial_provisional.usar: true` para comparar | Reemplazada por la de A (T09) |
 
 Por qué la profundidad sigue al detector: si cada modelo tomara su propio último frame, con la
 cámara más rápida que ambos casi nunca coincidirían y no habría unión del mismo frame. El costo
@@ -830,9 +856,9 @@ uv run python -m visionx.app comparar --fuente recordings/X --detector yolo
 Con `--fuente` grabación o `usb` se rectifica con `camera.calibration`. `--profundidad
 B0|B1|B2` usa `SgbmEstimator`; B3/B4 usan `HybridEstimator`, con la sección `depth` (cómputo en `depth.compute`,
 1280×720): la máscara del detector (1920×1080) se reduce a esa resolución por vecino más
-cercano antes de medir la capa cercana de Z (`ProvisionalSpatialEstimator(depth_geometry=…)`), y el ángulo
-sale de la caja en la geometría del frame. Esa ubicación por objeto sigue siendo provisoria
-hasta T09/T13. `fake` solo tiene sentido con la fuente sintética: con una grabación da un plano.
+cercano antes de medir la capa cercana (`build_spatial(cfg, geometry, depth_geometry)`, que arma el
+`ObjectLocator` de A desde el 17/11), y el ángulo sale del centroide de la capa en la geometría
+del frame. Los umbrales siguen siendo candidatos hasta el banco ELP (T04/T13). `fake` solo tiene sentido con la fuente sintética: con una grabación da un plano.
 Cada unión queda en la traza con clase, ID, Z, dispersión, fracción válida, ángulo y política;
 `--captura` guarda el dashboard final como PNG. Teclas: c cancelar, espacio hablar (con
 `--voz`), q salir. `--consola` acepta órdenes escritas.
@@ -1237,6 +1263,37 @@ No verificable solo leyendo código: modos/sincronía/exposición de ELP, escala
 movimiento, distancias físicas, inferencia concurrente M2 Max, micrófono/auriculares y latencia
 audible, Pi/Wi-Fi/reconexión, batería/consumo/calor. Registrar equipo, commit, configuración,
 hashes, resolución, backend, n y unidades cuando se mida. La CI de macOS no reemplaza esa prueba.
+
+### Herramientas de protocolo B: M1, M7, M8, M10 y voz
+
+Todas siguen el mismo camino: **planilla → comando → tabla**. `plantilla` crea `planilla.csv` (y
+una guía) sin pisar anotaciones; `evaluar` escribe detalle, tabla y `resumen.json` con config
+efectiva, equipo, comando, commit y hashes de entradas. Rutas de clip/traza relativas a la
+planilla; `t_s` desde el primer `received_ns` del clip (hay descartes). No abren cámara.
+
+- **M1** (`python -m visionx.app m1 --repeticiones 3`): banco de 8 casos con reloj virtual
+  (detección duplicada, modelo ausente, cámara/audio desconectados, eventos fuera de orden,
+  cancelar OCR/inferencia/TTS, vencimiento durante TTS). Oráculos: eventos correctos, cero audio
+  viejo, cancelación lógica P95 ≤ 200 ms, detección → bip P95 ≤ 500 ms. No mide latencia audible.
+- **Voz** (`python -m visionx.protocolos voz dispositivos|plantilla|grabar|evaluar`): las 61
+  frases de T08 con intención/objeto esperados; `grabar` usa el micrófono elegido
+  (`--dispositivo "yeti nano"`), WAV PCM16 mono 16 kHz, Enter/r/s/q, retoma pendientes;
+  `evaluar` corre Whisper base y small sobre los mismos WAV. `sintetizar` genera WAV de Piper
+  rotulados como sintéticos, que no se mezclan con micrófono.
+- **M7** (`protocolos m7`): 10 objetos × 1/2/3 m × 3 repeticiones + 0,5 m; cinta desde el vidrio
+  de la lente izquierda. Mediana de hasta 3 frames en 0,4 s = una muestra por fila; con iguales,
+  `instancia_x/y` en la imagen rectificada. Tabla por método: MAE, sesgo, P95, cobertura y, con
+  incertidumbre, MAE al retener 100/90/75/50 %. Usa la misma ubicación que la app.
+- **M8** (`protocolos m8`): 30 búsquedas en 3 ambientes, ≥ 600 s ausente, 20 cancelar, 10
+  pérdidas; el éxito lo marca la persona. Desde la traza: bips/min en ausencia, respuestas que
+  empiezan tras cancelar o vencer y guías que empiezan vencidas (`started_ns`, `valid_until_ns`).
+- **M10** (`protocolos ocr` y `protocolos describir`): ≥ 30 textos a 0,5 y 1 m (CER, recall de
+  palabras, errores numéricos con `reading.evaluate`) y ≥ 30 escenas con instancias anotadas
+  (menciones reales/extra por clase y zona, metros sin respaldo = 0 exigido).
+
+Traza para M8 (desde el 17/11): `orden` con `request_id`, `issued_ns`, `deadline_ns`; `audio`
+con `started_ns`/`finished_ns` (bordes de la llamada al reproductor, no medición acústica),
+`ended_ns`, `deadline_ns`, `valid_until_ns`, `fact_received_ns` y `fact_age_ms`.
 
 ## Reproducibilidad
 

@@ -209,7 +209,7 @@ def validate_result(
             "es una sospecha por rango, verificar con cinta"
         )
     if result.depth_m is None:
-        warnings.append("depth_m ausente (permitido): app/spatial.py no dará metros por objeto")
+        warnings.append("depth_m ausente (permitido): la ubicación de A mide en disparidad")
     u = result.uncertainty
     details = {
         "frame_id": frame.frame_id,
@@ -478,7 +478,7 @@ def render_table(report):
         names = [method["nombre"] for method in report["metodos"]]
         lines += [
             "",
-            "Metros con app/spatial.py (Z axial; política entre paréntesis)",
+            "Metros con la ubicación de la app (Z axial; política entre paréntesis)",
             "",
             "| Objeto | Frame / clip s | Cinta m | " + " | ".join(names) + " |",
             "|---|---:|---:|" + "---:|" * len(names),
