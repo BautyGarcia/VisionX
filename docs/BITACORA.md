@@ -40,6 +40,35 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-17 — T12: segunda semilla del candidato (F3 sobre B4)
+
+**Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-fusion`.
+
+**Hecho.** `v2-f3-b4-s1`: misma receta que `v2-f3-b4-s0` (`configs/fusion-v2-base-b4.yaml`) con
+`--semilla 1`; M2 Max, MPS, ~5,7 min por época, pico del driver 17,0 GB. Comparación en el mismo
+soporte con `RUN=v2-f3-b4-s1 outputs/fusion/analisis/soporte_comun_b5epe.py`.
+
+| | mejor época | EPE 3 vías (102) | B5 3 vías | EPE 97 muestras | B5-EPE 97 | acierto-2 GT | EPE última época |
+|---|---|---|---|---|---|---|---|
+| semilla 0 | 15 | 1,678 | 1,800 | 1,496 | 1,677 | 77,67 | 1,687 |
+| semilla 1 | 11 | 1,681 | 1,800 | 1,535 | 1,676 | 77,33 | 1,702 |
+
+(Soportes definidos en la entrada anterior. "EPE última época": la de la época 20 en el soporte
+GT ∩ B4 ∩ Fusion de la curva, sin elegir checkpoint.)
+
+- **La ventaja se repite:** −6,6 a −6,8 % contra B5 en las 102 muestras y −8,5 a −10,8 % contra
+  la mejor regla fija (B5-EPE) en las 97 comparables.
+- **La curva de val es ruidosa:** salta ±0,05–0,1 px entre épocas (semilla 1: de 1,680 en la
+  época 11 a 1,771 en la 18). Elegir la mejor época con val agrega sesgo optimista; sin elegir,
+  la última época también queda por debajo de B5 (1,687 y 1,702 contra 1,800).
+- El fallo heredado de B4 en 000476 se repite con la otra semilla (11,1 px; B5 4,2 px).
+
+**Límites.** Mismo val casi de una escena; dos semillas no alcanzan para barras de error
+serias; sin ELP, test público ni latencia.
+
+**Próximo paso.** Congelar el candidato (F3 sobre B4, semilla 0, época 15) y medir latencia en
+MPS a 1280×720, empaquetar y evaluar una sola vez en el test público.
+
 ## 2026-11-17 — T12: segunda semilla y ablaciones de Fusion v2
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-fusion` (T12 commiteado
