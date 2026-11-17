@@ -126,6 +126,7 @@ reading:
   # Remap puede deformar texto en otras lentes: conservar ambas rutas y volver a comparar.
   image_source: rectified  # original | rectified; `evaluar --imagen ambas`, mismo tamaño por ojo
   min_score: 0.65           # [0,1], descartar reconocimiento inseguro; candidato de desarrollo
+  speech_min_score: 0.90    # solo voz: piloto de 7 segmentos; no modifica métricas OCR
   line_height_ratio: 0.5   # centros de renglón a <= esta fracción de la menor altura se agrupan
   region_gap_ratio: 0.15   # corredor vacío mínimo / altura mediana; sellos vecinos tienen poco margen
   section_gap_ratio: 1.5   # separación vertical amplia / altura mediana: encabezado antes de columnas
@@ -133,7 +134,7 @@ reading:
   border_px: 8.0          # px de la imagen OCR: sugerir reencuadre si una caja toca el borde
   small_text_px: 20.0     # px de altura mediana: sugerir acercar solo si hay cajas pequeñas
   max_chars: 160          # caracteres por Say; acota síntesis y permite cancelar entre bloques
-  speech_max_blocks: 6    # título (mayor altura) primero; después el resto en orden visual
+  speech_max_blocks: 6    # regiones habladas: unir sus renglones; título primero, luego orden visual
   speech_max_chars: 320   # total, incluido «…y más texto chico.» si hay corte; sin diálogo
   speech_base_s: 0.3      # estimación de duración para espaciar bloques, s...
   speech_s_per_char: 0.065 # ...más s/carácter, Piper es_AR (T09); falta audio real en Mac

@@ -610,11 +610,22 @@ Se informan aciertos/n de referencia y también las ediciones numéricas anterio
 Estas métricas aún penalizan leyendas no visibles: no equivalen a evaluar solo texto legible.
 
 El orden visual separa columnas/regiones por corredores vacíos, luego ordena renglones;
-evita intercalar sellos contiguos. La voz adelanta el bloque de mayor altura (desempate por
-área) y sigue con los demás en orden visual. `speech_max_blocks` y `speech_max_chars`
-limitan la lectura total; `max_chars` limita cada Say. Si se corta, agrega
+evita intercalar sellos contiguos. Para voz se unen renglones de una columna hasta la
+próxima sección amplia, sin unir regiones vecinas. Se adelanta la región que contiene el
+bloque hablable de mayor altura (desempate por área); las demás conservan el orden visual.
+`speech_max_blocks` limita ahora regiones completas (no renglones OCR), `speech_max_chars`
+limita la lectura total y `max_chars` cada Say, cortando frases largas por palabras.
+Si se corta, agrega
 «…y más texto chico.» dentro del límite total, sin diálogo. La evaluación usa todos los
-bloques aceptados, independientemente del corte hablado. `evaluar --crop ... --calentar`
+bloques aceptados a `min_score=0,65`, independientemente del filtro/corte hablado.
+Solo la voz exige `speech_min_score=0,90`, elegido en siete segmentos de desarrollo:
+descarta fragmentos de score 0,659–0,852 y conserva Terrabusi (0,928). Sin diccionario
+ni corrección de marcas. Heurística: tokens de 3–30 letras con vocal, al menos 80 % letras
+y solo guion/apóstrofo internos; 1–2 letras requieren otra palabra larga o número en el
+mismo renglón. Conserva números enteros/decimales y `%`; descarta mezclas alfanuméricas y
+símbolos incrustados. Errores ortográficamente plausibles aún pueden pasar. Si todo queda
+filtrado, indica falta de confianza y pide acercar. Validación audible/Mac pendiente.
+`evaluar --crop ... --calentar`
 permite comparar CPU con un OCR previo sobre el primer frame, fuera del tiempo medido;
 CSV/JSON conservan conteos, ms, recorte, transcripción completa, texto hablado y hashes.
 

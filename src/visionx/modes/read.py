@@ -90,6 +90,8 @@ class ReadHandler:
                 hint = framing_hint(raw, job.selected_shape, self.s) if job.selected_shape else ""
                 return [Say("No encuentro texto." + (f" {hint}" if hint else ""))], True
             self._chunks.extend(spoken_chunks(ordered, self.s))
+            if not self._chunks:
+                return [Say("No pude leer con suficiente confianza. Probá acercarlo.")], True
         if now_ns < self._next_say_ns:
             return [], False
         if not self._chunks:

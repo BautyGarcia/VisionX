@@ -127,6 +127,9 @@ def test_tall_title_does_not_absorb_small_lines():
     "kwargs",
     [
         {"min_score": -1},
+        {"speech_min_score": 0.64},
+        {"speech_min_score": 1.01},
+        {"speech_min_score": float("nan")},
         {"window_s": 0},
         {"max_age_s": float("nan")},
         {"image_source": "auto"},
@@ -249,7 +252,9 @@ def controller(handler, view):
 
 @pytest.mark.parametrize("next_order", ["cancelar", "describí", "leé"])
 def test_cancel_or_new_order_halfway_through_reading(handlers, next_order):
-    handler = handlers(FakeReader([block("primero"), block("segundo", box=(10, 40, 100, 60))]))
+    handler = handlers(
+        FakeReader([block("primero"), block("segundo", box=(10, 40, 100, 60))]), max_chars=7
+    )
     ctl, sink, clock = controller(handler, View(captured=frame(0)))
     ctl.handle_text("leé")
     old = ctl.active.request_id
@@ -552,7 +557,19 @@ def test_evaluation_uses_only_window_and_preserves_sources(tmp_path):
     assert (tmp_path / "result.json").is_file()
     detail = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     assert detail["calentamiento"]
-    assert detail["resultados"][0]["hablado"] == ["Hola", "…y más texto chico."]
+    assert detail["resultados"][0]["hablado"] == ["Hola 120 g"]
+    silent_rows = evaluate(
+        [folder],
+        tmp_path / "silent.csv",
+        FakeReader([block("Hola"), block("120 g", box=(10, 31, 70, 39))]),
+        ReadingSettings(speech_min_score=1),
+        {},
+    )
+    # Solo cambia el habla; las métricas siguen usando incluso bloques no hablables.
+    for key in ("ocr", *text_metrics("Hola 120 g", "Hola 120 g")):
+        assert silent_rows[0][key] == rows[0][key]
+    silent = json.loads((tmp_path / "silent.json").read_text(encoding="utf-8"))
+    assert silent["resultados"][0]["hablado"] == []
     with (tmp_path / "result.csv").open(encoding="utf-8") as f:
         assert len(list(csv.DictReader(f))) == 1
 
@@ -625,8 +642,8 @@ def test_regions_keep_seals_in_columns_with_spanning_heading_and_footer(reverse)
 def test_speech_title_first_then_visual_order_without_mutating_metrics_input():
     blocks = [
         block("sello", box=(0, 0, 100, 20)),
-        block("TÍTULO", box=(0, 50, 100, 100)),
-        block("detalle", box=(0, 120, 100, 140)),
+        block("TÍTULO", box=(0, 80, 100, 130)),
+        block("detalle", box=(0, 220, 100, 240)),
     ]
     assert spoken_chunks(blocks, ReadingSettings()) == ["TÍTULO", "sello", "detalle"]
     assert [b.text for b in blocks] == ["sello", "TÍTULO", "detalle"]
@@ -646,6 +663,83 @@ def test_speech_character_limit_includes_suffix_and_long_words():
     assert spoken_chunks([block("texto")], ReadingSettings(speech_max_chars=24)) == ["texto"]
     chunks = spoken_chunks([block("x" * 500)], ReadingSettings(speech_max_chars=24, max_chars=4))
     assert sum(map(len, chunks)) <= 24 and all(len(c) <= 4 for c in chunks)
+
+
+def test_speech_joins_seal_lines_without_joining_neighboring_regions():
+    blocks = [
+        block("Terrabust", box=(912, 296, 997, 345)),
+        block("TITA", box=(1006, 295, 1179, 360)),
+        block("EXCESO EN", box=(918, 439, 1001, 461)),
+        block("AZÚCARES", box=(919, 456, 1001, 475)),
+        block("EXCESO EN", box=(1010, 432, 1098, 453)),
+        block("GRASAS", box=(1020, 446, 1086, 467)),
+        block("TOTALES", box=(1019, 462, 1088, 484)),
+    ]
+    ordered = reading_order(blocks, ReadingSettings())
+    assert spoken_chunks(ordered, ReadingSettings()) == [
+        "TITA",
+        "Terrabust",  # no corregir marcas
+        "EXCESO EN AZÚCARES",
+        "EXCESO EN GRASAS TOTALES",
+    ]
+    assert spoken_chunks(ordered, ReadingSettings(speech_max_blocks=3)) == [
+        "TITA",
+        "Terrabust",
+        "EXCESO EN AZÚCARES",
+        "…y más texto chico.",
+    ]
+
+
+def test_speech_region_splits_at_say_limit_and_keeps_words_and_region_boundary():
+    blocks = [
+        block("EXCESO EN", box=(0, 0, 80, 20)),
+        block("GRASAS TOTALES", box=(0, 21, 80, 41)),
+        block("OTRO SELLO", box=(100, 0, 180, 20)),
+    ]
+    chunks = spoken_chunks(blocks, ReadingSettings(max_chars=16))
+    assert chunks == ["EXCESO EN GRASAS", "TOTALES", "OTRO SELLO"]
+    assert all(len(c) <= 16 for c in chunks)
+
+
+@pytest.mark.parametrize(
+    "text,score,expected",
+    [
+        ("HEWLOOE", 0.66, []),
+        ("haicskin&na", 0.99, []),
+        ("bcdfgh", 0.99, []),
+        ("a" * 31, 0.99, []),
+        ("T1TA leche@ ###", 0.99, []),
+        ("a de g", 0.99, []),
+        ("EXCESO EN", 0.90, ["EXCESO EN"]),
+        ("Ácido hialurónico", 0.99, ["Ácido hialurónico"]),
+        ("Terrabust", 0.99, ["Terrabust"]),
+        ("120 g 1,5% 24% 36 0.5 19 %", 0.99, ["120 g 1,5% 24% 36 0.5 19 %"]),
+        ("leche de 120 g", 0.99, ["leche de 120 g"]),
+        ("%", 0.99, ["%"]),
+        ("anti-ácido d'angelo", 0.99, ["anti-ácido d'angelo"]),
+        ("-", 0.99, []),
+    ],
+)
+def test_speech_filter_plausibility_score_and_numbers(text, score, expected):
+    assert spoken_chunks([block(text, score)], ReadingSettings()) == expected
+
+
+def test_short_speech_words_need_context_in_same_line_not_just_same_region():
+    blocks = [
+        block("de", box=(0, 0, 20, 20)),
+        block("leche", box=(21, 0, 90, 20)),
+        block("la", box=(0, 21, 90, 41)),
+    ]
+    assert spoken_chunks(blocks, ReadingSettings()) == ["de leche"]
+
+
+def test_only_speech_rejected_reports_confidence_instead_of_finishing_silently(handlers):
+    handler = handlers(FakeReader([block("HEWLOOE", score=0.7)]))
+    handler.start(command(), View(captured=frame()), SEC // 10)
+    says, done = finish_selection(handler, command())
+    assert done and [s.text_or_sound for s in says] == [
+        "No pude leer con suficiente confianza. Probá acercarlo."
+    ]
 
 
 @pytest.mark.parametrize(
