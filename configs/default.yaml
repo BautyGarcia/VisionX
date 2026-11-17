@@ -16,6 +16,11 @@ camera:
 
 depth:
   compute: [1280, 720]      # resolución por ojo para profundidad
+  precisa:
+    estimador: ninguna     # --profundidad-precisa: B0–B4 o nombre de depth.estimadores
+    espera_s: 2.0          # margen sobre B4 CPU ~1,1 s; limitada por la vigencia de la orden
+    compute: null          # null hereda depth.compute; override solo para la precisa, [ancho, alto]
+  estimadores: {}           # nombre: {fabrica: "paquete.modulo:funcion", parámetros libres...}
   range_m: [0.5, 3.0]       # rango donde se anuncian metros
   min_coverage: 0.0         # bajo esto el DepthResult sale PARTIAL; se fija con el banco ELP
   # SGBM y filtros de B0-B2 (src/visionx/depth/stereo.py). CONGELADOS el 14/11 con InStereo2K

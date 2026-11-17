@@ -12,6 +12,7 @@ Solo dibuja resultados ya calculados: nunca corre un modelo para mostrar algo.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import cv2
 import numpy as np
@@ -38,6 +39,7 @@ class DashboardState:
     audio: str = "-"
     max_age_ms: float = 500.0  # más viejo que esto se marca en naranja
     geometry: StereoGeometry | None = None  # la de la profundidad; sin ella no hay vista de arriba
+    measurement: dict[str, Any] | None = None
 
 
 def depth_colormap(
@@ -119,6 +121,11 @@ def _status_lines(state: DashboardState) -> list[tuple[str, tuple[int, int, int]
         lines.append((f"colas: {state.queues}", TEXT))
     lines.append((f"orden: {state.command}", TEXT))
     lines.append((f"audio: {state.audio}", TEXT))
+    if state.measurement:
+        m = state.measurement
+        lines.append(
+            (f"Metros: {m.get('model_id')} | {m.get('latencia_ms')} ms | {m.get('motivo')}", TEXT)
+        )
     joint = state.joint
     if joint is not None:
         for obj in joint.objects[:4]:

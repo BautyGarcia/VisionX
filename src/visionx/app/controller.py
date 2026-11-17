@@ -209,6 +209,9 @@ class Controller:
     def _cancel_handler(self) -> None:
         """Hook opcional: invalidar selección/trabajo pendiente sin esperar inferencia."""
         if self.active is not None:
+            precise = getattr(self.latest_view(), "precise", None)
+            if precise is not None:
+                precise.cancel(self.active.request_id)
             cancel = getattr(self.handlers.get(self.active.mode), "cancel", None)
             if cancel is not None:
                 cancel()
