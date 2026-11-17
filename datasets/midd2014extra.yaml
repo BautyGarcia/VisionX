@@ -1,0 +1,322 @@
+nombre: midd2014extra
+rol: desarrollo (segunda validación de otro dominio, grupo dev)
+fuente: https://vision.middlebury.edu/stereo/data/scenes2014/
+licencia: Sin licencia declarada en la página; uso académico citando el paper
+cita: Scharstein et al., High-resolution stereo datasets with subpixel-accurate ground truth, GCPR 2014
+descargas:
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Backpack-perfect.zip
+  bytes: 108647761
+  sha256: c1af6865490ad6a18040e6c9875fa88594b6833d3cf38f284d9c1c53c77171b2
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Bicycle1-perfect.zip
+  bytes: 100820342
+  sha256: 9bff3d11d042e46617b16615519ab9743f7f1d615fbea1182935d1eba76998e0
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Cable-perfect.zip
+  bytes: 94056860
+  sha256: 6805d8e330bdc4a44410bfa0e0326f0c40072228a892239872c062b56cb83a41
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Classroom1-perfect.zip
+  bytes: 97738965
+  sha256: 138314871346c927346558e7b829f4e859e3413f787546b40472615d850812d9
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Couch-perfect.zip
+  bytes: 80541864
+  sha256: f1d26f8775dbae7c2ce02a6373d95ac56e05c19c88ee8ac9850bcbd3bdf8e0ab
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Flowers-perfect.zip
+  bytes: 97000110
+  sha256: 2bbd4ed034e0dfa82d47fa54bda4121731d3abc63117130e2ed32d599d0f1db1
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Mask-perfect.zip
+  bytes: 92685882
+  sha256: 100fcecd3f184044ae7094e0701757845ef031c7a5b9b3f38a3a030790583942
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Shopvac-perfect.zip
+  bytes: 67733626
+  sha256: 6393753d132b5c3171e085d65b45bee63c03df248d46a15a87260854ac7779d7
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Sticks-perfect.zip
+  bytes: 105987989
+  sha256: 411a6781a49dd0d9884f6b19bd6c9ceebf48d49584a307825688f37c712a4e2b
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Storage-perfect.zip
+  bytes: 90867951
+  sha256: f54f369edcd094b82e4ae8bdd05072d11bf5095098036bab5a74b2c03acadd7e
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Sword1-perfect.zip
+  bytes: 105157228
+  sha256: b9e12e3ccf515014851ccfd0851a861c819ea2c7948c10894cf35ce22cec84ce
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Sword2-perfect.zip
+  bytes: 90120847
+  sha256: 5aa3acab7fb10d49c1a1351ffcb9191f591fc2176f97fec67611a1564c61fc6f
+- url: https://vision.middlebury.edu/stereo/data/scenes2014/zip/Umbrella-perfect.zip
+  bytes: 96603088
+  sha256: b10767d94f596b30e0ab4b8a607c6ea2dadc2b3276e9e2df301ef126e8d30f3a
+descarga_manual: null
+reglas_gt:
+- disparidad en px, d = x_izq - x_der; infinito del PFM = sin GT (NaN en StereoSample)
+- 'sin máscara publicada: nonoccluded = GT con |d0(x) - d1(x - d0)| <= 1 px (derivada por nosotros con
+  disp1.pfm, no es la máscara oficial de MiddEval3)'
+- 'metros: Z = fx * baseline / (d + doffs), baseline de calib.txt en mm -> m'
+- 'media resolución (H) preparada al descargar: imágenes promedio 2x2, GT vecino más cercano x 0,5 (inválidos
+  siguen inválidos), calib con StereoGeometry.resized'
+notas:
+- 'Las 13 escenas de 2014 con GT que no están en MiddEval3, versión -perfect (rectificación perfecta).
+  MiddEval3 usa la -imperfect: el dev es algo más fácil.'
+- 'Se evalúa en H (como MiddEval3-H): data/raw/midd2014extra/H/, derivado de full/ por `descargar`; los
+  hashes de H dependen de la versión de OpenCV.'
+- 'Escena = nombre sin el número: Sword1 y Sword2 comparten escena (Sword).'
+- Sin escenas de MiddEval3 (chequeo en código). Rol dev, no test.
+particion:
+  dev:
+  - Backpack
+  - Bicycle
+  - Cable
+  - Classroom
+  - Couch
+  - Flowers
+  - Mask
+  - Shopvac
+  - Sticks
+  - Storage
+  - Sword
+  - Umbrella
+muestras:
+- id: Backpack
+  escena: Backpack
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Backpack/im0.png
+    bytes: 2546590
+    sha256: e1ba41789c1c9bda477968cd21079b58154e4be0ad13b956d411c0844ef30754
+  - ruta: H/Backpack/im1.png
+    bytes: 2602915
+    sha256: 9b01c3d301425ab3db03a76b09b8d28ef97b4e8e4c8be195845dea18cdb4e25d
+  - ruta: H/Backpack/disp0.pfm
+    bytes: 5927058
+    sha256: 6dfa2ec0813c363daeb5c29e9603a1f133ea1de334f8b9f2ab5e73c2a94113ca
+  - ruta: H/Backpack/disp1.pfm
+    bytes: 5927058
+    sha256: b679b9086d44641cdef3bca609edb798d3ab6267aed37df71d9807860514aa13
+  - ruta: H/Backpack/calib.txt
+    bytes: 243
+    sha256: 207318c1965e39e93eba33e2ceb4d76ee33d9e54aceaa4ee9e5cffc6c2527ba3
+- id: Bicycle1
+  escena: Bicycle
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Bicycle1/im0.png
+    bytes: 1993322
+    sha256: d192ab02e4f1c678a19329328d26c0ae48c2735a1f3d92238db034684ec04c78
+  - ruta: H/Bicycle1/im1.png
+    bytes: 2065815
+    sha256: 6821fcdec6c59d6becf145b6c5cb3865ddfb099ca46ac66eb1df679e2f4fbda7
+  - ruta: H/Bicycle1/disp0.pfm
+    bytes: 5999922
+    sha256: 03ecf26d32c6ca5164d6aad84e48593efd1e52a1ac5d6b4889088bfe629a3430
+  - ruta: H/Bicycle1/disp1.pfm
+    bytes: 5999922
+    sha256: 4b3bc207e938139a0e50d701a4cd092b2985394cadcae178c617643fddeecce9
+  - ruta: H/Bicycle1/calib.txt
+    bytes: 240
+    sha256: 691495b65f2728bf12869ecc9ea6b736c20bbfaf6e4273446edcff8deb68c338
+- id: Cable
+  escena: Cable
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Cable/im0.png
+    bytes: 1850644
+    sha256: 208f022412089a7e2855e19f5d7f1cd7563923a174efdae25fb272e1371fced6
+  - ruta: H/Cable/im1.png
+    bytes: 1831115
+    sha256: f13b68726e155ffa0995661e8e28b4a58b839fd08f30a6d93a9b0eeeb872bb1a
+  - ruta: H/Cable/disp0.pfm
+    bytes: 5547281
+    sha256: 6465a05e0f03a8390d8bf0f93bc74899513f7af94f9b2aa216cd7f58c49cd22e
+  - ruta: H/Cable/disp1.pfm
+    bytes: 5547281
+    sha256: 443b78ff2d30cbf8171e08e99549f23c386a3cf67c367a5326a6155f7feb4826
+  - ruta: H/Cable/calib.txt
+    bytes: 241
+    sha256: c3715e1e94896ff4a938cb09ce3d80c5baf877be4a71b40fc52262536fceaf78
+- id: Classroom1
+  escena: Classroom
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Classroom1/im0.png
+    bytes: 1956935
+    sha256: 6e189c85f6a1e9da2dabaf28a8234d9b8089ee842b06eb21e7b80b9923dd0af2
+  - ruta: H/Classroom1/im1.png
+    bytes: 1934990
+    sha256: 5719fb6103bfcc5561ec64fa634c3a5fac302e437602d6b09c2f5f268aafbd31
+  - ruta: H/Classroom1/disp0.pfm
+    bytes: 5760017
+    sha256: 47e178ae725b53ae672da84fb961996dc47f0332c5d3ccf40e07082ffa4049db
+  - ruta: H/Classroom1/disp1.pfm
+    bytes: 5760017
+    sha256: 6245101c3b2ac88e11927b8062cde482477159b028d208e06533c9342fa1b451
+  - ruta: H/Classroom1/calib.txt
+    bytes: 240
+    sha256: 132e30e90c30a2387321a1abb246b131ce5fc8ca07673785232e30e8989ea839
+- id: Couch
+  escena: Couch
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Couch/im0.png
+    bytes: 1761930
+    sha256: e16986276c34f7fa6e5fcd70c2f1babcb76a55fb3710a5bde86d1f28709f28aa
+  - ruta: H/Couch/im1.png
+    bytes: 1697366
+    sha256: 48be8074b6b8de64cc6f784e91f3bdb41657797ba8a278f5f52f6cdb7f65ba97
+  - ruta: H/Couch/disp0.pfm
+    bytes: 4581617
+    sha256: 7d1c7211b4437bc688dca09d46b2cbeea4ccd423f6d8bf9977ad1c404959aca7
+  - ruta: H/Couch/disp1.pfm
+    bytes: 4581617
+    sha256: 0d6f7f119a320522aa45b729274fb9eb6d2c1964aa3e80db737e9802545467a5
+  - ruta: H/Couch/calib.txt
+    bytes: 240
+    sha256: 52b2da2206b96bb7728ae8e727e7b7b8fa5e649a71175fd20c2cdfec3add6e47
+- id: Flowers
+  escena: Flowers
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Flowers/im0.png
+    bytes: 1948610
+    sha256: a9e3e91659f3e0cdd41d55e8205dbeb020ec4b7b8994d8c88cc25ed19b6e1d41
+  - ruta: H/Flowers/im1.png
+    bytes: 2000450
+    sha256: cc4dce796dca54f99df999791c626067001f01809d132bc8ff84d318890c7a8b
+  - ruta: H/Flowers/disp0.pfm
+    bytes: 5702417
+    sha256: e0e4cf48b6a0660b7f6297241dc330916450116be0b488253948a8b6c2d83bc4
+  - ruta: H/Flowers/disp1.pfm
+    bytes: 5702417
+    sha256: 5199f95d5799fa1dc5722add8b427d3a91912b780e39d5204438476e78df0fed
+  - ruta: H/Flowers/calib.txt
+    bytes: 242
+    sha256: 5e93135b3c0307c8853c73bc42f309c7798662a5be7d608461ca5e1af1f129e0
+- id: Mask
+  escena: Mask
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Mask/im0.png
+    bytes: 2101677
+    sha256: f2439f47a740c639d246c99ba2f0ca80484f156a43ee0cc5d065d4ddebfed3de
+  - ruta: H/Mask/im1.png
+    bytes: 2080948
+    sha256: 7f0bc6ca3f08d70d33b91501d45a9b71fe2ecb2505262b0c44aa344e9b2e5a83
+  - ruta: H/Mask/disp0.pfm
+    bytes: 5606354
+    sha256: 6f19343c3024634df0ff0ccad8a8aeb264f3a0a2fcec547199a4ae4c5779bad3
+  - ruta: H/Mask/disp1.pfm
+    bytes: 5606354
+    sha256: db2c752356da4b187d4e7140e97840b42e119dd64b41f3af7ebf096068b78039
+  - ruta: H/Mask/calib.txt
+    bytes: 241
+    sha256: 7303f8e60d1d003de21576a999e7a93489ff340e0b05fb8e5d56d781e0b55383
+- id: Shopvac
+  escena: Shopvac
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Shopvac/im0.png
+    bytes: 1597674
+    sha256: fc52f6db711bbefc8d6ee8ba18686367858e383d51f8d168246afc1bcd28ad05
+  - ruta: H/Shopvac/im1.png
+    bytes: 1540695
+    sha256: a970a2d4696b80dfdb203e162be418613dea8ed7a7c9d94c0f598ba9dba40e78
+  - ruta: H/Shopvac/disp0.pfm
+    bytes: 4702593
+    sha256: 6b1ded8d04d548aa7d23a7de86d8208d3dabb1ccd66b1ceb72dc409690a11119
+  - ruta: H/Shopvac/disp1.pfm
+    bytes: 4702593
+    sha256: 513c88d97b225e9b4acfe31c11e12ac1959d30b56c4e1ef1e304e7a9d3a3bef3
+  - ruta: H/Shopvac/calib.txt
+    bytes: 241
+    sha256: 8f1a141317354060a75ee7187aac8c18d3130e0cc93c304efa946271b2e33101
+- id: Sticks
+  escena: Sticks
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Sticks/im0.png
+    bytes: 2165349
+    sha256: 5e9fa7f6ccfb24a120d83cbfbc6f5ce578b32ad7ec60efe553f8cc79e6dac1bf
+  - ruta: H/Sticks/im1.png
+    bytes: 2372816
+    sha256: f2eeda726c6d66f114fe95c9884094d3763d995df245e8ae7da29efa8dca9233
+  - ruta: H/Sticks/disp0.pfm
+    bytes: 5750930
+    sha256: e91038f7cd70337e3c59ecd26ff5df7f2eb8b1648bd0b9c479a845615021d3a0
+  - ruta: H/Sticks/disp1.pfm
+    bytes: 5750930
+    sha256: e3d7083843f443dee21c3e9a1bb599a2669840c2f024bfb3842cd495c975a43e
+  - ruta: H/Sticks/calib.txt
+    bytes: 243
+    sha256: c44bdce1d2744928ce7e581d6df32acbbb1c38e7066cd20d5243b8caf7c800d4
+- id: Storage
+  escena: Storage
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Storage/im0.png
+    bytes: 1816659
+    sha256: fe9bdccac0375114b0a1369bde8e3a2dd68d66a16e1f8418a9b70100f6a86544
+  - ruta: H/Storage/im1.png
+    bytes: 1861491
+    sha256: b6291e3413445c2a6e43d7229cebbbcb9fa0ce62b115ecd731d86851cf4782d7
+  - ruta: H/Storage/disp0.pfm
+    bytes: 5488577
+    sha256: a588438f8099ee1c801d68dbb01c96ad4e39d1005ee10099162e14099715604b
+  - ruta: H/Storage/disp1.pfm
+    bytes: 5488577
+    sha256: 0cfe65cd25f06ff81dd94317d7667c385087a2b705fda1244aaabf2809201be4
+  - ruta: H/Storage/calib.txt
+    bytes: 238
+    sha256: 69f3820cec384b01ef66558dacc81e2fc12037d275f941308d12334fe3aaea51
+- id: Sword1
+  escena: Sword
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Sword1/im0.png
+    bytes: 2432187
+    sha256: caab42a248cdcfed2562a6aea46751173ed5163c79c2bbb5464460588f9611c2
+  - ruta: H/Sword1/im1.png
+    bytes: 2545667
+    sha256: bcad9c61eea3e157cb73a187a01d54ddde2057abe1861d93af578e705eabc05b
+  - ruta: H/Sword1/disp0.pfm
+    bytes: 5882258
+    sha256: 3868e71564b54a595e2ef93f350b2b3503e7bb2c4662604db4882baad84e0607
+  - ruta: H/Sword1/disp1.pfm
+    bytes: 5882258
+    sha256: 4ba3328bb53ec908de22e1c80ac81c9ceb9b298afe8e690a19b7b5960408b236
+  - ruta: H/Sword1/calib.txt
+    bytes: 240
+    sha256: 4143baa894bdec44962485e2dadb976554d7b52606ee2e09bd1990f2ce03aee5
+- id: Sword2
+  escena: Sword
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Sword2/im0.png
+    bytes: 1632137
+    sha256: d186b70eb80b2b2013a38f2b2722dccaeb4b93dd4eb69bcf43c7b1c6b7ae6fbf
+  - ruta: H/Sword2/im1.png
+    bytes: 1665877
+    sha256: 34dfac662fa3099f2b08a1838060736c897b6d9e26e03aac0d0604eae0ed21b3
+  - ruta: H/Sword2/disp0.pfm
+    bytes: 5712018
+    sha256: 91225954574cf8acc6d3e0a36aeef1109f3f614abe5d9924f82165b5ca1de639
+  - ruta: H/Sword2/disp1.pfm
+    bytes: 5712018
+    sha256: 0a3be0250274692561e2238284344ecd35ab0f24503f51a0c45bbcadf762551e
+  - ruta: H/Sword2/calib.txt
+    bytes: 242
+    sha256: 499b7a6c1a15f2501d674f8f4624aac6d64325ca353ae7727d027c859f1bbd85
+- id: Umbrella
+  escena: Umbrella
+  grupo_oficial: dev
+  archivos:
+  - ruta: H/Umbrella/im0.png
+    bytes: 1635588
+    sha256: 878cd673736c2e1d50fbb974a956a186a26048b788f3d7d4b4adf469caa6465c
+  - ruta: H/Umbrella/im1.png
+    bytes: 1641665
+    sha256: 51d550cd0e426a6e27df2a1eb7fef00c426dc10af571106e88fadb5b6b1f7f06
+  - ruta: H/Umbrella/disp0.pfm
+    bytes: 5967378
+    sha256: 181425d3ad5383ab036be373c7b1e38c35b7758529343f3f7192e5ee0a0e0fac
+  - ruta: H/Umbrella/disp1.pfm
+    bytes: 5967378
+    sha256: 9500ae71549a6501f3ff4bad661ebb6d893eb7de2c8587168575d98153a58328
+  - ruta: H/Umbrella/calib.txt
+    bytes: 240
+    sha256: 5ceb2b54d18d6c0ce9504101ddcf63d3fbb80cf5520112d9bac8213306e03f14

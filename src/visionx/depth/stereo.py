@@ -31,7 +31,7 @@ import cv2
 import numpy as np
 
 from visionx.shared import _validate as v
-from visionx.shared.contracts import DepthResult, DepthStatus, StereoFrame
+from visionx.shared.contracts import DepthResult, DepthStatus, StereoFrame, UncertaintyKind
 from visionx.shared.errors import EstimatorError, IdentityMismatch, InvalidInput
 from visionx.shared.geometry import StereoGeometry
 
@@ -125,6 +125,10 @@ class StereoOutput:
     disparity_px: np.ndarray  # H x W float32; NaN fuera de valid
     valid: np.ndarray  # H x W bool
     stats: dict[str, float]  # fracciones descartadas por cada filtro, para el diagnóstico
+    # |dL(x) - dR(x - dL)| en px sobre los mapas crudos de SGBM (ver lr_error); NaN donde no
+    # se puede calcular. B1 y B2 lo completan (ya calculan los dos ojos); B0 deja None.
+    # Lo usa Fusion como canal de entrada (T12).
+    lr_error_px: np.ndarray | None = None
 
 
 class SgbmMatcher:
@@ -181,12 +185,14 @@ class SgbmMatcher:
         disp_right, valid_right = _to_pixels(raw_right, self._right.getMinDisparity())
         disp_right = -disp_right
 
+        # Error L/R de cada píxel sobre los mapas crudos: B1 lo umbraliza y B2 lo conserva
+        # como diagnóstico (WLS no lo usa: tiene su propio mapa de confianza).
+        error = lr_error(disp_left, valid, disp_right, valid_right)
+
         if self.variant == "B1":
-            consistent = lr_consistency(
-                disp_left, valid, disp_right, valid_right, self.params.lr_max_diff_px
-            )
+            consistent = _within(error, self.params.lr_max_diff_px)
             stats["lr_descartada"] = float((valid & ~consistent).sum()) / total
-            return _finish(disp_left, valid & consistent, doffs, stats)
+            return _finish(disp_left, valid & consistent, doffs, stats, error)
 
         # B2: WLS recibe los mapas crudos (x16, convención de OpenCV) y la imagen guía.
         filtered = self._wls.filter(raw_left, left, disparity_map_right=raw_right)
@@ -196,7 +202,7 @@ class SgbmMatcher:
         stats["wls_confianza_baja"] = (
             float((~(confidence >= self.params.wls_min_confidence)).sum()) / total
         )
-        return _finish(disp, ok, doffs, stats)
+        return _finish(disp, ok, doffs, stats, error)
 
 
 def _to_pixels(raw: np.ndarray, min_disparity: int) -> tuple[np.ndarray, np.ndarray]:
@@ -207,20 +213,27 @@ def _to_pixels(raw: np.ndarray, min_disparity: int) -> tuple[np.ndarray, np.ndar
     return disp, valid
 
 
-def lr_consistency(
+def lr_error(
     disp_left: np.ndarray,
     valid_left: np.ndarray,
     disp_right: np.ndarray,
     valid_right: np.ndarray,
-    max_diff_px: float,
 ) -> np.ndarray:
-    """Chequeo de ida y vuelta entre los dos ojos.
+    """Error de ida y vuelta entre los dos ojos, en px: |dL(x) - dR(x - dL)|.
 
-    Un punto en x del ojo izquierdo con disparidad dL está en x - dL del derecho. Si la
-    medida es buena, el ojo derecho ve allí la misma disparidad (dR, en convención positiva):
-    |dL(x) - dR(x - dL)| <= max_diff_px. Falla típicamente en oclusiones (zonas que un ojo
-    ve y el otro no) y en coincidencias equivocadas.
+    Un punto en x del ojo izquierdo con disparidad dL está en x - dL del derecho (redondeado
+    al píxel más cercano). Si la medida es buena, el ojo derecho ve allí la misma disparidad
+    (dR, en convención positiva) y el error es chico. Crece típicamente en oclusiones (zonas
+    que un ojo ve y el otro no) y en coincidencias equivocadas.
+
+    Devuelve H x W float32 con NaN donde no se puede calcular: dL inválida, x - dL fuera de
+    la imagen o dR inválida en ese punto. NaN no es "error grande": es "sin evidencia".
     """
+    return _lr_error(disp_left, valid_left, disp_right, valid_right).astype(np.float32)
+
+
+def _lr_error(disp_left, valid_left, disp_right, valid_right) -> np.ndarray:
+    """lr_error en la precisión de las entradas (lr_consistency compara sin redondear)."""
     h, w = disp_left.shape
     cols = np.arange(w, dtype=np.float32)[None, :]
     target = np.rint(cols - np.where(valid_left, disp_left, 0.0)).astype(np.int64)
@@ -229,13 +242,40 @@ def lr_consistency(
     rows = np.arange(h)[:, None]
     back = disp_right[rows, target]
     back_ok = valid_right[rows, target]
+    computable = valid_left & inside & back_ok
+    # np.where elige antes de devolver: los NaN de afuera no se mezclan con los válidos.
     with np.errstate(invalid="ignore"):
-        close = np.abs(disp_left - back) <= max_diff_px
-    return valid_left & inside & back_ok & close
+        error = np.abs(disp_left - back)
+    return np.where(computable, error, np.nan)
+
+
+def _within(error: np.ndarray, max_diff_px: float) -> np.ndarray:
+    """Consistente = error calculable y <= max_diff_px (NaN compara False)."""
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(error) & (error <= max_diff_px)
+
+
+def lr_consistency(
+    disp_left: np.ndarray,
+    valid_left: np.ndarray,
+    disp_right: np.ndarray,
+    valid_right: np.ndarray,
+    max_diff_px: float,
+) -> np.ndarray:
+    """Chequeo de ida y vuelta entre los dos ojos: |dL(x) - dR(x - dL)| <= max_diff_px.
+
+    Se apoya en lr_error: un píxel es consistente si su error se puede calcular y no supera
+    el umbral.
+    """
+    return _within(_lr_error(disp_left, valid_left, disp_right, valid_right), max_diff_px)
 
 
 def _finish(
-    disp: np.ndarray, valid: np.ndarray, doffs: float, stats: dict[str, float]
+    disp: np.ndarray,
+    valid: np.ndarray,
+    doffs: float,
+    stats: dict[str, float],
+    lr_error_px: np.ndarray | None = None,
 ) -> StereoOutput:
     # Lo físico es d + doffs > 0 (geometry.py): con doffs > 0, d puede ser 0 o negativa.
     with np.errstate(invalid="ignore"):
@@ -243,7 +283,7 @@ def _finish(
     disp = disp.astype(np.float32, copy=True)
     disp[~valid] = np.nan
     stats["cobertura"] = float(valid.sum()) / valid.size
-    return StereoOutput(disp, valid, stats)
+    return StereoOutput(disp, valid, stats, lr_error_px)
 
 
 def compute_geometry(
@@ -283,11 +323,17 @@ def build_result(
     elapsed_ms: float,
     min_coverage: float,
     reason_if_partial: str | None = None,
+    uncertainty: np.ndarray | None = None,
+    uncertainty_kind: UncertaintyKind = UncertaintyKind.NONE,
 ) -> DepthResult:
     """Arma el DepthResult: metros desde la geometría, NaN afuera y status con su motivo.
 
     `reason_if_partial` declara un fallback (p. ej. B4 sin monocular): el resultado sale
     PARTIAL aunque la cobertura alcance, para que quien lo consume lo sepa.
+
+    `uncertainty` (H x W, en px de disparidad a la resolución de cómputo) y su
+    `uncertainty_kind` van juntos (p. ej. Fusion: b de Laplace). Como la disparidad, queda en
+    NaN fuera de la máscara final; el contrato valida el resto (b > 0 adentro).
     """
     depth, depth_ok = geometry.disparity_to_depth(disparity_px, valid)
     valid = valid & depth_ok
@@ -304,6 +350,10 @@ def build_result(
     disparity = disparity_px.astype(np.float32, copy=True)
     disparity[~valid] = np.nan
     depth[~valid] = np.nan
+    if uncertainty is not None:
+        v.array("uncertainty", uncertainty, np.float32, 2, disparity_px.shape)
+        uncertainty = uncertainty.copy()
+        uncertainty[~valid] = np.nan
     return DepthResult(
         session_id=frame.session_id,
         frame_id=frame.frame_id,
@@ -315,6 +365,8 @@ def build_result(
         reason=reason,
         inference_ms=elapsed_ms,
         depth_m=depth,
+        uncertainty=uncertainty,
+        uncertainty_kind=uncertainty_kind,
         doffs=geometry.doffs,
     )
 

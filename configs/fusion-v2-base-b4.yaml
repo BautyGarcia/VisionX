@@ -1,0 +1,64 @@
+# Ablación de Fusion v2 (T12): igual a fusion-v2.yaml salvo la base (B4 en vez de B5).
+# Fusion v2 (T12): `uv run --extra ml python -m visionx.depth.fusion entrenar --config configs/fusion-v2.yaml`.
+# Copia de configs/fusion-entrenamiento.yaml (v1) con lo que cambia el rediseño del 16/11 (BITACORA):
+# canales F3 (corrección local de B5 calculada en el frame completo), U-Net de 5 niveles y bloques
+# dilatados en el nivel más bajo para ver anclas a cientos de px. La base sigue siendo B4; B5 y B4 se
+# informan en val en el mismo soporte para comparar.
+# Aprende con InStereo2K train y elige el checkpoint con InStereo2K val (EPE media por muestra,
+# frames completos, soporte = GT ∩ B4). El test público no aparece acá.
+# SGBM, alineación, monocular y canales salen de configs/default.yaml (sección depth): se copian
+# al config.yaml del run para que la base B4 quede registrada junto a los pesos.
+# Las claves son los nombres de TrainConfig (src/visionx/depth/fusion/train.py).
+
+variant: F3                 # F0 (10) | F1 (+ valid_mono, 11) | F3 (F1 + corr_local, dist_ancla,
+                            # densidad_anclas, 14); F3 usa depth.b5 (default.yaml)
+base: B4                    # ABLACIÓN: la red recibe la corrección de B5 como canal (F3) pero parte
+                            # de B4: ¿aprende sola lo que hace la regla fija?
+
+model:                      # ModelConfig (model.py); in_channels sale de la variante
+  widths: [32, 64, 128, 192, 256]  # 5 niveles (4 reducciones x2): 7,75 M parámetros con F3
+  bottleneck_dilations: [2, 4, 8]  # bloques residuales dilatados a 1/16: campo receptivo teórico
+                            # 1156 px (v1: 124 px; model.receptive_field)
+  norm: batch               # group | batch | none. GroupNorm normaliza con las estadísticas de
+                            # cada imagen: la salida depende de toda la entrada, y recorte (train)
+                            # y frame completo (val, app) no dan lo mismo. BatchNorm en eval() y
+                            # "none" son locales. Ver model.py y BITACORA T12
+  norm_groups: 8            # grupos de GroupNorm (solo con norm: group)
+  residual_scale: 0.0078125 # 1/128: una unidad de salida de la red = W_ref/128 px (~8 px a 1080)
+  b_floor: 0.001            # piso de b en unidades de red
+  b_init: 0.25              # b inicial en unidades de red (~2 px con W_ref ~1080)
+
+loss: nll                   # nll (Laplace: |d−gt|/b + log 2b, en px) | l1 (ablación sin b)
+l1_weight: 0.0              # L1 extra sumado a la NLL (0 = solo NLL)
+
+crop: [640, 1080]           # alto, ancho del recorte en px. 640 de alto: con 320 y campo receptivo de
+                            # 1156 px, el nivel más bajo veía casi solo relleno en vertical (20 filas
+                            # contra 54 en el frame completo). Ancho completo de InStereo2K: con 448 al
+                            # azar, la franja izquierda (x < 160, 27-34 % del error de B4) se veía
+                            # 5-9 veces menos que el centro (diagnóstico del 16/11, BITACORA)
+crops_per_image: 1          # 4 recortes de 640x1080 = mismos píxeles por paso que 8 de 320x1080
+batch_images: 4             # imágenes por paso => 4 recortes por paso
+min_valid_fraction: 0.1     # recorte con menos máscara (GT ∩ B4) se reintenta (hasta 20 veces)
+
+epochs: 20                  # ~280 pasos por época con 1119 imágenes => ~5600 pasos
+lr: 1.0e-3                  # AdamW; pico tras el warmup
+weight_decay: 1.0e-4
+warmup_steps: 100           # warmup lineal (nunca más de 1/5 de los pasos totales)
+min_lr_ratio: 0.02          # el coseno baja hasta lr * 0,02
+grad_clip: 1.0              # norma máxima del gradiente: la NLL da gradientes grandes si b es chica
+seed: 0
+
+num_workers: 4              # DataLoader con spawn (macOS). M2 Max, 16/11: 0 -> 9 imágenes/s,
+                            # 2 -> 13, 4 -> 26, 6-8 -> 25 (sin ganancia). Con 0, los datos frenan la GPU
+device: auto                # auto | mps | cuda | cpu
+val_every: 1                # validar cada N épocas (y siempre en la última)
+
+limit_train: 0              # 0 = todas; N = N repartidas (pilotos; la caché tiene que cubrirlas)
+limit_val: 0
+
+overfit:                    # prueba M5 (`python -m visionx.depth.fusion overfit`)
+  images: 4                 # imágenes de train
+  crops_per_image: 3        # 4 x 3 = 12 recortes fijos
+  steps: 400
+  lr: 1.0e-3                # Adam sin weight decay ni scheduler
+  target_reduction_pct: 80.0  # M5: la EPE tiene que bajar >= 80 % respecto de B4
