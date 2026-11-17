@@ -325,6 +325,9 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
+    from visionx.app.m1 import register
+
+    register(sub)
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument(

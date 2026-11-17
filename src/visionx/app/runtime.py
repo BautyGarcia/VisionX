@@ -429,7 +429,7 @@ class Pipeline:
         with self._joint_lock:
             if self._seen is None or _newer(key, self._seen.frame.key):
                 self._seen = seen
-        return seen
+            return self._seen
 
     def view(self) -> View:
         """Lo que reciben los modos en cada tick del controlador."""
