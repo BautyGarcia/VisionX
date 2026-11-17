@@ -98,7 +98,7 @@ class OfflineVision:
             )
 
     def observe(self, frame, methods):
-        from visionx.app.spatial import ProvisionalSpatialEstimator
+        from visionx.app.__main__ import build_spatial
 
         detection = self.detector.predict(frame)
         results = {}
@@ -107,12 +107,8 @@ class OfflineVision:
                 self.estimators[name] = build_estimator(name, self.cfg, self.geometry)
             estimator = self.estimators[name]
             depth = estimator.predict(frame)
-            # Mismos parámetros y misma política que build_spatial de la app.
-            spatial = ProvisionalSpatialEstimator(
-                self.geometry,
-                depth_geometry=estimator.geometry,
-                **(self.cfg.get("spatial_provisional") or {}),
-            )
+            # La misma ubicación de la app.
+            spatial = build_spatial(self.cfg, self.geometry, estimator.geometry)
             results[name] = (depth, spatial.locate(frame, depth, detection))
         return detection, results
 

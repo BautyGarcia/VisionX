@@ -406,3 +406,64 @@ def test_real_b4_from_local_weights_only():
         assert np.isfinite(result.inference_ms)
     finally:
         est.close()
+
+
+def test_registry_b5_uses_b5_section(monkeypatch, setup_precision):
+    from visionx.depth.hybrid import HybridEstimator
+    from visionx.shared.config import load_config
+
+    monkeypatch.setattr(
+        "visionx.depth.mono.DepthAnythingV2", lambda cfg: SimpleNamespace(model_id="fake-mono")
+    )
+    est = build_estimator("B5", load_config(), setup_precision.source.geometry)
+    assert isinstance(est, HybridEstimator)
+    assert est.matcher.variant == "B5" and est.matcher.local_params is not None
+
+
+def test_registry_b5_without_section_is_clear(monkeypatch, setup_precision):
+    monkeypatch.setattr(
+        "visionx.depth.mono.DepthAnythingV2", lambda cfg: SimpleNamespace(model_id="fake-mono")
+    )
+    with pytest.raises(InvalidInput, match="depth.b5"):
+        build_estimator("B5", {}, setup_precision.source.geometry)
+
+
+def test_registry_fusion_goes_to_a_loader_with_full_config(monkeypatch, setup_precision):
+    calls = []
+
+    def load_estimator(cfg, geometry, *, package=None):
+        calls.append((cfg, geometry, package))
+        return FakeDepthEstimator(geometry)
+
+    module = ModuleType("visionx.depth.fusion.estimator")
+    module.load_estimator = load_estimator
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    geometry = setup_precision.source.geometry
+    entry = {"tipo": "fusion", "paquete": "b"}
+    cfg = {"depth": {"fusion": {"paquete": "a"}, "estimadores": {"f-b5": entry}}}
+    build_estimator("fusion", cfg, geometry)
+    build_estimator("f-b5", cfg, geometry)
+    assert [(c is cfg, g is geometry, p) for c, g, p in calls] == [
+        (True, True, None),
+        (True, True, "b"),
+    ]
+
+
+def test_registry_fusion_without_package_is_invalid(setup_precision):
+    pytest.importorskip("torch")
+    from visionx.shared.config import load_config
+
+    with pytest.raises(InvalidInput, match="paquete"):
+        build_estimator("fusion", load_config(), setup_precision.source.geometry)
+
+
+def test_app_uses_a_locator_and_can_go_back_to_provisional(setup_precision):
+    from visionx.app.__main__ import build_spatial
+    from visionx.depth.spatial import ObjectLocator
+    from visionx.shared.config import load_config
+
+    cfg = load_config()
+    geometry = setup_precision.source.geometry
+    assert isinstance(build_spatial(cfg, geometry), ObjectLocator)
+    cfg["spatial_provisional"]["usar"] = True
+    assert isinstance(build_spatial(cfg, geometry), ProvisionalSpatialEstimator)

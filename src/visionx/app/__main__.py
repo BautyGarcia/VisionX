@@ -47,6 +47,7 @@ from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
 from visionx.modes import build_handlers
 from visionx.shared.config import ROOT, load_config
 from visionx.shared.errors import EstimatorError, InvalidInput, SourceError
+from visionx.shared.interfaces import SpatialEstimator
 from visionx.voice.commands import CommandParser
 from visionx.voice.output import AudioOutput, FakePlayer, PlaybackRecord
 
@@ -122,21 +123,26 @@ def load_script(path: str | None) -> list[tuple[float, str]]:
     return sorted(items)
 
 
-def build_spatial(
-    cfg: dict[str, Any], geometry, depth_geometry=None
-) -> ProvisionalSpatialEstimator:
-    """Ubicación provisoria con los parámetros de `spatial_provisional` (config)."""
+def build_spatial(cfg: dict[str, Any], geometry, depth_geometry=None) -> SpatialEstimator:
+    """Ubicación por objeto de A (`depth/spatial`, sección `spatial`).
+
+    `spatial_provisional.usar: true` vuelve a la ubicación provisoria de B, para comparar.
+    """
     s = cfg.get("spatial_provisional") or {}
-    return ProvisionalSpatialEstimator(
-        geometry,
-        min_valid=float(s.get("min_valid", 0.5)),
-        depth_geometry=depth_geometry,
-        max_rel_spread=float(s.get("max_rel_spread", 0.5)),
-        border_px=float(s.get("border_px", 2.0)),
-        layer_min_frac=float(s.get("layer_min_frac", 0.25)),
-        front_percentile=float(s.get("front_percentile", 20.0)),
-        spread_allowance_m=float(s.get("spread_allowance_m", 0.4)),
-    )
+    if s.get("usar"):
+        return ProvisionalSpatialEstimator(
+            geometry,
+            min_valid=float(s.get("min_valid", 0.5)),
+            depth_geometry=depth_geometry,
+            max_rel_spread=float(s.get("max_rel_spread", 0.5)),
+            border_px=float(s.get("border_px", 2.0)),
+            layer_min_frac=float(s.get("layer_min_frac", 0.25)),
+            front_percentile=float(s.get("front_percentile", 20.0)),
+            spread_allowance_m=float(s.get("spread_allowance_m", 0.4)),
+        )
+    from visionx.depth.spatial import build_locator
+
+    return build_locator(cfg, geometry, depth_geometry)
 
 
 def build_depth(args: argparse.Namespace, cfg: dict[str, Any], geometry, synthetic):
@@ -146,7 +152,7 @@ def build_depth(args: argparse.Namespace, cfg: dict[str, Any], geometry, synthet
     if args.profundidad == "fake":
         depth = FakeDepthEstimator(geometry, source=synthetic, delay_ms=args.retraso_profundidad)
         return depth, build_spatial(cfg, geometry), geometry
-    if synthetic is not None and args.profundidad in {"B0", "B1", "B2", "B3", "B4"}:
+    if synthetic is not None and args.profundidad in {"B0", "B1", "B2", "B3", "B4", "B5", "fusion"}:
         raise InvalidInput(f"--profundidad {args.profundidad} necesita una grabación o usb")
     depth = build_estimator(args.profundidad, cfg, geometry)
     depth_geometry = getattr(depth, "geometry", geometry)
@@ -358,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         p.add_argument("--detector", choices=["fake", "yolo"], default="fake")
         p.add_argument(
-            "--profundidad", default="fake", help="fake, ninguna, B0–B4 o depth.estimadores"
+            "--profundidad", default="fake", help="fake, ninguna, B0–B5, fusion o depth.estimadores"
         )
         p.add_argument("--fps", type=float, default=30.0, help="ritmo de la fuente sintética")
         p.add_argument("--frames", type=int, default=0, help="cortar la fuente tras N frames")
@@ -371,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--profundidad-precisa",
         default=None,
-        help="B0–B4, nombre de depth.estimadores o ninguna (default config)",
+        help="B0–B5, fusion, nombre de depth.estimadores o ninguna (default config)",
     )
     p.add_argument("--segundos", type=float, default=0.0, help="0 = hasta q o fin de la fuente")
     p.add_argument("--sin-ventana", action="store_true")

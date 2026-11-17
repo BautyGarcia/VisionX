@@ -237,7 +237,10 @@ def test_parity_uses_same_masks_spatial_settings_and_catches_units(delivery, mon
     # Solo disparidad consistente es contractual; sospecha de unidades contra cinta es aviso.
     assert code == 0
     assert any("metros/disparidad" in aviso for aviso in report["metodos"][0]["pares"][0]["avisos"])
-    assert report["metodos"][0]["objetos"][0]["z_m"] is None
+    # La provisoria se abstenía sin depth_m; la de A mide en disparidad y da metros absurdos
+    # (36 m contra 1 m de cinta): lo que importa es que la recepción lo marque.
+    z_m = report["metodos"][0]["objetos"][0]["z_m"]
+    assert z_m is None or z_m > 4.0
 
     entry.update(broken=None, disparity_only=True, z_m=1.0, uncertainty=False)
     code, report = run()

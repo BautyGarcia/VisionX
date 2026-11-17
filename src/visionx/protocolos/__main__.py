@@ -21,7 +21,7 @@ def main(argv=None) -> int:
         ev.add_argument("--config", help="override YAML explícito")
         if metric in ("m7", "describir"):
             ev.add_argument(
-                "--metodos", nargs="+", default=["B0"], help="B0–B4 o depth.estimadores"
+                "--metodos", nargs="+", default=["B0"], help="B0–B5, fusion o depth.estimadores"
             )
             ev.add_argument("--ventana", type=float, default=0.4, help="ancho total en s")
             ev.add_argument("--frames", type=int, default=3)

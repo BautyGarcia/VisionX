@@ -17,7 +17,7 @@ camera:
 depth:
   compute: [1280, 720]      # resolución por ojo para profundidad
   precisa:
-    estimador: ninguna     # --profundidad-precisa: B0–B4 o nombre de depth.estimadores
+    estimador: ninguna     # --profundidad-precisa: B0–B5, fusion o depth.estimadores
     espera_s: 2.0          # margen sobre B4 CPU ~1,1 s; limitada por la vigencia de la orden
     compute: null          # null hereda depth.compute; override solo para la precisa, [ancho, alto]
   estimadores: {}           # nombre: {fabrica: "paquete.modulo:funcion", parámetros libres...}
@@ -122,6 +122,7 @@ detection:
 # Z = percentil front_percentile de la capa más cercana de la máscara. Candidatos medidos en
 # clips de desarrollo, sin calibrar; ver BITACORA T09.
 spatial_provisional:
+  usar: false              # true = ubicación provisoria de B en vez de la de A (spatial), para comparar
   min_valid: 0.5            # fracción mínima de la máscara con profundidad para decir metros
   layer_min_frac: 0.25      # una capa de profundidad cuenta como objeto con al menos esto de la máscara
   front_percentile: 20      # percentil de Z dentro de la capa: la superficie del frente

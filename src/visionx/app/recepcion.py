@@ -59,7 +59,7 @@ def sha256(path: Path) -> str:
 def verify_weights(name: str, cfg: dict) -> dict:
     """Verificar ANTES de invocar una fábrica externa; los baselines verifican su caché."""
     entry = ((cfg.get("depth") or {}).get("estimadores") or {}).get(name)
-    if name in {"B0", "B1", "B2", "B3", "B4"} or not isinstance(entry, dict):
+    if name in {"B0", "B1", "B2", "B3", "B4", "B5", "fusion"} or not isinstance(entry, dict):
         return {}
     weights = next(
         (entry[k] for k in ("pesos", "weights", "weights_path", "checkpoint") if entry.get(k)), None
@@ -595,7 +595,7 @@ def register(sub):
     parser = sub.add_parser(
         "recibir-profundidad", help="validar entrega de un DepthEstimator sobre replay"
     )
-    parser.add_argument("nombre", help="B0–B4 o nombre en depth.estimadores")
+    parser.add_argument("nombre", help="B0–B5, fusion o nombre en depth.estimadores")
     parser.add_argument("--clip", default="recordings/dev-1114-distancias")
     parser.add_argument("--config")
     parser.add_argument("--pares", type=int, default=5, help="pares uniformes medidos (default 5)")
