@@ -137,7 +137,7 @@ def test_spec_from_config_and_key_material(tmp_path):
     spec = cache.CacheSpec.from_config(depth)
     assert spec.stereo_variant == depth["b4"]["estereo"] == "B2"
     assert spec.mono == cache.mono_identity(MonoConfig.from_config(depth["mono"]))
-    assert str(spec.root).endswith("data/cache/fusion")
+    assert spec.root.as_posix().endswith("data/cache/fusion")  # as_posix: en Windows str usa "\\"
     files = {"a/left.png": "0" * 64, "a/right.png": "1" * 64}
     material = spec.key_material(files, 272, 0.0)
     assert material["sgbm"]["num_disparities"] == 272  # el rango del par entra en la clave
