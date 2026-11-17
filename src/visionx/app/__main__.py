@@ -348,6 +348,9 @@ def main(argv: list[str] | None = None) -> int:
     from visionx.app.m1 import register
 
     register(sub)
+    from visionx.app.recepcion import register as register_reception
+
+    register_reception(sub)
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument(
