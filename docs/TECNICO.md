@@ -233,6 +233,21 @@ Congelar cuál variante estéreo aporta B4 y sus umbrales con validación, antes
 **B4 es el control clave:** ya combina ambas fuentes; si Fusion mejora SGBM pero no B4,
 no habremos demostrado que aprender la combinación agrega valor.
 
+**B5, segundo control fijo (T12, 16/11; `align.py`, `hybrid.py`, sección `depth.b5`).** Nació
+del diagnóstico de Fusion: el 72 % del error de B4 en val está en los huecos rellenados con
+monocular, porque una sola recta no vale para toda la imagen.
+- **Qué hace:** estéreo donde es válido; en los huecos, monocular con la recta global más una
+  **corrección afín local**: en cada píxel, mínimos cuadrados con pesos gaussianos (σ) sobre las
+  anclas estéreo, con la pendiente atada a la global (λ). Sin aprendizaje.
+- **Ajuste:** mismo protocolo que T05 (acierto-2 en InStereo2K val, confirmación en train) con
+  `python -m visionx.depth.fusion ajustar-b5`. Congelado: RANSAC, σ 120 px, λ 100, sin exclusión.
+  Con σ ≤ 60 px empeora: el estéreo pegado a los huecos es el menos confiable.
+- **Para qué sirve:** B4 sigue siendo el control de T05. B5 evita atribuirle a la red lo que
+  logra una regla escrita a mano: Fusion tiene que ganarle a los dos.
+- `AlignParams.method` admite `huber`; por EPE da algo mejor, pero rechaza más rectas y pierde
+  cobertura. Esa variante («B5-EPE») se informa como control adicional, no se usa en la app.
+- Umbrales en px elegidos a ~1080×860: revisar σ con el banco ELP, como los de la alineación.
+
 ### Monocular preentrenada
 
 Usar el mapa relativo flotante de **Depth Anything V2 Small**, no una imagen coloreada del
@@ -299,6 +314,12 @@ F0 recibe diez; el significado y orden forman parte del checkpoint, archivo con 
 F1 agrega el canal 11, **máscara monocular válida y alineada**. Es la primera candidata
 recomendada: un cero de relleno no comunica por sí solo que el monocular no tiene escala fiable.
 F0 conserva utilidad como referencia; toda variante debe manejar validez correctamente.
+
+**F3, implementada (T12, `fusion-canales-2`).** F1 más tres canales que traen contexto lejano,
+calculados sobre el frame completo antes de recortar: `corr_local` (cuánto corrige B5 respecto de
+B4), `dist_ancla` (distancia a la ancla estéreo más cercana) y `densidad_anclas`. Motivo: la
+señal útil está a cientos de px y una U-Net chica no la alcanza. La F2 prevista (calidad del
+ajuste) no se implementó.
 
 Opciones posteriores, no agregados automáticos: F2 introduce calidad del ajuste, como ratio
 de anclas y residuo; F3 introduce distancia a anclas fiables. Compararlas con igual protocolo
@@ -408,7 +429,13 @@ El entrenamiento y la aplicación deben coincidir dentro de tolerancia declarada
   `MODEL_CARD.md`. `load_package` rechaza hash, versión de canales o base distintos.
 - **Aplicación:** `load_estimator(cfg, geometry)` devuelve un `FusionEstimator`. El `DepthResult`
   trae b en px como `LAPLACE_B`. Se activa con `depth.fusion.paquete`.
-- Resultados y estado del entrenamiento: BITACORA 2026-11-16.
+- **Base configurable:** `base: B4 | B5` en la config de entrenamiento. El paquete registra la
+  base y sus parámetros, y el estimador la reconstruye.
+- **Receta v2** (`configs/fusion-v2*.yaml`): F3, 5 niveles (32–256) con bloques dilatados
+  opcionales, recortes 640×1080. Se libera la memoria de MPS al final de cada época.
+- **Latencia:** `python -m visionx.depth.fusion latencia <paquete> <clip>`, protocolo M9.
+- **Candidato al 17/11:** F3 sobre B4 (`fusion-f3-b701d067`). Resultados, ablaciones y límites:
+  BITACORA 2026-11-16 y 2026-11-17.
 
 ## Incertidumbre y objetos
 
@@ -921,6 +948,20 @@ Congelar modelo/config/umbrales/commit antes del test reservado. Comparar difere
 por escena y registrar casos que empeoran si aparecen. La hipótesis puede fallar sin que eso
 invalide la evaluación. Después del test, nuevos cambios se etiquetan como exploratorios;
 no presentar el mismo test reutilizado como una segunda confirmación independiente.
+
+**Estado del test público y condiciones para usarlo con Fusion (decidido 17/11).**
+- MiddEval3-H y ETH3D ya se usaron una vez para B0–B4 (T05, 14/11). B5 y Fusion se diseñaron
+  después, con diagnósticos de InStereo2K val; el test no eligió nada, pero ya se había visto
+  que en Middlebury la alineación aceptaba rectas malas. Se declara como límite.
+- InStereo2K val es casi una sola escena (100 de 102 pares de `tramo-04`) y eligió B5, la
+  arquitectura, la base y la época. Antes del test hace falta una **segunda validación de otro
+  dominio**, que además ejercite el evaluador con `doffs` y rangos por escena.
+- El test se corre **una vez**, con el candidato, la config y el commit congelados, y con el
+  protocolo escrito antes en BITACORA: métricas principales AbsRel y bad-2 en Middlebury (13/11),
+  región noc, media por escena, cobertura propia y soporte común; comparaciones Fusion contra B4
+  (la que define el resultado), contra B5 y contra B5-EPE; diferencias pareadas por escena.
+- Lo ideal es usarlo en la ventana del calendario (27/11–3/12), junto con la incertidumbre
+  (T13) y los comparadores (T14) sobre los mismos pares.
 
 ### Lite y Fusion-FFS — T17/T18
 
