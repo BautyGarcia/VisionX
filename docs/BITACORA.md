@@ -82,7 +82,7 @@ Whisper base o small con la prueba de micrófono de Tomás.
 
 **Tarea:** T07, T09, T10, T11. **Persona/agente:** Tomás / Claude Code (coordinación, revisión e
 integración). **Rama:** `b/beta-integracion` (local, sin publicar), que une `b/T07-vivo`,
-`b/T10-leer` y `b/T11-describir` sobre `8e0a94a`.
+`b/T08-reglas`, `b/T10-leer` y `b/T11-describir` sobre `8e0a94a`.
 
 **Objetivo.** Dejar los cuatro modos (buscar/guiar, distancia, leer, describir) listos para la
 beta en vivo con la ELP, probados de punta a punta sobre clips.
@@ -96,9 +96,29 @@ beta en vivo con la ELP, probados de punta a punta sobre clips.
   vencer la orden. `modes/__init__.py` y `configs/default.yaml`: unión de ambos.
 - Guiones de órdenes para cada clip y checklist de la sesión en vivo (fuera de Git:
   `outputs/beta/ordenes-*.jsonl`, `outputs/beta/CHECKLIST.md`).
+- `b/T08-reglas` `5be9e7b`: las reglas aceptan «encontré», «encuéntrame», cualquier «descri…»
+  («descríme») y «cuéntame», que Whisper escribió en el bucle con Piper. Sobre las mismas
+  transcripciones del bucle: small 36/61 → 39/61; base sin cambios (29/61). El resto de los
+  fallos del bucle son de reconocimiento de la voz sintética («¡Givas!» por «¿Qué ves?»).
+  Este commit se hizo por error salteando el hook de pre-commit; ruff se había corrido antes y
+  el hook se corrió a mano después, sin problemas.
 
-**Evidencia.** Suite en `b/beta-integracion` (`8cd497c` + merges): **588 aprobados** con todos
-los extras; **585 aprobados y 3 omitidos** en un entorno solo-núcleo como CI. Ruff y formato OK.
+**Evidencia.** Suite en `b/beta-integracion` (`99830cc`, con las rondas 4 de T10/T11 y T08):
+**614 aprobados** con todos los extras; **611 aprobados y 3 omitidos** en un entorno
+solo-núcleo como CI. Ruff y formato OK.
+
+Prueba de humo final, CPU libre (`outputs/beta/final2/`), orden → primera frase útil:
+
+| Modo | Latencia | Ejemplo dicho |
+|---|---|---|
+| Distancia | 0,6–2,5 s (2,5 s en la primera orden, a 1,5 s de arrancar) | «Veo 2 tazas: a la izquierda, a 1,1 metros; a la derecha, abajo, a 0,5 metros.» |
+| Buscar | 0,1 s a la primera frase | «Veo 2 botellas. ¿Cuál?…», «Botella al frente, a 1,6 metros.», «Perdí botella: quedó a la izquierda.» |
+| Leer | 0,9–1,2 s | «TITA» «EXCESO EN AZÚCARES»… · «FORCE AMAZING ASHWA» · «fusion» |
+| Describir | 0,9–1,3 s | «Al frente, una silla a 1,5 metros. A la derecha, tres sillas, la más cercana a 0,6 metros, y 3 cosas más.» |
+
+Las corridas sobre clips no son deterministas: qué frames se saltean depende de los tiempos de
+cada hilo (en una corrida «buscar» preguntó «¿Cuál?» al empezar y en la otra no).
+La primera tanda, antes de las rondas 4 y con la CPU compartida con dos agentes:
 Pruebas de humo con el pipeline real (`python -m visionx.app ejecutar --fuente <clip> --detector
 yolo --profundidad B0 --sin-ventana --ordenes ... --traza ...`), yolo26s-seg @960, SGBM B0,
 Windows i7-10700K CPU, **con la CPU compartida con dos agentes**: tiempos solo indicativos.
@@ -126,7 +146,8 @@ la ELP siguiendo el checklist; publicar los PR cuando Tomás lo decida.
 ## 2026-11-17 — T11: describir con plantilla local, agrupado por zona y dos niveles de confianza
 
 **Tarea:** T11. **Persona/agente:** Tomás / Codex (implementación, 3 rondas), Claude Code
-(especificación, revisión, commits). **Rama:** `b/T11-describir`: `546d9e6`, `d066b8f`, `8cd497c`.
+(especificación, revisión, commits). **Rama:** `b/T11-describir`: `546d9e6`, `d066b8f`, `8cd497c`,
+`ec5f08a` (4 rondas).
 
 **Hecho.**
 - `modes/describe.py::DescribeHandler`: congela una unión medida posterior a la orden (misma
@@ -141,6 +162,11 @@ la ELP siguiendo el checklist; publicar los PR cuando Tomás lo decida.
   ≥ 0,27 persistente, nunca con metros. Pisos por clase para confusiones vistas en desarrollo
   (cama/ropa, banco y portátil/estructura de jardín, banana/peluche, horno/lavarropas). «No
   reconozco objetos…» solo si no queda ningún candidato persistente.
+- Ronda 4 (`ec5f08a`): la ronda 3 quitaba todos los metros para entrar en 8 s («A la izquierda,
+  una silla, una botella y una taza.»). Ahora el recorte sigue prioridades: (1) metros del
+  objeto afirmado más cercano, que nunca se quitan; (2) nombres por relevancia; (3) metros del
+  resto; (4) los «parece haber». Cláusulas con metros: escenas 2 → 11, distancias 0 → 2; duración
+  máxima estimada ≤ 8 s y 0 sin respaldo en ambas.
 
 **Evidencia** (clips de desarrollo `escenas` y `distancias`, simulador con yolo26s @960 + B0;
 revisión visual de un agente, no anotación humana independiente):
@@ -167,7 +193,8 @@ Falta M10: 30 escenas anotadas por personas, audio real y Mac.
 ## 2026-11-17 — T10: leer con RapidOCR, recortes, orden por regiones y habla filtrada
 
 **Tarea:** T10. **Persona/agente:** Tomás / Codex (implementación, 3 rondas), Claude Code
-(especificación, revisión, commits). **Rama:** `b/T10-leer`: `8d810d7`, `2d997c4`, `de17327`.
+(especificación, revisión, commits). **Rama:** `b/T10-leer`: `8d810d7`, `2d997c4`, `de17327`,
+`aa60c3e` (4 rondas).
 
 **Hecho.**
 - `visionx.reading`: interfaz `TextReader`, backend RapidOCR 3.10.0 + ONNX Runtime CPU con
@@ -202,6 +229,15 @@ segmento; Windows CPU):
   → «fusion». R3 pierde una palabra correcta («hair»).
 - OCR caliente: P50 ~300 ms por frame (rango 240–410 ms según recorte), CPU, 4 hilos.
 - Suite: 502 aprobados en la rama (con extras); 499 + 3 omitidos sin extras.
+
+- Ronda 4 (`aa60c3e`): el OCR se precalienta en segundo plano al armar la app, y la elección de
+  frame usa también los que llegaron hasta `reading.pre_s` = 0,8 s antes de la orden, con
+  `window_s` = 0,4 s después y corte temprano si la nitidez ≥ 90. Para que «leer» guarde frames
+  sin orden activa, `Controller.tick` llama a `observe(view, now)` de los modos que lo tienen
+  (liviano; la nitidez se calcula en el worker). Orden → primera palabra en la traza del
+  pipeline con reproductor fake: «Leé.» 3,50 → 1,28 s; «¿Qué dice?» 1,97 → 0,50 s; «Leé la
+  etiqueta.» 2,14 → 0,61 s; «Leeme esto.» 2,09 → 0,95 s. Calidad en los 7 segmentos: precisión
+  hablada 95,8 → 96,0 %, recall 8,8 → 9,2 % (se pierde «Terrabusi» y se ganan dos palabras).
 
 **Hallazgo.** La letra chica no se puede leer con la ELP a 1920×1080: ningún recorte la recupera,
 porque recortar no agrega detalle que el sensor no capturó. La beta lee títulos y leyendas
