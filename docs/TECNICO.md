@@ -604,6 +604,14 @@ Política candidata:
 Cuando A entregue su `SpatialEstimator`, se reemplaza en `app/__main__.py::build_depth` sin tocar
 los modos, que solo leen `policy` y `z_m`.
 
+**Ubicación de A (`src/visionx/depth/spatial/`, BITACORA 2026-11-17).** `ObjectLocator` y
+`build_locator(cfg, geometry, depth_geometry)`, con la sección `spatial`. Misma idea de capa
+cercana y percentil 20, medida en disparidad; dirección desde el centroide de la capa; política
+con los cuatro valores (suma ABSTAIN y un mínimo de píxeles válidos) y `locate_detailed` con
+diagnóstico por objeto. En los clips con cinta da los mismos metros que la provisoria (≤ 0,3 cm).
+La erosión adaptativa de la máscara y el reencuadre por borde inferior existen pero quedan
+apagados: en los clips no ayudaron. Adopción en la app: una línea en `build_spatial`.
+
 **Voz de la guía.**
 - En distancia, el acuse es `sonido:ok` y no «Mido la distancia a taza.»: la respuesta ya nombra
   el objeto, y la frase la demoraba ~2 s.

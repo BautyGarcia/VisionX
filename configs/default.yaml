@@ -124,6 +124,35 @@ spatial_provisional:
   spread_allowance_m: 0.4   # ...salvo que la IQR no pase esto (m): profundidad propia de un objeto (silla de cerca)
   border_px: 2              # caja a esta distancia del borde lateral: objeto cortado, reencuadrar
 
+# Ubicación por objeto de A (src/visionx/depth/spatial/, `build_locator`; T09, política calibrada:
+# T13). Z = percentil del frente de la capa más cercana de la máscara, medida en disparidad
+# efectiva d + doffs y pasada a metros con la geometría. Valores elegidos con clips de DESARROLLO
+# de una sola sesión (dev-1114-distancias y acercarse-1, BITACORA T09 parte A): n chico, no son
+# la calibración; la definitiva sale del banco ELP (T04/T13). spatial_provisional queda para el
+# ubicador provisorio de B hasta que la app cambie.
+spatial:
+  min_valid: 0.5            # fracción mínima de la máscara con profundidad para decir metros
+  min_valid_px: 30          # y píxeles válidos mínimos en el interior (grilla de depth.compute); red
+                            # de seguridad para objetos diminutos, no se activó en los clips (mín. 850)
+  layer_min_frac: 0.25      # una capa cuenta como objeto con al menos esto de los píxeles válidos
+  layer_bin_rel: 0.03       # ancho relativo de los intervalos de capa (3 % en d = 3 % en Z)
+  layer_bin_min_px: 0.0     # piso del ancho en px de disparidad; 0,25-0,5 no cambian nada en los
+                            # clips y 1,0 baja los metros de la silla en B4/B5 de ~96 % a ~70 %
+  layer_floor: 0.01         # un intervalo con menos que esto de los píxeles separa capas
+  front_percentile: 20      # percentil de Z en la capa = superficie del frente (p50 aleja 0,3-17 cm)
+  max_rel_spread: 0.5       # IQR de la capa / Z; más que esto es una capa difusa: solo dirección
+  spread_allowance_m: 0.4   # ...salvo que la IQR no pase esto (m): profundidad propia de un objeto
+  erode_frac: 0.0           # interior adaptativo: erosión = esta fracción del radio inscripto. Apagado:
+                            # 0,2-0,5 no mejoran el error contra cinta y en la silla alejan el frente
+                            # 2-12 cm y suben el temblor cuadro a cuadro ~35 %
+  erode_max_px: 6.0         # tope de la erosión, px de la grilla de profundidad (si erode_frac > 0)
+  min_interior_px: 50       # si la erosión deja menos que esto, se usa la máscara entera
+  border_px: 2              # caja a esta distancia del borde lateral: objeto cortado, reencuadrar
+  reframe_bottom: false     # reencuadrar también si se corta abajo y el frente llega al borde. En
+                            # acercarse-1 se activaría en 18 de 20 frames con la silla a <= 0,52 m
+                            # (al llegar) y la frase del modo dice "girá hacia ese lado": queda apagado
+  bottom_band_px: 2         # franja inferior (px de la grilla de profundidad) para esa regla
+
 # Modos buscar y distancia (T09, src/visionx/modes/). Candidatos sin medir: M1/M7/M8 los fijan.
 # El rango que se anuncia en metros sale de depth.range_m.
 modes:

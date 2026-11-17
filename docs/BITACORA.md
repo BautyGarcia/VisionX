@@ -40,6 +40,79 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-17 — T09 (parte A): ubicación espacial en `depth/spatial/`
+
+**Tarea:** T09, parte de A. **Persona/agente:** Bauty / Claude Code (coordinador + subagente).
+**Rama:** `a/T09-espacial`, local, sin commits al escribir.
+
+**Objetivo.** Entregar el `SpatialEstimator` de A que Tomás espera (su `app/spatial.py` es
+provisorio), partiendo de lo que él ya midió.
+
+**Hecho (implementado localmente).** `src/visionx/depth/spatial/` (`locator.py`, `surface.py`):
+- `ObjectLocator.locate` (cumple el Protocol) y `locate_detailed`, que agrega un diagnóstico por
+  objeto: píxeles de máscara/válidos/capa, erosión, bordes, motivo de la política, fracción de
+  píxeles estéreo y mediana de b. La b de Laplace es solo diagnóstico: no cambia Z ni política
+  (convertirla en confianza por objeto es T13).
+- `build_locator(cfg, geometry, depth_geometry=None)` y sección `spatial` de la config
+  (`spatial_provisional` no cambia).
+- Mide la capa más cercana de la máscara en disparidad (d + doffs) y convierte con la geometría;
+  informa el percentil 20 del frente. Dirección desde el centroide de la capa.
+- Política con los cuatro valores: ABSTAIN (profundidad no medible, sin máscara o sin píxeles
+  válidos), ASK_REFRAME (caja contra el borde lateral), DIRECTION_ONLY (< 50 % válido, < 30
+  píxeles, sin capa o capa difusa), SPEAK_METERS.
+- 31 tests sintéticos (`tests/test_depth_spatial.py`). No se tocó `app/` ni `modes/`.
+
+**Evidencia** (M2 Max, CPU con un entrenamiento de fondo; YOLO `yolo26s-seg`; clips ELP de
+desarrollo; scripts y CSV en `outputs/espacial/`). Suite completa: 646 tests, 0 fallos; ruff limpio.
+
+`dev-1114-distancias`, 274 frames con la cámara quieta. Error = mediana de Z − (cinta + 0,013 m
+por el centro óptico detrás del vidrio; la cinta es axial desde el vidrio):
+
+| profundidad | vaso 0,50 | botella 1,00 | taza 1,00 | bolso 3,00 |
+|---|---|---|---|---|
+| B2 (provisorio = nuevo) | +2,2 cm | +3,6 | +6,5 | −5,5 |
+| B4 (provisorio / nuevo) | +2,2 | +3,85 / +3,6 | +6,5 | −5,5 |
+| B5 (provisorio = nuevo) | +2,2 | +3,85 | +6,5 | −5,5 |
+| Fusion F3 sobre B4 (provisorio = nuevo) | +3,2 | +4,0 | +8,0 | −4,8 |
+
+- **El nuevo no mejora el error contra la cinta:** da los mismos metros que el provisorio
+  (≤ 0,3 cm). Metros en el 100 % de los frames en ambos; temblor cuadro a cuadro igual
+  (0,35 / 0,53 / 0,55 / 3,3 cm).
+- **Fusion no mejora a B2/B4/B5 en estos cuatro objetos** (queda igual o hasta 1,5 cm peor).
+  n = 4 objetos, una sesión.
+- El sesgo no es constante en px de disparidad (−1,9 px en el vaso, +0,15 px en el bolso): no
+  lo explica un `doffs` mal puesto. Queda para calibración (T03/T04).
+- `dev-1114-acercarse-1` (silla calada): metros en 98,7 / 97,5 / 94,5 % de los frames con el
+  nuevo (B2/B4/B5) contra 97,9 / 97,5 / 94,1 % del provisorio; al final ambos dan ~0,48 m.
+- `locate`: 19–27 ms por frame con ~12 objetos (provisorio 32–33 ms), sin máquina libre.
+
+**Decisiones, con su número.**
+- Z o disparidad: equivalentes con percentiles (≤ 0,3 cm). Se mide en disparidad; el ancho
+  mínimo de intervalo en px queda en 0 (con 1 px la silla pierde metros en ~25 % de los frames).
+- Erosión adaptativa de la máscara: implementada y **apagada**. No mejora los objetos chicos
+  (±0,3 cm), empeora el bolso (4,9 → 5,6–6,1 cm) y aleja el frente de la silla 2–12 cm.
+- Percentil 20: el 10 mejora 0,2–0,9 cm de cerca y empeora el bolso 2,3 cm.
+- Centroide contra centro de caja: 0,05–0,19° en objetos chicos; en la silla, p90 3,4° y máx. 11,5°.
+- Reencuadre por borde inferior: implementado y apagado (dispararía justo al llegar a la silla).
+
+**Lo que aporta la entrega.** La ubicación queda en el área de profundidad, con la política
+completa, el diagnóstico por objeto, la dirección desde el centroide y los casos borde probados.
+No aporta precisión nueva: la de Tomás ya era buena.
+
+**Para Tomás.** En `app/__main__.py::build_spatial`, el cuerpo pasa a
+`return build_locator(cfg, geometry, depth_geometry)` con
+`from visionx.depth.spatial import build_locator`. Probado con sus fakes, también con la
+profundidad reducida. No se editó su archivo (lo reescribe el PR #27, en borrador).
+
+**Límites.** Clips de desarrollo, una sesión, 4 objetos con cinta (±1–2 cm) y una silla sin
+referencia precisa. Umbrales candidatos: se calibran con el banco ELP (T04/T13). Sin prueba en vivo.
+
+**Otros hechos del día.** PR #28 (T12) integrado a `main` (`54c6d20`). El PR #27 de Tomás no se
+integró: está en borrador, con conflictos en BITACORA/ROADMAP y el CI de macOS fallando.
+
+**Próximo paso.** Commit y PR de `a/T09-espacial` cuando Bauty lo pida; avisar a Tomás; agendar
+el banco ELP.
+
 ## 2026-11-17 — Decisión: el test público se guarda para la ventana final; hipótesis escrita
 
 **Tareas:** T12, T15. **Persona/agente:** Bauty (decisión) / Claude Code (propuesta y registro).
