@@ -10,6 +10,10 @@ Roles (TECNICO T04, decidido 13/11):
 - eth3d: test público secundario. Imágenes en grises replicadas a 3 canales.
 - instereo2k: entrenamiento y validación. Se baja a mano (OneDrive no deja bajar por
   script); `descargar` controla el hash de los zip y los extrae.
+- midd2021 y midd2014extra (agregados 17/11): **segunda validación de otro dominio ("dev")**
+  para elegir el candidato de Fusion antes del test. Su único grupo se llama `dev`, no `test`:
+  se puede mirar y comparar cuantas veces haga falta. Ninguna de sus escenas está en MiddEval3
+  (`check_not_in_middeval3` lo exige en código).
 
 Cada dataset se describe con un **índice liviano** (SampleRef: id, escena, archivos) y se
 carga muestra por muestra. InStereo2K tiene ~2000 pares: cargarlos juntos ocuparía GB.
@@ -25,6 +29,7 @@ from pathlib import Path
 from visionx.depth.datasets import instereo2k, middlebury
 from visionx.depth.datasets.sample import StereoSample
 from visionx.depth.datasets.splits import check_no_leak, split_scenes
+from visionx.shared.errors import InvalidInput
 
 SPLIT_SEED = "visionx-T04"  # fija la partición train/val; cambiarla es cambiar el protocolo
 VAL_FRACTION = 0.10
@@ -70,6 +75,8 @@ class DatasetInfo:
     partition: Callable[[list[SampleRef]], dict[str, list[str]]]  # grupo -> escenas
     notes: tuple[str, ...] = ()
     manual_download: str = ""  # instrucciones si no se puede bajar por script
+    # Paso determinista después de extraer (recibe data/raw/<nombre>/), p. ej. reducir a H.
+    prepare: Callable[[Path], None] | None = None
 
 
 def _all_test(refs: list[SampleRef]) -> dict[str, list[str]]:
@@ -115,6 +122,105 @@ def _eth3d(root: Path) -> list[SampleRef]:
     # delivery_area_1l / delivery_area_1s: mismo lugar, otro punto de vista o lente.
     return _middlebury_refs(folders, "eth3d", "training",
                             lambda n: re.sub(r"_\d+[ls]$", "", n), root)  # fmt: skip
+
+
+# --- Validación de otro dominio: escenas de Middlebury 2021 y 2014 fuera de MiddEval3 --------
+
+# Escenas del test público MiddEval3 (trainingH): las 10 de 2014, Art (2005) y Teddy (2003).
+# Ninguna puede aparecer en un dataset de desarrollo: sería mirar el test por la ventana.
+MIDDEVAL3_SCENES = frozenset({
+    "Adirondack", "Jadeplant", "Motorcycle", "Piano", "Pipes", "Playroom", "Playtable",
+    "Recycle", "Shelves", "Vintage", "Art", "Teddy",
+})  # fmt: skip
+
+SCENES_RULES = (
+    "disparidad en px, d = x_izq - x_der; infinito del PFM = sin GT (NaN en StereoSample)",
+    "sin máscara publicada: nonoccluded = GT con |d0(x) - d1(x - d0)| <= 1 px (derivada por "
+    "nosotros con disp1.pfm, no es la máscara oficial de MiddEval3)",
+    "metros: Z = fx * baseline / (d + doffs), baseline de calib.txt en mm -> m",
+)
+
+
+def _scene_name(dataset_name: str) -> str:
+    """artroom1 -> artroom, Sword2 -> Sword: los números son tomas de la misma escena/sesión."""
+    return re.sub(r"\d+$", "", dataset_name)
+
+
+def check_not_in_middeval3(scenes: list[str] | set[str]) -> None:
+    """Falla si alguna escena (o su nombre sin número/variante) es una escena de MiddEval3."""
+    test = {s.lower() for s in MIDDEVAL3_SCENES}
+    for scene in scenes:
+        names = {scene.lower(), _scene_name(scene).lower(), re.sub(r"[ELP]$", "", scene).lower()}
+        if names & test:
+            raise InvalidInput(f"la escena {scene!r} es de MiddEval3 (test): no puede ser dev")
+
+
+def _all_dev(refs: list[SampleRef]) -> dict[str, list[str]]:
+    """Dataset de desarrollo: todas sus escenas en `dev` (no `test`), sin escenas de MiddEval3."""
+    scenes = sorted({r.scene_id for r in refs})
+    check_not_in_middeval3(scenes + [r.sample_id for r in refs])
+    return {"dev": scenes}
+
+
+def _scene_folders(base: Path) -> list[Path]:
+    return sorted(p for p in base.iterdir() if p.is_dir() and (p / "calib.txt").is_file())
+
+
+def _scene_refs(folders: list[Path], dataset: str, root: Path) -> list[SampleRef]:
+    refs = []
+    for folder in folders:
+        scene = _scene_name(folder.name)
+        files = tuple((folder / n).relative_to(root).as_posix() for n in middlebury.SCENE_FILES)
+        load = lambda f=folder, s=scene: middlebury.load_scene_folder(f, dataset, f.name, s, root)  # noqa: E731
+        refs.append(SampleRef(folder.name, scene, "dev", files, load))
+    return refs
+
+
+def _midd2021(root: Path) -> list[SampleRef]:
+    return _scene_refs(_scene_folders(root / "data"), "midd2021", root)
+
+
+MIDD2014_EXTRA = ("Backpack", "Bicycle1", "Cable", "Classroom1", "Couch", "Flowers", "Mask",
+                  "Shopvac", "Sticks", "Storage", "Sword1", "Sword2", "Umbrella")  # fmt: skip
+HALF_FOLDER, FULL_FOLDER = "H", "full"
+
+
+def _midd2014extra(root: Path) -> list[SampleRef]:
+    return _scene_refs(_scene_folders(root / HALF_FOLDER), "midd2014extra", root)
+
+
+def _halve_midd2014(root: Path) -> None:
+    """full/<Escena>-perfect/ -> H/<Escena>/ (media resolución, como MiddEval3-H).
+
+    Se rehace siempre: es determinista y barato (unos segundos por escena)."""
+    for folder in _scene_folders(root / FULL_FOLDER):
+        name = folder.name.removesuffix("-perfect")
+        middlebury.write_half_resolution(folder, root / HALF_FOLDER / name)
+        print(f"  {folder.name} -> {HALF_FOLDER}/{name}")
+
+
+# Hashes de la primera descarga (17/11/2026); las páginas no publican sumas.
+_MIDD2014_ZIPS = {
+    "Backpack": ("c1af6865490ad6a18040e6c9875fa88594b6833d3cf38f284d9c1c53c77171b2", 108647761),
+    "Bicycle1": ("9bff3d11d042e46617b16615519ab9743f7f1d615fbea1182935d1eba76998e0", 100820342),
+    "Cable": ("6805d8e330bdc4a44410bfa0e0326f0c40072228a892239872c062b56cb83a41", 94056860),
+    "Classroom1": ("138314871346c927346558e7b829f4e859e3413f787546b40472615d850812d9", 97738965),
+    "Couch": ("f1d26f8775dbae7c2ce02a6373d95ac56e05c19c88ee8ac9850bcbd3bdf8e0ab", 80541864),
+    "Flowers": ("2bbd4ed034e0dfa82d47fa54bda4121731d3abc63117130e2ed32d599d0f1db1", 97000110),
+    "Mask": ("100fcecd3f184044ae7094e0701757845ef031c7a5b9b3f38a3a030790583942", 92685882),
+    "Shopvac": ("6393753d132b5c3171e085d65b45bee63c03df248d46a15a87260854ac7779d7", 67733626),
+    "Sticks": ("411a6781a49dd0d9884f6b19bd6c9ceebf48d49584a307825688f37c712a4e2b", 105987989),
+    "Storage": ("f54f369edcd094b82e4ae8bdd05072d11bf5095098036bab5a74b2c03acadd7e", 90867951),
+    "Sword1": ("b9e12e3ccf515014851ccfd0851a861c819ea2c7948c10894cf35ce22cec84ce", 105157228),
+    "Sword2": ("5aa3acab7fb10d49c1a1351ffcb9191f591fc2176f97fec67611a1564c61fc6f", 90120847),
+    "Umbrella": ("b10767d94f596b30e0ab4b8a607c6ea2dadc2b3276e9e2df301ef126e8d30f3a", 96603088),
+}
+check_not_in_middeval3(set(_MIDD2014_ZIPS))  # al importar: una escena de test no entra ni bajada
+
+MIDDLEBURY_CITATION_2014 = (
+    "Scharstein et al., High-resolution stereo datasets with subpixel-accurate ground truth, "
+    "GCPR 2014"
+)
 
 
 # --- InStereo2K -----------------------------------------------------------------------------
@@ -197,6 +303,68 @@ CATALOG: dict[str, DatasetInfo] = {
         gt_rules=MIDDLEBURY_RULES,
         partition=_all_test,
         notes=("Imágenes en grises: DA V2 y Fusion las reciben replicadas a 3 canales.",),
+    ),
+    "midd2021": DatasetInfo(
+        name="midd2021",
+        role="desarrollo (segunda validación de otro dominio, grupo dev)",
+        license="Sin licencia declarada en la página; uso académico citando el paper",
+        citation="Middlebury 2021 Mobile stereo datasets (Scharstein, Guan, Rouke, Zelenka); "
+        "citar Scharstein et al., GCPR 2014, como pide la página",
+        source="https://vision.middlebury.edu/stereo/data/scenes2021/",
+        downloads=(
+            Download(
+                "https://vision.middlebury.edu/stereo/data/scenes2021/zip/all.zip",
+                "1b60af93fb33811236470c398ed705bd726f8eacb11507ac5d3b66ad8aea42bb",
+                423330044,
+            ),
+        ),
+        index=_midd2021,
+        gt_rules=SCENES_RULES,
+        partition=_all_dev,
+        notes=(
+            "Resolución nativa 1920x1080 (celular), sin reducir. doffs = 0 en todos los pares.",
+            "ladder1/ladder2 son verticales (1080x1920) y su calib.txt trae width/height "
+            "intercambiados: el adaptador toma el tamaño de la imagen (focales y centros ya "
+            "corresponden a la vertical).",
+            "24 pares de 11 escenas: el número final es otra toma de la misma escena "
+            "(chess1-3 = chess).",
+            "Sin escenas de MiddEval3. Rol dev: elige candidato antes del test, no es test.",
+            "Auditoría T04 del 17/11: NO pasa. skiboots2 y skiboots3 desalineadas (mínimo census "
+            "en -0,77 y +0,86 px, curvas marcadas) y podium1 no concluyente. No se usa para "
+            "elegir nada hasta entender el corrimiento.",
+        ),
+    ),
+    "midd2014extra": DatasetInfo(
+        name="midd2014extra",
+        role="desarrollo (segunda validación de otro dominio, grupo dev)",
+        license="Sin licencia declarada en la página; uso académico citando el paper",
+        citation=MIDDLEBURY_CITATION_2014,
+        source="https://vision.middlebury.edu/stereo/data/scenes2014/",
+        downloads=tuple(
+            Download(
+                f"https://vision.middlebury.edu/stereo/data/scenes2014/zip/{name}-perfect.zip",
+                sha,
+                size,
+                extract_to=FULL_FOLDER,
+            )
+            for name, (sha, size) in _MIDD2014_ZIPS.items()
+        ),
+        index=_midd2014extra,
+        gt_rules=SCENES_RULES
+        + (
+            "media resolución (H) preparada al descargar: imágenes promedio 2x2, GT vecino más "
+            "cercano x 0,5 (inválidos siguen inválidos), calib con StereoGeometry.resized",
+        ),
+        partition=_all_dev,
+        notes=(
+            "Las 13 escenas de 2014 con GT que no están en MiddEval3, versión -perfect "
+            "(rectificación perfecta). MiddEval3 usa la -imperfect: el dev es algo más fácil.",
+            "Se evalúa en H (como MiddEval3-H): data/raw/midd2014extra/H/, derivado de full/ "
+            "por `descargar`; los hashes de H dependen de la versión de OpenCV.",
+            "Escena = nombre sin el número: Sword1 y Sword2 comparten escena (Sword).",
+            "Sin escenas de MiddEval3 (chequeo en código). Rol dev, no test.",
+        ),
+        prepare=_halve_midd2014,
     ),
     "instereo2k": DatasetInfo(
         name="instereo2k",

@@ -83,6 +83,8 @@ depth:
       middeval3: calib      # ndisp de calib.txt por escena (120-380 px en H)
       eth3d: 64             # calib.txt trae ndisp = ancho (relleno); máx. GT de T04: 61,3 px
       instereo2k: 272       # README y auditoría T04: disparidad 20-265 px
+      midd2021: calib       # dev de otro dominio (17/11): ndisp de calib.txt, 100-380 px a 1920x1080
+      midd2014extra: calib  # dev de otro dominio (17/11): ndisp de calib.txt ya reducido a H
   # SpatialDepth-Fusion (T12, src/visionx/depth/fusion/). U-Net residual que corrige B4 y estima
   # incertidumbre b (Laplace). Entrenamiento: configs/fusion-entrenamiento.yaml y
   # `python -m visionx.depth.fusion`. Los canales son parte del modelo: cambiarlos invalida pesos.

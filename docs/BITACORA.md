@@ -40,6 +40,70 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-17 — T12/T04: segunda validación fuera de dominio (Middlebury 2014 extra)
+
+**Tareas:** T12 y T04. **Persona/agente:** Bauty / Claude Code (coordinador + subagentes).
+**Rama:** `a/T12-fusion`, PR #28.
+
+**Motivo.** Informe de medio término del 17/11: InStereo2K val es casi una escena y eligió B5,
+la arquitectura, la base y la época. Decisión de Bauty: no usar el test público con Fusion
+hasta tener otra validación. El test no se tocó.
+
+**Hecho.**
+- Datasets de desarrollo con grupo único `dev` (`catalog.py`, `middlebury.py`, manifiestos en
+  `datasets/`): `midd2021` (24 pares, 11 escenas, 1920×1080) y `midd2014extra` (las 13 escenas
+  de 2014 con GT que no están en MiddEval3, versión `-perfect`, reducidas a media resolución).
+  Chequeo en código de que ninguna escena de MiddEval3 entra al dev.
+- Máscara de no ocluidos derivada por nosotros (GT izquierda contra GT derecha, 1 px).
+- **Auditoría de GT (T04):** `midd2014extra` pasa (13/13 alineadas, corrimiento mediano
+  −0,073 px). **`midd2021` no pasa:** skiboots2 y skiboots3 desalineadas (mínimo en −0,77 y
+  +0,86 px) y podium1 no concluyente. No se usó: sin caché ni evaluación. Causa sin investigar.
+- Se corrigió un fixture de test que escribía d − doffs en el PFM y pasaba la auditoría por la
+  textura periódica; no afectaba resultados. El camino de Fusion con `doffs` ≠ 0 y `ndisp` por
+  escena se revisó contra `fusion evaluar`: sin bugs.
+
+**Resultados en `midd2014extra/dev`** (13 pares, 12 escenas, región noc, media por escena;
+"común" = soporte de B4, B5, B5-EPE y todas las Fusion, 89,9 % de la GT; todo en CPU; script y
+CSV en `outputs/fusion/analisis/dev_publico/`).
+
+| método | cobertura | acierto-2 propio | EPE común | bad-2 común | AbsRel común |
+|---|---|---|---|---|---|
+| B0 | 0,839 | 73,66 | — | — | — |
+| B2 | 0,696 | 63,55 | — | — | — |
+| B4 | 0,914 | 69,36 | 3,53 | 21,49 | 0,0146 |
+| B5 | 0,914 | 71,97 | 3,31 | 19,22 | 0,0146 |
+| B5-EPE | 0,891 | 72,06 | 3,18 | 18,33 | 0,0140 |
+| Fusion F3 sobre B4, s0 (candidato) | 0,914 | 71,25 | 3,33 | 20,23 | 0,0139 |
+| Fusion F3 sobre B4, s1 | 0,914 | 71,34 | 3,32 | 20,06 | 0,0142 |
+| Fusion F3 sobre B5, s0 | 0,914 | 72,64 | 3,35 | 18,87 | 0,0147 |
+| Fusion F3 sobre B5, s1 | 0,914 | 72,24 | 3,37 | 19,11 | 0,0148 |
+| Fusion F3 sobre B5, sin dilataciones | 0,914 | 72,46 | 3,33 | 18,97 | 0,0147 |
+| Fusion v1 (F1 sobre B4) | 0,914 | 68,97 | 3,52 | 21,97 | 0,0147 |
+
+- **B5 le gana a B4 también fuera de dominio** (EPE −0,22 px, bad-2 −2,3 puntos).
+- **Fusion sobre B4 mejora a B4** (−0,19 px, −1,25 puntos de bad-2, 8 de 12 escenas), pero
+  **no le gana a B5** (+0,02 px, +1,0 punto de bad-2). La ventaja de 7–10 % de InStereo2K val
+  no se traslada.
+- **Fusion sobre B5 empata con B5:** bad-2 −0,35 puntos, EPE +0,03 px.
+- **Ninguna Fusion le gana a B5-EPE** en el soporte común; B5-EPE paga con cobertura.
+- Las dos semillas de cada base coinciden; sin dilataciones da lo mismo. Fusion v1 no generaliza.
+- Alineación aceptada: RANSAC 10/13 y Huber 9/13 (en InStereo2K val, 100/102 y 97/102). En
+  Couch, Mask y Storage se rechaza: B4 = B5 = B2 y Fusion solo toca píxeles de estéreo, y los
+  empeora algo. Shopvac (ndisp 555 sobre 1178 px de ancho) da ~17 px en todos y domina el EPE.
+- **Inesperado:** B0 tiene el mejor acierto-2 propio (73,66); B2 cubre solo 0,70. Coincide con
+  lo visto en el test de T05 (B4 perdía contra B0 en MiddEval3). Cambiar el estéreo o los
+  umbrales por esto sería ajustar sobre el dev: no se cambia nada.
+
+**Lectura.** Con una muestra chica, la conclusión de InStereo2K val era optimista: lo que
+generaliza es la regla fija B5; lo que aporta la red sobre B5 no se distingue de cero fuera de
+dominio. El candidato «F3 sobre B4» ya no es defendible como mejor que B5.
+
+**Límites.** 13 pares, sin prueba de significancia; Shopvac pesa mucho; máscara noc propia;
+versión `-perfect` (MiddEval3 usa mayormente imperfecta) y reducción a H propia; `midd2021` sin
+usar; la ablación «B4 sin dilataciones» seguía entrenando y no entró.
+
+**Próximo paso.** Decisión de Bauty sobre qué se lleva al test y qué pregunta se le hace.
+
 ## 2026-11-17 — T12: candidato congelado, paquete y latencia M9 en la Mac
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-fusion`.

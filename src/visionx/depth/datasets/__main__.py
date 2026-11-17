@@ -77,6 +77,9 @@ def _download(info: DatasetInfo, data: Path) -> None:
             f"faltan en {folder}: {', '.join(missing)}. Se bajan a mano: {info.manual_download}"
         )
     print(f"extraído en {target}")
+    if info.prepare is not None:  # p. ej. midd2014extra: reducir a media resolución (H)
+        print(f"preparando {info.name}...")
+        info.prepare(target)
 
 
 def _spread(items: list, n: int) -> list:
