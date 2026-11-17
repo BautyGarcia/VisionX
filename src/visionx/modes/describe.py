@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, fields
-from typing import Any, Protocol
+from dataclasses import asdict, dataclass, field, fields
+from typing import Any, Literal, Protocol
 
 from visionx.app.controller import Say
 from visionx.app.runtime import Joint, View
@@ -32,10 +32,23 @@ from visionx.shared.geometry import StereoGeometry
 
 @dataclass(frozen=True, slots=True)
 class DescribeSettings:
-    max_objects: int = 5
-    wait_measure_s: float = 3.0
+    max_objects: int = 8
+    wait_measure_s: float = 4.0
     large_area_fraction: float = 0.1
     min_score: float = 0.6
+    cautious_score: float = 0.27
+    # Cortes de admisión por clase: también se aplican al nivel alto. No probabilidades.
+    cautious_min_scores: dict[str, float] = field(
+        default_factory=lambda: {
+            "bed": 0.35,
+            "bench": 0.35,
+            "banana": 0.4,
+            "potted plant": 0.4,
+            "laptop": 0.5,
+            "dining table": 0.5,
+            "oven": 0.65,
+        }
+    )
     persist_hits: int = 2
     persist_s: float = 3.0
     max_speech_s: float = 8.0
@@ -51,6 +64,13 @@ class DescribeSettings:
             raise ValueError("describe.large_area_fraction debe estar en (0, 1]")
         if not 0 <= self.min_score <= 1:
             raise ValueError("describe.min_score debe estar en [0, 1]")
+        if not 0 <= self.cautious_score <= self.min_score:
+            raise ValueError("describe.cautious_score debe estar entre 0 y min_score")
+        if not isinstance(self.cautious_min_scores, dict) or any(
+            not isinstance(label, str) or not label or not 0 <= score <= 1
+            for label, score in self.cautious_min_scores.items()
+        ):
+            raise ValueError("describe.cautious_min_scores debe mapear clases a scores en [0, 1]")
         if isinstance(self.persist_hits, bool) or not isinstance(self.persist_hits, int):
             raise ValueError("describe.persist_hits debe ser un entero")
         if not 1 <= self.persist_hits <= 256:
@@ -75,6 +95,7 @@ class PresenceFact:
     label: str
     zone: str
     area_fraction: float
+    confidence: Literal["high", "cautious"] = "high"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,16 +118,19 @@ class SceneNarrator(Protocol):
         """Agrupar índices de presencia ya priorizados. No recibe ni devuelve metros.
 
         El compositor valida que el plan conserve exactamente esos objetos y que cada grupo
-        tenga una sola clase y zona. No se permite texto arbitrario de un proveedor futuro.
+        tenga una sola clase, zona y confianza. No se permite texto arbitrario de un
+        proveedor futuro.
         """
         ...
 
 
 class TemplateNarrator:
     def plan(self, ordered: tuple[PresenceFact, ...]) -> tuple[tuple[int, ...], ...]:
-        groups: dict[tuple[str, str], list[int]] = {}
+        groups: dict[tuple[str, str, str], list[int]] = {}
         for fact in ordered:
-            groups.setdefault((fact.zone, fact.label), []).append(fact.detection_index)
+            groups.setdefault((fact.zone, fact.label, fact.confidence), []).append(
+                fact.detection_index
+            )
         return tuple(tuple(indices) for indices in groups.values())
 
 
@@ -170,6 +194,7 @@ class _SeenInstance:
     label: str
     track_id: int | None
     box: tuple[float, ...]
+    score: float
 
 
 def _overlap(a: _SeenInstance, b: _SeenInstance) -> float:
@@ -261,11 +286,20 @@ class DescribeHandler:
     def _instances(self, joint: Joint) -> dict[int, _SeenInstance]:
         return {
             c.index: _SeenInstance(
-                c.label, c.track_id, tuple(float(v) for v in joint.detection.boxes[c.index])
+                c.label,
+                c.track_id,
+                tuple(float(v) for v in joint.detection.boxes[c.index]),
+                c.score,
             )
             for c in candidates(joint, None, self.geometry)
-            if c.score >= self.describe.min_score
+            if c.score >= self._threshold(c.label)
         }
+
+    def _threshold(self, label: str, *, high: bool = False) -> float:
+        return max(
+            self.describe.min_score if high else self.describe.cautious_score,
+            self.describe.cautious_min_scores.get(label, 0.0),
+        )
 
     def _observe(self, joint: Joint, now_ns: int) -> None:
         retention = self.describe.persist_s + self.s.max_measure_age_s
@@ -280,8 +314,12 @@ class DescribeHandler:
             oldest = min(self._history, key=lambda key: self._history[key][0])
             del self._history[oldest]
 
-    def _confirmed(self, joint: Joint) -> set[int]:
-        current = self._instances(joint)
+    def _confirmed(self, joint: Joint, *, high: bool = False) -> set[int]:
+        current = {
+            i: instance
+            for i, instance in self._instances(joint).items()
+            if instance.score >= self._threshold(instance.label, high=high)
+        }
         hits = dict.fromkeys(current, 0)
         end = joint.frame.received_ns
         start = end - int(self.describe.persist_s * 1e9)
@@ -294,6 +332,8 @@ class DescribeHandler:
             for i, instance in current.items():
                 for j, old in previous.items():
                     if instance.label != old.label:
+                        continue
+                    if old.score < self._threshold(old.label, high=high):
                         continue
                     same_id = instance.track_id is not None and instance.track_id == old.track_id
                     different_ids = (
@@ -345,12 +385,25 @@ class DescribeHandler:
 
     def _finish(self, joint: Joint, *, measured: bool) -> tuple[list[Say], bool]:
         confirmed = self._confirmed(joint)
-        presence = tuple(p for p in self._presence(joint) if p.detection_index in confirmed)
+        # La asociación con todos los candidatos sigue mandando sobre el conjunto hablado.
+        # Filtrar candidatos puede cambiar un empate IoU: no dejar métricas huérfanas.
+        high = self._confirmed(joint, high=True) & confirmed
+        presence = tuple(
+            PresenceFact(
+                p.detection_index,
+                p.label,
+                p.zone,
+                p.area_fraction,
+                "high" if p.detection_index in high else "cautious",
+            )
+            for p in self._presence(joint)
+            if p.detection_index in confirmed
+        )
         metrics = []
         if measured:
             for c in candidates(joint, None, self.geometry):
                 m = measure(c.obj, self.s)
-                if c.index in confirmed and m.ok and m.z_m is not None:
+                if c.index in high and m.ok and m.z_m is not None:
                     metrics.append(MetricFact(c.index, m.z_m))
         self.facts = SceneFacts(
             joint.frame.session_id,
@@ -375,7 +428,8 @@ class DescribeHandler:
     def _render(self, scene: SceneFacts, *, measured: bool = True) -> list[str]:
         if not scene.presence:
             return ["No reconozco objetos con suficiente confianza."]
-        distances = {m.detection_index: m.z_m for m in scene.measured}
+        high = {p.detection_index for p in scene.presence if p.confidence == "high"}
+        distances = {m.detection_index: m.z_m for m in scene.measured if m.detection_index in high}
 
         def relevance(f: PresenceFact) -> tuple:
             z = distances.get(f.detection_index, math.inf)
@@ -387,11 +441,16 @@ class DescribeHandler:
 
         selected = tuple(sorted(scene.presence, key=relevance)[: self.describe.max_objects])
         while True:
-            parts = self._compose(selected, distances, len(scene.presence))
-            if not measured:
-                parts.insert(0, "No pude medir distancias.")
-            if sum(speech_s(p, self.s) for p in parts) <= self.describe.max_speech_s:
-                return parts
+            # Los nombres tienen prioridad sobre el detalle métrico: primero intentar con
+            # metros, luego sin ellos, antes de retirar una instancia. No acelerar la voz.
+            for detail in (distances, {}):
+                # El conteo anónimo también es prescindible si ocupa el lugar de un nombre.
+                for total in (len(scene.presence), len(selected)):
+                    parts = self._compose(selected, detail, total)
+                    if not measured:
+                        parts.insert(0, "No pude medir distancias.")
+                    if sum(speech_s(p, self.s) for p in parts) <= self.describe.max_speech_s:
+                        return parts
             if len(selected) == 1:
                 # Un presupuesto local muy pequeño puede no admitir ni un nombre completo.
                 return ["No pude resumir la escena a tiempo."]
@@ -405,15 +464,19 @@ class DescribeHandler:
         flat = [i for group in plan for i in group]
         if len(flat) != len(selected) or set(flat) != set(by_index):
             raise ValueError("SceneNarrator debe conservar exactamente los índices seleccionados")
-        zones: dict[str, list[str]] = {}
+        zones: dict[str, dict[str, list[str]]] = {}
         for group in plan:
             if not group:
                 raise ValueError("SceneNarrator devolvió un grupo vacío")
             first = by_index[group[0]]
             if any(
-                (by_index[i].label, by_index[i].zone) != (first.label, first.zone) for i in group
+                (by_index[i].label, by_index[i].zone, by_index[i].confidence)
+                != (first.label, first.zone, first.confidence)
+                for i in group
             ):
-                raise ValueError("SceneNarrator mezcló clases o zonas")
+                raise ValueError("SceneNarrator mezcló clases, zonas o confianza")
+            if first.confidence not in ("high", "cautious"):
+                raise ValueError("SceneNarrator recibió confianza desconocida")
             # El score alto no distingue monitor de TV: usar el término visual compartido.
             # Buscar conserva el nombre y el umbral de su catálogo, sin cambios en T06.
             name = "pantalla" if first.label == "tv" else self.spoken(first.label)
@@ -430,22 +493,27 @@ class DescribeHandler:
             phrase = noun
             # "la más cercana" solo si TODAS las instancias del grupo tienen metros válidos.
             # Con medidas parciales no podemos afirmar cuál de ellas está más cerca.
-            if all(i in distances for i in group):
+            if first.confidence == "high" and all(i in distances for i in group):
                 m = Measure(min(distances[i] for i in group), None)
                 if len(group) > 1:
                     phrase += ", la más cercana" if feminine else ", el más cercano"
                 phrase += " " + measure_phrase(m, self.s)
-            zones.setdefault(first.zone, []).append(phrase)
+            zones.setdefault(first.zone, {}).setdefault(first.confidence, []).append(phrase)
         parts = []
         for zone in ("al frente", "a la izquierda", "a la derecha"):
-            elements = zones.pop(zone, [])
-            if elements:
-                listing = (
-                    elements[0]
-                    if len(elements) == 1
-                    else ", ".join(elements[:-1]) + " y " + elements[-1]
-                )
-                parts.append(f"{zone.capitalize()}, {listing}.")
+            levels = zones.pop(zone, {})
+            clauses = []
+            for confidence in ("high", "cautious"):
+                elements = levels.get(confidence, [])
+                if elements:
+                    listing = (
+                        elements[0]
+                        if len(elements) == 1
+                        else ", ".join(elements[:-1]) + " y " + elements[-1]
+                    )
+                    clauses.append(("parece haber " if confidence == "cautious" else "") + listing)
+            if clauses:
+                parts.append(f"{zone.capitalize()}, {'; '.join(clauses)}.")
         if zones:
             raise ValueError("SceneNarrator devolvió una zona desconocida")
         omitted = total - len(selected)

@@ -671,7 +671,9 @@ def test_audio_schedule_queues_and_cancel_cuts():
 
 def describe(settings=S, options=None, **kwargs):
     # Estas pruebas aíslan composición y unión; la persistencia/default se prueba aparte.
-    options = replace(options or DescribeSettings(), persist_hits=1, max_speech_s=60)
+    options = replace(
+        options or DescribeSettings(wait_measure_s=3), persist_hits=1, max_speech_s=60
+    )
     return DescribeHandler(G, CATALOG.spoken, settings, options, **kwargs)
 
 
@@ -1031,7 +1033,10 @@ def test_describe_natural_lists_without_heading(labels, expected):
 
 
 def persistent(options=None):
-    return DescribeHandler(G, CATALOG.spoken, describe=options)
+    # Los casos temporales de R2 fijan tres segundos; la espera de producción va aparte.
+    return DescribeHandler(
+        G, CATALOG.spoken, describe=options or DescribeSettings(wait_measure_s=3)
+    )
 
 
 def test_describe_score_filter_applies_to_current_and_past_without_counting_doubtful_extras():
@@ -1041,9 +1046,9 @@ def test_describe_score_filter_applies_to_current_and_past_without_counting_doub
         ("bottle", 0, 2, None, DistancePolicy.DIRECTION_ONLY),
         ("chair", 20, 3, None, DistancePolicy.DIRECTION_ONLY),
     ]
-    first = joint(1, 10, objs, scores=[0.8, 0.59, 0.3])
+    first = joint(1, 10, objs, scores=[0.8, 0.26, 0.25])
     assert h.start(c, View(first), SEC) == []
-    second = joint(1.2, 12, objs, measured=True, scores=[0.8, 0.8, 0.3])
+    second = joint(1.2, 12, objs, measured=True, scores=[0.8, 0.8, 0.25])
     says, done = h.tick(c, View(second, second), int(1.3 * SEC))
     assert done and texts(says) == ["A la izquierda, una taza."]
     assert [f.label for f in h.facts.presence] == ["cup"]
@@ -1127,7 +1132,7 @@ def test_describe_three_hits_and_new_order_resets_persistence():
     assert len(h._history) == 1
 
 
-def test_describe_default_duration_budget_counts_only_filtered_omissions():
+def test_describe_default_duration_prioritizes_names_over_filtered_omission_count():
     from visionx.modes.common import speech_s
 
     h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
@@ -1146,15 +1151,17 @@ def test_describe_default_duration_budget_counts_only_filtered_omissions():
     assert done and sum(speech_s(t, S) for t in result) <= 8
     assert len(h.facts.presence) == 5
     assert result == [
-        "A la izquierda, una taza a 0,5 metros y una botella a 1 metro, y 3 cosas más."
+        "Al frente, una computadora portátil.",
+        "A la izquierda, una taza y una botella.",
+        "A la derecha, una silla.",
     ]
     assert "banana" not in " ".join(result) and "Veo" not in " ".join(result)
 
 
 def test_describe_timeout_abstains_when_score_never_reaches_threshold():
     h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
-    h.start(c, View(joint(1, 10, [("cup", 0, 1)], scores=[0.59])), SEC)
-    m = joint(3.9, 39, [("cup", 0, 1, 0.8, SPEAK)], measured=True, scores=[0.59])
+    h.start(c, View(joint(1, 10, [("cup", 0, 1)], scores=[0.26])), SEC)
+    m = joint(3.9, 39, [("cup", 0, 1, 0.8, SPEAK)], measured=True, scores=[0.26])
     says, done = h.tick(c, View(m, m), 4 * SEC)
     assert done and texts(says) == ["No reconozco objetos con suficiente confianza."]
     assert not h.facts.presence and not h.facts.measured
@@ -1193,3 +1200,175 @@ def test_describe_presence_fallback_includes_warning_in_duration_budget():
 def test_describe_filter_config_validation(options):
     with pytest.raises(ValueError):
         DescribeSettings(**options)
+
+
+@pytest.mark.parametrize(
+    "scores,confidence,phrase",
+    [
+        ([0.8, 0.8], "high", "Al frente, una taza a 0,8 metros."),
+        ([0.4, 0.4], "cautious", "Al frente, parece haber una taza."),
+        ([0.4, 0.8], "cautious", "Al frente, parece haber una taza."),
+        ([0.8, 0.4], "cautious", "Al frente, parece haber una taza."),
+    ],
+)
+def test_describe_each_level_requires_current_and_previous_score(scores, confidence, phrase):
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    obj = [("cup", 0, 1, 0.8, SPEAK)]
+    assert h.start(c, View(joint(1, 10, obj, scores=[scores[0]])), SEC) == []
+    m = joint(1.2, 12, obj, scores=[scores[1]], measured=True)
+    says, done = h.tick(c, View(m, m), int(1.3 * SEC))
+    assert done and texts(says) == [phrase]
+    assert h.facts.presence[0].confidence == confidence
+    assert bool(h.facts.measured) == (confidence == "high")
+
+
+def test_describe_never_abstains_with_only_persistent_medium_candidates():
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    objects = [("sink", -20, None, 1.5, SPEAK), ("refrigerator", 20, 2, 2.0, SPEAK)]
+    h.start(c, View(joint(1, 10, objects, scores=[0.3, 0.4])), SEC)
+    m = joint(1.2, 12, objects, measured=True, scores=[0.3, 0.4])
+    says, done = h.tick(c, View(m, m), int(1.3 * SEC))
+    assert done and texts(says) == [
+        "A la izquierda, parece haber una pileta.",
+        "A la derecha, parece haber una heladera.",
+    ]
+    assert not h.facts.measured
+
+
+def test_describe_medium_candidates_still_require_two_distinct_frames_at_timeout():
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    m = joint(3.8, 38, [("sink", 0, 1, 1.5, SPEAK)], scores=[0.3], measured=True)
+    h.start(c, View(m, m), int(3.8 * SEC))
+    says, done = h.tick(c, View(m, m), 4 * SEC)
+    assert done and texts(says) == ["No reconozco objetos con suficiente confianza."]
+
+
+def test_describe_mixed_confidence_never_groups_or_assigns_meters_to_medium():
+    from visionx.modes.describe import MetricFact
+
+    h = describe()
+    scene = SceneFacts(
+        "s",
+        10,
+        (
+            PresenceFact(0, "cup", "al frente", 0.1, "high"),
+            PresenceFact(1, "cup", "al frente", 0.1, "cautious"),
+            PresenceFact(2, "sink", "al frente", 0.1, "cautious"),
+        ),
+        (MetricFact(0, 0.8), MetricFact(1, 0.5)),
+        "fake",
+    )
+    assert h._render(scene) == [
+        "Al frente, una taza a 0,8 metros; parece haber una taza y una pileta."
+    ]
+
+
+def test_describe_rejects_narrator_merging_high_and_medium_instances():
+    class MixedNarrator:
+        def plan(self, ordered):
+            return ((0, 1),)
+
+    h = describe(narrator=MixedNarrator())
+    scene = SceneFacts(
+        "s",
+        10,
+        (
+            PresenceFact(0, "cup", "al frente", 0.1, "high"),
+            PresenceFact(1, "cup", "al frente", 0.1, "cautious"),
+        ),
+        (),
+        None,
+    )
+    with pytest.raises(ValueError, match="confianza"):
+        h._render(scene)
+
+
+@pytest.mark.parametrize(
+    "label,score,accepted",
+    [
+        ("sink", 0.3, True),
+        ("refrigerator", 0.3, True),
+        ("oven", 0.6, False),
+        ("oven", 0.7, True),
+        ("bed", 0.32, False),
+        ("bed", 0.4, True),
+        ("laptop", 0.45, False),
+        ("laptop", 0.55, True),
+    ],
+)
+def test_describe_calibrated_class_floors_apply_to_both_observations(label, score, accepted):
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    obj = [(label, 0, 1, 1.5, SPEAK)]
+    h.start(c, View(joint(1, 10, obj, scores=[score])), SEC)
+    m = joint(1.2, 12, obj, scores=[score], measured=True)
+    says, done = h.tick(c, View(m, m), 4 * SEC)
+    assert done and bool(h.facts.presence) == accepted
+    assert ("No reconozco" not in " ".join(texts(says))) == accepted
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"cautious_score": -0.1},
+        {"cautious_score": 0.7},
+        {"cautious_score": float("nan")},
+        {"cautious_min_scores": []},
+        {"cautious_min_scores": {"sink": float("nan")}},
+        {"cautious_min_scores": {"sink": 1.1}},
+    ],
+)
+def test_describe_confidence_settings_are_validated(options):
+    with pytest.raises(ValueError):
+        DescribeSettings(**options)
+
+
+def test_describe_default_wait_allows_second_observation_after_three_seconds():
+    h = DescribeHandler(G, CATALOG.spoken)
+    c = cmd(Mode.DESCRIBE, None, t_s=1)
+    assert h.start(c, View(), SEC) == []
+    first = joint(3.5, 35, [("tv", -20, 1)], scores=[0.45])
+    assert h.tick(c, View(first), int(3.8 * SEC)) == ([], False)
+    second = joint(
+        4.2, 42, [("tv", -20, 1, None, DistancePolicy.DIRECTION_ONLY)], measured=True, scores=[0.7]
+    )
+    says, done = h.tick(c, View(second, second), int(4.4 * SEC))
+    assert done and texts(says) == ["A la izquierda, parece haber una pantalla."]
+    assert not h.facts.measured
+
+
+def test_describe_budget_omits_anonymous_count_before_removing_a_name():
+    from visionx.modes.common import speech_s
+
+    h = DescribeHandler(G, CATALOG.spoken, describe=DescribeSettings(max_objects=2, max_speech_s=3))
+    scene = SceneFacts(
+        "s",
+        10,
+        (
+            PresenceFact(0, "cup", "al frente", 0.1),
+            PresenceFact(1, "chair", "al frente", 0.1),
+            PresenceFact(2, "bottle", "al frente", 0.01),
+        ),
+        (),
+        None,
+    )
+    result = h._render(scene)
+    assert result == ["Al frente, una taza y una silla."]
+    assert sum(speech_s(p, S) for p in result) <= 3
+
+
+def test_describe_medium_match_cannot_leave_orphan_high_metrics():
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    h.start(c, View(joint(1, 10, [("cup", 11, None)], scores=[0.8])), SEC)
+    m = joint(
+        1.2,
+        12,
+        [
+            ("cup", 10, None, 0.8, SPEAK),
+            ("cup", 11.2, None, 0.9, SPEAK),
+        ],
+        measured=True,
+        scores=[0.8, 0.4],
+    )
+    says, done = h.tick(c, View(m, m), int(1.3 * SEC))
+    assert done and texts(says) == ["A la derecha, parece haber una taza."]
+    assert len(h.facts.presence) == 1 and not h.facts.measured
