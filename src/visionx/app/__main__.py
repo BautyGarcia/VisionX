@@ -230,7 +230,11 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
                 break
             while script and script[0][0] <= elapsed:
                 controller.handle_text(script.pop(0)[1])
-            controller.tick()
+            if not recording:
+                # Con el botón apretado los modos no avanzan: si la guía hablara ahora, el
+                # micrófono grabaría la voz de VisionX encima de la orden (con parlantes,
+                # Whisper la transcribe). La vigencia se revisa en el primer tick al soltar.
+                controller.tick()
             for name, size in pipeline.queue_sizes().items():
                 max_queues[name] = max(max_queues.get(name, 0), size)
             if window:
