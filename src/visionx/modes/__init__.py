@@ -7,16 +7,19 @@ frame (donde están las cajas del detector).
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from visionx.modes.common import ModeSettings, View
+from visionx.modes.describe import DescribeHandler, DescribeSettings
 from visionx.modes.distance import DistanceHandler
 from visionx.modes.search import SearchHandler
 from visionx.modes.target import TargetMemory
 from visionx.shared.contracts import Mode
 from visionx.shared.geometry import StereoGeometry
 
-__all__ = ["DistanceHandler", "ModeSettings", "SearchHandler", "TargetMemory", "View",
+__all__ = ["DescribeHandler", "DescribeSettings", "DistanceHandler", "ModeSettings",
+           "SearchHandler", "TargetMemory", "View",
            "build_handlers"]  # fmt: skip
 
 
@@ -30,6 +33,17 @@ def build_handlers(
     settings = ModeSettings.from_config(cfg)
     memory = TargetMemory()
     return {
+        Mode.DESCRIBE: DescribeHandler(
+            geometry,
+            spoken,
+            # DESCRIBIR siempre respeta depth.range_m, aun con un override de modes.range_m.
+            settings=replace(
+                settings,
+                range_m=tuple((cfg.get("depth") or {}).get("range_m") or settings.range_m),
+            ),
+            describe=DescribeSettings.from_config(cfg),
+            on_event=on_event,
+        ),
         Mode.SEARCH: SearchHandler(geometry, spoken, settings, memory, on_event),
         Mode.DISTANCE: DistanceHandler(geometry, spoken, settings, memory, on_event),
     }

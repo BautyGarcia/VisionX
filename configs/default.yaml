@@ -119,6 +119,12 @@ modes:
   accept_before_s: 0.5      # distancia: frame medido hasta esto ANTES de la orden, s
   max_listed: 3             # a lo sumo cuántos iguales se enumeran
 
+# Descripción local de una escena (T11). Sin VLM ni conexión a internet.
+describe:
+  max_objects: 5            # instancias mencionadas (no grupos); el resto se cuenta como "cosas más"
+  wait_measure_s: 3.0       # s desde la orden para esperar una unión posterior; después, solo presencia
+  large_area_fraction: 0.1  # fracción de imagen ocupada por la caja; desempata relevancia sin inferir tamaño real
+
 calibration:
   board: charuco
   squares: [11, 8]

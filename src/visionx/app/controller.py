@@ -86,6 +86,7 @@ class Controller:
         self._lock = threading.RLock()
         self._next_id = 0
         self.active: Command | None = None
+        self._mode_audio_id: int | None = None
         self.last_spoken: str | None = None
         self.history: list[tuple[Command | None, Interpretation]] = []
 
@@ -132,9 +133,12 @@ class Controller:
                 self.history.append((None, interp))
                 return None
 
-            if self.active is not None:
-                self.output.cancel(self.active.request_id)  # la orden nueva invalida la vieja
+            if self._mode_audio_id is not None:
+                # Un modo puede haber terminado de calcular mientras su narración sigue en
+                # la cola de audio. La orden nueva también debe cancelar esas frases.
+                self.output.cancel(self._mode_audio_id)
             request_id = self._new_id()
+            self._mode_audio_id = request_id
             deadline_s = self.deadlines_s.get(interp.mode.value)  # type: ignore[union-attr]
             deadline = now + int(deadline_s * 1e9) if deadline_s else None
             command = interp.to_command(request_id, now, deadline)
