@@ -40,6 +40,46 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-17 — T12: candidato congelado, paquete y latencia M9 en la Mac
+
+**Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-fusion`.
+
+**Hecho.**
+- **Candidato congelado:** F3 sobre B4, semilla 0, época 15 (`v2-f3-b4-s0/mejor.pt`), elegido
+  por EPE de val. Paquete `outputs/fusion/paquetes/fusion-v2-f3-b4-s0`, `model_id`
+  `fusion-f3-b701d067` (val EPE 1,678 px contra B4 2,053 en su soporte).
+- **Comando nuevo** `python -m visionx.depth.fusion latencia <paquete> <clip>`: mismo protocolo
+  M9 que la latencia de T05 (50 de calentamiento + 300 medidos, P50/P95 por etapa) sobre
+  `FusionEstimator.predict_detailed`, como lo usa la app. No entran captura, JPEG ni rectificación.
+
+**Latencia M9** (M2 Max, macOS 15.7.3, monocular y red en MPS; clip `dev-1114-distancias`,
+100 pares distintos en ciclo; memoria pico 3,1 GB; alineación aceptada y cobertura 100 %).
+Artefacto: `outputs/profundidad/20261117-135356-latencia-fusion-f3-b701d067-dev-1114-distancias/`.
+
+| por ojo | total P50 / P95 | estéreo | monocular | alineación + B5 | canales | red | pares/s | B4 (T05) |
+|---|---|---|---|---|---|---|---|---|
+| 640×360 | 110 / 155 ms | 18 | 29 | 19 | 11 | 27 | ~9,1 | 51 ms |
+| 960×540 | 370 / 389 ms | 44 | 151 | 41 | 27 | 95 | ~2,7 | 127 ms |
+| 1280×720 | 365 / 390 ms | 86 | 58 | 76 | 47 | 61 | ~2,7 | 176 ms |
+
+(P50 por etapa en ms.)
+
+- A 1280×720 Fusion cuesta ~2× B4: suma la corrección local de B5 (que F3 necesita aunque la
+  base sea B4), los canales y la red.
+- **960×540 es tan lenta como 1280×720:** el monocular (151 ms) y la red (95 ms) cuestan más
+  que a 1280. T05 ya había visto el monocular anómalo a 960 (73/137 ms). Parece un efecto de
+  MPS con esas formas; sin investigar.
+- Uso en la app: la distancia a pedido congela un par, así que ~0,4 s alcanza. Para guiar
+  cuadro a cuadro, ~2,7 pares/s es poco; 640×360 da ~9 pares/s, pero la precisión de Fusion a
+  esa resolución no está medida (se entrenó a ~1080×860 de InStereo2K).
+- Una sola corrida (el protocolo final pide tres); sin competir con detección ni STT.
+
+**Límites.** Las distancias del clip no se evaluaron: esto es solo tiempo. Precisión en la ELP
+pendiente del banco (T04).
+
+**Próximo paso.** Evaluación única del candidato en el test público (MiddEval3-H y ETH3D) con
+`--test-congelado`, contra B4 y B5 con los mismos parámetros congelados.
+
 ## 2026-11-17 — T12: segunda semilla del candidato (F3 sobre B4)
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-fusion`.

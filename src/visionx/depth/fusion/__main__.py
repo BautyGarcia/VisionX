@@ -518,6 +518,91 @@ def _tune_b5(args: argparse.Namespace) -> int:
 # --- main -----------------------------------------------------------------------------------
 
 
+def _latency(args: argparse.Namespace) -> int:
+    """M9 de Fusion sobre un clip de la ELP: el mismo protocolo que `visionx.depth latencia`.
+
+    Mide `FusionEstimator.predict_detailed` como lo usa la app: reescalar a la resolución de
+    cómputo, SGBM, monocular, recta(s) global(es) y corrección local, canales, red y armado del
+    DepthResult. No entran captura, JPEG ni rectificación. La red devuelve su salida a CPU antes
+    de terminar, así que la GPU (MPS) queda sincronizada en cada par.
+    """
+    import platform
+
+    from visionx.calibration import StereoCalibration
+    from visionx.camera.rectified import RectifiedSource
+    from visionx.camera.replay import ReplaySource
+    from visionx.depth import latency
+    from visionx.depth.__main__ import _parse_size
+    from visionx.depth.fusion.estimator import load_estimator
+    from visionx.depth.mono import DepthAnythingV2, MonoConfig
+
+    cfg = load_config(args.config_base)
+    calib_path = ROOT / cfg["camera"]["calibration"]
+    source = RectifiedSource(ReplaySource(args.clip), StereoCalibration.load(calib_path))
+    frames = []
+    while (frame := source.read()) is not None and len(frames) < args.pares:
+        frames.append(frame)
+    source.close()
+    capture = source.geometry
+    print(f"{len(frames)} pares rectificados de {args.clip} ({capture.size[0]}x{capture.size[1]})")
+
+    # Un solo monocular para todas las resoluciones (la red se carga una vez, como en la app).
+    mono = DepthAnythingV2(MonoConfig.from_config(cfg["depth"]["mono"]))
+    results: dict[str, Any] = {}
+    model_id = None
+    for text in args.resoluciones:
+        size = _parse_size(text)
+        est = load_estimator(cfg, capture, size, package=args.paquete, mono=mono,
+                             device=args.dispositivo)  # fmt: skip
+        model_id = est.model_id
+
+        def run(frame: Any, est: Any = est) -> dict[str, float]:
+            result, out = est.predict_detailed(frame)
+            st = out.stats
+            return {"total_ms": result.inference_ms, "estereo_ms": st["ms_estereo"],
+                    "mono_ms": st["ms_mono"], "alineacion_ms": st["ms_alineacion"],
+                    "canales_ms": st["ms_canales"], "red_ms": st["ms_red"],
+                    "alin_aceptada": st["alin_aceptada"], "cobertura": st["cobertura"]}  # fmt: skip
+
+        print(f"{text}: {args.calentamiento} de calentamiento + {args.medidos} medidos…")
+        stats = latency.measure(frames, run, args.calentamiento, args.medidos)
+        results[text] = stats
+        t = stats["total_ms"]
+        parts = ", ".join(
+            f"{k[:-3]} {stats[k]['p50']:.0f}"
+            for k in ("estereo_ms", "mono_ms", "alineacion_ms", "canales_ms", "red_ms")
+        )
+        print(f"  total P50 {t['p50']:.0f} ms, P95 {t['p95']:.0f} ms (~{1000 / t['p50']:.1f} "
+              f"pares/s); P50 por etapa: {parts} ms")  # fmt: skip
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = Path(args.salida) / f"{stamp}-latencia-{model_id}-{Path(args.clip).name}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report = {
+        "modelo": model_id,
+        "paquete": str(args.paquete),
+        "clip": str(args.clip),
+        "session_id": frames[0].session_id if frames else None,
+        "pares_distintos": len(frames),
+        "calibracion": cfg["camera"]["calibration"],
+        "commit": _git_commit(),
+        "comando": " ".join(sys.argv),
+        "equipo": {
+            "sistema": platform.platform(),
+            "procesador": platform.processor(),
+            "python": platform.python_version(),
+            "dispositivo_mono": mono.device,
+            "dispositivo_red": args.dispositivo or "auto",
+        },  # fmt: skip
+        "memoria_pico_mb": latency.peak_rss_mb(),
+        "resoluciones": results,
+    }
+    with (out_dir / "latencia.yaml").open("w", encoding="utf-8") as f:
+        yaml.safe_dump(_jsonable(report), f, allow_unicode=True, sort_keys=False)
+    print(f"resultados en {out_dir}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m visionx.depth.fusion",
@@ -594,6 +679,17 @@ def main(argv: list[str] | None = None) -> int:
     em.add_argument("--salida", default=str(DEFAULT_OUTPUT / "paquetes"))
     em.add_argument("--reemplazar", action="store_true", help="pisar un paquete con ese nombre")
 
+    la = sub.add_parser("latencia", help="M9: Fusion completa sobre un clip de la ELP")
+    la.add_argument("paquete", help="carpeta de un paquete (empaquetar)")
+    la.add_argument("clip", help="carpeta de una grabación (recordings/...)")
+    la.add_argument("--resoluciones", nargs="+", default=["640x360", "960x540", "1280x720"])
+    la.add_argument("--pares", type=int, default=100, help="pares distintos (se recorren en ciclo)")
+    la.add_argument("--calentamiento", type=int, default=50)
+    la.add_argument("--medidos", type=int, default=300)
+    la.add_argument("--dispositivo", default=None, help="de la red: auto | mps | cpu")
+    la.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
+    common(la)
+
     b5 = sub.add_parser("ajustar-b5", help="grilla de B5 en val y confirmación en train")
     b5.add_argument("--limite", type=int, default=0, help="N pares de val repartidos (prueba)")
     b5.add_argument("--confirmacion", type=int, default=100, help="pares de train repartidos")
@@ -613,6 +709,8 @@ def main(argv: list[str] | None = None) -> int:
             return _train(args)
         if args.comando == "empaquetar":
             return _package(args)
+        if args.comando == "latencia":
+            return _latency(args)
         return _evaluate(args)
     except (InvalidInput, EstimatorError, SourceError) as exc:
         print(f"error: {exc}", file=sys.stderr)
