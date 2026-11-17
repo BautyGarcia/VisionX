@@ -28,6 +28,8 @@ from visionx.modes.common import (
     direction,
     measure,
     measure_phrase,
+    precision_view,
+    request_precision,
 )
 from visionx.modes.target import Target, TargetMemory, plural
 from visionx.shared.contracts import Command
@@ -71,12 +73,17 @@ class DistanceHandler:
             if remembered is None:
                 self.memory.remember(None)
             self.memory.request(command.target, now_ns)
+        request_precision(view, command, now_ns, self.s)
         says, _ = self.tick(command, view, now_ns)
         return says
 
     def tick(self, command: Command, view: View, now_ns: int) -> tuple[list[Say], bool]:
         if command.request_id != self.request_id or self._answered:
             return [], True
+        guided = self._guided_target.angle_h_deg if self._guided_target is not None else None
+        view = precision_view(view, command, now_ns, self.s, self.geometry, self._label, guided)
+        if view is None:
+            return [], False
         joint = self._usable(view.measured, command, now_ns)
         if joint is not None:
             answer = self._answer(joint, view, now_ns)
@@ -180,6 +187,7 @@ class DistanceHandler:
             "z_m": z,
             "motivo": reason,
             "profundidad": joint.depth.model_id if joint.depth else None,
+            "latencia_ms": joint.depth.inference_ms if joint.depth else None,
         }
 
     def _event(self, kind: str, data: dict[str, Any]) -> None:

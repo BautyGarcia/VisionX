@@ -23,6 +23,8 @@ from visionx.modes.common import (
     horizontal,
     measure,
     measure_phrase,
+    precision_view,
+    request_precision,
     speech_s,
 )
 from visionx.modes.target import Target, plural
@@ -234,6 +236,7 @@ class DescribeHandler:
         self._answered = False
         self._zones = []
         self._history = {}
+        request_precision(view, command, now_ns, self.s)
         says, _ = self.tick(command, view, now_ns)
         return says
 
@@ -256,6 +259,12 @@ class DescribeHandler:
         for observation in (view.seen, view.measured):
             if observation is not None:
                 self._observe(observation, now_ns)
+
+        view = precision_view(view, command, now_ns, self.s, self.geometry)
+        if view is None:
+            return [], False
+        if view.measured is not None:
+            self._observe(view.measured, now_ns)
 
         limit = command.issued_ns + int(self.describe.wait_measure_s * 1e9)
         if command.deadline_ns is not None:
@@ -417,6 +426,7 @@ class DescribeHandler:
         self._event(
             {
                 "hechos": asdict(self.facts),
+                "latencia_ms": joint.depth.inference_ms if joint.depth else None,
                 "solo_presencia": not measured,
                 "texto": phrases,
                 "caracteres": len(" ".join(phrases)),

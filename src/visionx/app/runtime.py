@@ -25,7 +25,10 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
+
+if TYPE_CHECKING:
+    from visionx.app.precision import PrecisionWorker
 
 from visionx.shared.clock import Clock, MonotonicClock
 from visionx.shared.contracts import (
@@ -153,6 +156,7 @@ class Joint:
     detection: Detection
     depth: DepthResult | None
     objects: tuple[SpatialObject, ...]
+    precise_request_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +173,7 @@ class View:
     # identidad propia; el OCR no usa sus cajas para medir metros.
     captured: StereoFrame | None = None
     original: StereoFrame | None = None
+    precise: PrecisionWorker | None = None
 
 
 class ResultBoard:
@@ -237,11 +242,13 @@ class Pipeline:
         clock: Clock | None = None,
         cache_frames: int = 30,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        precise: PrecisionWorker | None = None,
     ) -> None:
         self.source = source
         self.detector = detector
         self.depth = depth
         self.spatial = spatial
+        self.precise = precise
         self.clock = clock or MonotonicClock()
         self.cache = FrameCache(cache_frames)
         self.board = ResultBoard(cache_frames)
@@ -275,6 +282,8 @@ class Pipeline:
 
     def stop(self, timeout_s: float = 5.0) -> None:
         self._stop.set()
+        if self.precise is not None:
+            self.precise.close()
         self._det_box.close()
         self._depth_box.close()
         for thread in self._threads:
@@ -368,6 +377,7 @@ class Pipeline:
                 status.name,
                 {
                     "frame_id": frame.frame_id,
+                    "model_id": status.model_id,
                     "latencia_ms": round(latency_ms, 2),
                     "edad_ms": round(status.age_ms(self.clock.now_ns()) or 0.0, 2),
                 },
@@ -437,7 +447,11 @@ class Pipeline:
         with self._joint_lock:
             captured, original = self._captured
         return View(
-            self.latest_seen(), measured if self.depth is not None else None, captured, original
+            self.latest_seen(),
+            measured if self.depth is not None else None,
+            captured,
+            original,
+            self.precise,
         )
 
     def _update_joint(self) -> None:

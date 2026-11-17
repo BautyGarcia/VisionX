@@ -682,6 +682,23 @@ sin audio real medido todavía. Tests sin dispositivos/modelos; los clips no sus
 
 ### Interactivo y científico — T07
 
+La app construye B0–B4 en `app.depth_registry.build_estimator`. Para agregar otro método,
+declarar `depth.estimadores.NOMBRE: {fabrica: "paquete.modulo:funcion", ...}`: la fábrica recibe
+`(cfg: dict, geometry: StereoGeometry)` con los parámetros de esa entrada sin `fabrica`, y
+devuelve un `DepthEstimator`. Si reescala el mapa, expone su geometría de salida en `geometry`.
+`--profundidad` admite esos nombres. No hace falta editar la app para integrar Fusion.
+
+`--profundidad-precisa NOMBRE|ninguna` pisa `depth.precisa.estimador` (default `ninguna`).
+Distancia y describir solicitan una medición en un worker independiente; buscar/guiar conserva
+la continua. `depth.precisa.espera_s` limita la espera (2 s iniciales, también limitada por la
+vigencia menos el margen de respuesta); `depth.precisa.compute` permite otra resolución sin
+cambiar los parámetros de SGBM/B4. Se congela una detección vigente y su par, se verifica
+`check_same_frame`, y se descarta el resultado si cambió/canceló el `request_id` o llegó tarde.
+Si la precisa falla o no admite metros del objetivo, se usa la continua con su propia detección.
+La traza registra petición, resultado/descarte y `profundidad-elegida` con modelo, latencia y
+motivo; el dashboard muestra el método elegido y el estado del worker. Cancelar es inmediato
+para el controlador; una inferencia nativa ya iniciada termina en su hilo antes de cerrar.
+
 Mantener una aplicación modular, con lógica pública compartida. **Interactivo:** captura sigue
 avanzando; detector, profundidad y audio tienen ritmos propios. Una cola acotada mantiene
 actualidad y evita esperar frames viejos. Coordinar uso de GPU; más hilos de inferencia no
@@ -734,9 +751,9 @@ uv run python -m visionx.app comparar --fuente recordings/X --detector yolo
 ```
 
 Con `--fuente` grabación o `usb` se rectifica con `camera.calibration`. `--profundidad
-B0|B1|B2` usa el `SgbmEstimator` de T05 con la sección `depth` (cómputo en `depth.compute`,
+B0|B1|B2` usa `SgbmEstimator`; B3/B4 usan `HybridEstimator`, con la sección `depth` (cómputo en `depth.compute`,
 1280×720): la máscara del detector (1920×1080) se reduce a esa resolución por vecino más
-cercano antes de tomar la mediana de Z (`ProvisionalSpatialEstimator(depth_geometry=…)`), y el ángulo
+cercano antes de medir la capa cercana de Z (`ProvisionalSpatialEstimator(depth_geometry=…)`), y el ángulo
 sale de la caja en la geometría del frame. Esa ubicación por objeto sigue siendo provisoria
 hasta T09/T13. `fake` solo tiene sentido con la fuente sintética: con una grabación da un plano.
 Cada unión queda en la traza con clase, ID, Z, dispersión, fracción válida, ángulo y política;

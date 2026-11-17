@@ -1,7 +1,8 @@
 """Aplicación VisionX: ejecución interactiva y comparación científica (T07).
 
     uv run python -m visionx.app ejecutar [--fuente sintetica|CARPETA|usb] [--detector fake|yolo]
-        [--profundidad fake|ninguna|B0|B1|B2] [--segundos 0] [--sin-ventana] [--voz] [--consola]
+        [--profundidad fake|ninguna|B0|B1|B2|B3|B4|REGISTRO]
+        [--profundidad-precisa NOMBRE|ninguna] [--segundos 0] [--sin-ventana] [--voz] [--consola]
         [--ordenes ordenes.jsonl] [--traza X.jsonl] [--captura X.png]
         [--retraso-detector MS] [--retraso-profundidad MS]
     uv run python -m visionx.app comparar [--fuente ...] [--detector ...] --csv X
@@ -11,9 +12,9 @@ Teclas en la ventana: c = cancelar (botón), espacio = hablar/terminar (con --vo
 "buscá la taza"} reproduce una sesión. Sin --voz, lo que se diría se imprime y no suena.
 
 La profundidad "fake" y la fuente "sintetica" son sustitutos (app/fakes.py): no miden nada.
-B0/B1/B2 son el SGBM de T05 (depth/stereo.py) con la sección `depth` de la config: necesitan
-el par rectificado, o sea --fuente usb o una grabación. La ubicación por objeto sigue siendo la
-provisoria de fakes.py (mediana de Z en la máscara) hasta que A entregue la de T09/T13.
+B0–B2 usan SGBM; B3/B4 usan el híbrido de T05. Necesitan un par rectificado y B3/B4,
+pesos DA V2 Small locales. `depth.estimadores` admite fábricas públicas para otros métodos.
+La ubicación por objeto es la provisoria de app/spatial.py hasta que A entregue T09/T13.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import json
 import sys
 import threading
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -31,11 +33,13 @@ import yaml
 
 from visionx.app.controller import Controller
 from visionx.app.dashboard import DashboardState, render
+from visionx.app.depth_registry import build_estimator
 from visionx.app.fakes import (
     FakeDepthEstimator,
     ScriptedDetector,
     SyntheticStereoSource,
 )
+from visionx.app.precision import PrecisionWorker
 from visionx.app.runtime import Pipeline
 from visionx.app.science import TraceWriter, compare
 from visionx.app.spatial import ProvisionalSpatialEstimator
@@ -142,20 +146,31 @@ def build_depth(args: argparse.Namespace, cfg: dict[str, Any], geometry, synthet
     if args.profundidad == "fake":
         depth = FakeDepthEstimator(geometry, source=synthetic, delay_ms=args.retraso_profundidad)
         return depth, build_spatial(cfg, geometry), geometry
-    if synthetic is not None:
+    if synthetic is not None and args.profundidad in {"B0", "B1", "B2", "B3", "B4"}:
         raise InvalidInput(f"--profundidad {args.profundidad} necesita una grabación o usb")
-    from visionx.depth.stereo import SgbmEstimator, SgbmParams
+    depth = build_estimator(args.profundidad, cfg, geometry)
+    depth_geometry = getattr(depth, "geometry", geometry)
+    return depth, build_spatial(cfg, geometry, depth_geometry), depth_geometry
 
-    dcfg = cfg.get("depth") or {}
-    compute = dcfg.get("compute")
-    depth = SgbmEstimator(
-        args.profundidad,
-        SgbmParams.from_config(dcfg.get("sgbm") or {}),
-        geometry,
-        compute_size=tuple(compute) if compute else None,
-        min_coverage=float(dcfg.get("min_coverage", 0.0)),
+
+def build_precision(args: argparse.Namespace, cfg: dict[str, Any], geometry, on_event=None):
+    """La resolución precisa puede diferir de la continua; no cambia parámetros congelados."""
+    section = (cfg.get("depth") or {}).get("precisa") or {}
+    name = args.profundidad_precisa
+    if name is None:
+        name = section.get("estimador", "ninguna")
+    if name == "ninguna":
+        return None
+    precise_cfg = deepcopy(cfg)
+    if section.get("compute"):
+        precise_cfg.setdefault("depth", {})["compute"] = section["compute"]
+    estimator = build_estimator(name, precise_cfg, geometry)
+    return PrecisionWorker(
+        estimator,
+        build_spatial(cfg, geometry, getattr(estimator, "geometry", geometry)),
+        wait_s=float(section.get("espera_s", 2.0)),
+        on_event=on_event,
     )
-    return depth, build_spatial(cfg, geometry, depth.geometry), depth.geometry
 
 
 def cmd_ejecutar(args: argparse.Namespace) -> int:
@@ -166,6 +181,7 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     source, geometry, synthetic = build_source(args, cfg)
     detector = build_detector(args, cfg, synthetic)
     depth, spatial, depth_geometry = build_depth(args, cfg, geometry, synthetic)
+    precise = build_precision(args, cfg, geometry, on_event)
 
     last_audio: list[str] = ["-"]
 
@@ -178,7 +194,7 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
         )  # fmt: skip
 
     output, voice = build_output(args, cfg, on_record)
-    pipeline = Pipeline(source, detector, depth, spatial, on_event=on_event)
+    pipeline = Pipeline(source, detector, depth, spatial, on_event=on_event, precise=precise)
     catalog = ClassCatalog(COCO_CLASSES)
     controller = Controller(
         CommandParser(catalog),
@@ -207,7 +223,8 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     def dashboard_state() -> DashboardState:
         return DashboardState(
             joint=pipeline.latest_joint(),
-            statuses=(pipeline.capture_status, pipeline.detector_status, pipeline.depth_status),
+            statuses=(pipeline.capture_status, pipeline.detector_status, pipeline.depth_status)
+            + ((precise.status,) if precise else ()),
             now_ns=pipeline.clock.now_ns(),
             range_m=range_m,  # type: ignore[arg-type]
             dropped=pipeline.dropped(),
@@ -216,6 +233,7 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
             + (" [grabando]" if recording else ""),
             audio=last_audio[0],
             geometry=depth_geometry,  # la vista de arriba usa la geometría de la profundidad
+            measurement=precise.selection if precise else None,
         )
 
     window = not args.sin_ventana
@@ -290,6 +308,8 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
         "profundidad": {"modelo": pipeline.depth_status.model_id,
                         "procesados": pipeline.depth_status.processed,
                         "errores": pipeline.depth_status.errors},
+        "precisa": {"modelo": precise.status.model_id, "procesados": precise.status.processed,
+                    "errores": precise.status.errors} if precise else None,
         "salteados": pipeline.dropped(),
         "colas_maximas": max_queues,
         "errores_espaciales": pipeline.spatial_errors,
@@ -335,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         p.add_argument("--detector", choices=["fake", "yolo"], default="fake")
         p.add_argument(
-            "--profundidad", choices=["fake", "ninguna", "B0", "B1", "B2"], default="fake"
+            "--profundidad", default="fake", help="fake, ninguna, B0–B4 o depth.estimadores"
         )
         p.add_argument("--fps", type=float, default=30.0, help="ritmo de la fuente sintética")
         p.add_argument("--frames", type=int, default=0, help="cortar la fuente tras N frames")
@@ -345,6 +365,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("ejecutar", help="recorrido interactivo con dashboard")
     common(p)
+    p.add_argument(
+        "--profundidad-precisa",
+        default=None,
+        help="B0–B4, nombre de depth.estimadores o ninguna (default config)",
+    )
     p.add_argument("--segundos", type=float, default=0.0, help="0 = hasta q o fin de la fuente")
     p.add_argument("--sin-ventana", action="store_true")
     p.add_argument("--voz", action="store_true", help="Piper + micrófono con espacio")

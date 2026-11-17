@@ -15,11 +15,11 @@ sección `modes` de la config para poder ajustarlos sin tocar código.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from typing import Any
 
 from visionx.app.runtime import Joint, View
-from visionx.shared.contracts import DistancePolicy, SpatialObject
+from visionx.shared.contracts import Command, DistancePolicy, SpatialObject
 from visionx.shared.geometry import StereoGeometry
 
 __all__ = ["Candidate", "Measure", "ModeSettings", "View", "age_s", "candidates", "direction",
@@ -111,6 +111,53 @@ def speech_s(text: str, s: ModeSettings) -> float:
 
 def age_s(joint: Joint, now_ns: int) -> float:
     return max(0.0, (now_ns - joint.frame.received_ns) / 1e9)
+
+
+def request_precision(view: View, command: Command, now_ns: int, s: ModeSettings) -> None:
+    """Congelar una detección para este request_id; desactivado por defecto."""
+    if view.precise is not None:
+        view.precise.request(
+            command, view, now_ns, end_margin_s=s.end_margin_s, accept_before_s=s.accept_before_s
+        )
+
+
+def precision_view(
+    view: View,
+    command: Command,
+    now_ns: int,
+    s: ModeSettings,
+    geometry: StereoGeometry,
+    label: str | None = None,
+    guided_angle: float | None = None,
+) -> View | None:
+    """Esperar precisa sin bloquear; usar continua si vence/falla o no mide el objetivo.
+
+    Reutiliza la política pública de metros del modo. Para varios objetos nombrados todos
+    deben poder medirse; describir admite una escena con al menos un objeto medible.
+    """
+    if view.precise is None:
+        return view
+
+    def invalid(joint: Joint) -> str | None:
+        if age_s(joint, now_ns) > s.max_measure_age_s:
+            return "frame-viejo"
+        if joint.frame.received_ns < command.issued_ns - int(s.accept_before_s * 1e9):
+            return "frame-anterior-a-orden"
+        selected = candidates(joint, label, geometry)
+        if command.mode.value == "distance":
+            if guided_angle is not None and selected:
+                selected = [min(selected, key=lambda c: abs(c.angle_h_deg - guided_angle))]
+            elif label is None:
+                selected = [c for c in selected if abs(c.angle_h_deg) <= s.center_deg * 2]
+                selected = [min(selected, key=lambda c: abs(c.angle_h_deg))] if selected else []
+            selected = selected[: s.max_listed]
+            if not selected:
+                return "sin-objetivo"
+            return next((m.reason for c in selected if not (m := measure(c.obj, s)).ok), None)
+        return None if any(measure(c.obj, s).ok for c in selected) else "sin-metros"
+
+    chosen, pending = view.precise.select(command, view, now_ns, invalid)
+    return None if pending else replace(view, measured=chosen)
 
 
 # Dos cajas de la misma clase que se cubren tanto son el mismo objeto detectado dos veces (YOLO
