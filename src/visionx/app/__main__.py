@@ -261,6 +261,7 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print("interrumpido")
     finally:
+        controller.close()
         if args.captura:
             # Lo último que se unió, dibujado igual que en la ventana: evidencia sin pantalla.
             import cv2

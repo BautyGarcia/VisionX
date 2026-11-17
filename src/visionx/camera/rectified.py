@@ -26,6 +26,9 @@ class RectifiedSource:
         self.geometry: StereoGeometry = calibration.geometry()
         # Los mapas de remapeo se calculan una sola vez: son caros y no cambian.
         self._maps = calibration.rectify_maps()
+        # Contexto local de OCR: preservar el original sin atribuirle geometría rectificada
+        # ni agregar campos al contrato público StereoFrame (schema 3).
+        self.original_frame: StereoFrame | None = None
 
     def read(self) -> StereoFrame | None:
         frame = self._source.read()
@@ -40,6 +43,7 @@ class RectifiedSource:
                 f"{self.calibration.calibration_id} es de {w}x{h}: no corresponde a este modo"
             )
         left, right = self.calibration.rectify(frame.left, frame.right, self._maps)
+        self.original_frame = frame
         return dataclasses.replace(
             frame,
             left=left,

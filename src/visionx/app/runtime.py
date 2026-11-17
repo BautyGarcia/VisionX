@@ -165,6 +165,10 @@ class View:
 
     seen: Joint | None = None
     measured: Joint | None = None
+    # T10: captura sin esperar detección/profundidad. Original y rectificada mantienen
+    # identidad propia; el OCR no usa sus cajas para medir metros.
+    captured: StereoFrame | None = None
+    original: StereoFrame | None = None
 
 
 class ResultBoard:
@@ -255,6 +259,7 @@ class Pipeline:
         self._joint_lock = threading.Lock()
         self._joint: Joint | None = None
         self._seen: Joint | None = None  # caché de latest_seen()
+        self._captured: tuple[StereoFrame | None, StereoFrame | None] = (None, None)
         self._threads: list[threading.Thread] = []
 
     # -- control ---------------------------------------------------------------------------
@@ -316,6 +321,12 @@ class Pipeline:
                 now = self.clock.now_ns()
                 self.cache.put(frame)
                 self.latest_frame = frame
+                original = getattr(self.source, "original_frame", None)
+                if not frame.rectified:
+                    original = frame
+                # Publicar juntos evita mezclar el original de otro frame entre hilos.
+                with self._joint_lock:
+                    self._captured = (frame, original)
                 self.capture_status.record(frame.key, 0.0, frame.received_ns, now)
                 self._det_box.put(frame)
                 self._on_event("frame", {"frame_id": frame.frame_id, "session": frame.session_id})
@@ -423,7 +434,11 @@ class Pipeline:
     def view(self) -> View:
         """Lo que reciben los modos en cada tick del controlador."""
         measured = self.latest_joint()
-        return View(self.latest_seen(), measured if self.depth is not None else None)
+        with self._joint_lock:
+            captured, original = self._captured
+        return View(
+            self.latest_seen(), measured if self.depth is not None else None, captured, original
+        )
 
     def _update_joint(self) -> None:
         if self.depth is None:
