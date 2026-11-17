@@ -152,12 +152,27 @@ reading:
 
 # Descripción local de una escena (T11). Sin VLM ni conexión a internet.
 describe:
-  max_objects: 5            # instancias mencionadas (no grupos); el resto se cuenta como "cosas más"
-  min_score: 0.6            # solo describir; detection.conf/buscar conservan 0.25
-  persist_hits: 2          # frames distintos con score suficiente; una instancia no confirma otra
+  max_objects: 8            # priorizar nombres sobre detalle métrico al ajustar el presupuesto
+  # R3: desarrollo, 39 frames / 247 candidatos revisados (197 con respaldo, 50 sin él).
+  # Curva y etiquetas: outputs/t11/ronda3/. No probabilidades ni test independiente.
+  min_score: 0.6            # afirmación: score actual Y previo >= este corte (y el de su clase)
+  cautious_score: 0.27     # reserva: "parece haber"; nunca metros; no cambia detection/buscar
+  cautious_min_scores:     # pisos por clase, tanto en frame actual como en confirmaciones
+    bed: 0.35             # ropa confundida con cama: score persistente <= 0.320
+    bench: 0.35           # estructura/mesa de jardín: persistente <= 0.287
+    banana: 0.4           # peluche: persistente <= 0.372
+    potted plant: 0.4     # almohadón: persistente <= 0.395
+    laptop: 0.5           # estructura de jardín: persistente <= 0.452, aislado hasta 0.770
+    dining table: 0.5     # banquito: persistente <= 0.463
+    oven: 0.65            # lavarropas: hasta 0.642 en contexto; no relajar por ser grande/fijo
+  # Pileta/heladera usan 0.27: no hay falsos revisados; no eximirlas de persistencia.
+  # No hay evidencia para bajar más cama/sillón/inodoro. Dos frames a 0.60: 99 reales/0 falsos;
+  # corte global 0.40: 139/8. Con pisos + 0.27: 163/8 (4.68 %); 0.26: 164/10 (5.75 %).
+  # Se elige 0.27 por máximo de reales en la grilla con <=5 % sin respaldo, antes del presupuesto.
+  persist_hits: 2          # frames distintos en CADA nivel; una instancia no confirma otra
   persist_s: 3.0           # ventana de presencia antes del frame descrito (segundos)
   max_speech_s: 8.0        # presupuesto estimado con modes.speech_s_per_char; reduce el listado
-  wait_measure_s: 3.0       # s desde la orden para esperar una unión posterior; después, solo presencia
+  wait_measure_s: 4.0       # s; permite segunda observación en ir_lavadero (~3.3 s con estas latencias)
   large_area_fraction: 0.1  # fracción de imagen ocupada por la caja; desempata relevancia sin inferir tamaño real
 
 calibration:

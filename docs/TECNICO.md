@@ -640,6 +640,25 @@ Proveedor/modelo de API todavía no elegido: comparar calidad, latencia, coste, 
 timeouts y funcionamiento sin red. Enviar imagen solo al pedirlo, con ruta remota explícita.
 El VLM no controla directamente la máquina de estados ni la selección de un objeto.
 
+**Plantilla local implementada (T11, ronda 3; recepción pendiente).** Cada presencia de
+`SceneFacts` tiene nivel `high` o `cautious`. El primero exige score actual y confirmaciones
+>=0,60; el segundo >=0,27 y se dice «parece haber». Ambos requieren dos frames distintos
+en tres segundos, asociados uno a uno por clase e ID o IoU >=0,3 sin IDs contradictorios.
+Los pisos por clase de `describe.cautious_min_scores` también se aplican a las confirmaciones
+y al nivel alto: se endurecen las confusiones observadas, incluido horno/lavarropas (0,65).
+Pileta y heladera conservan el corte bajo; nunca se eximen de persistencia. Estos cortes
+se ajustaron en desarrollo: 39 frames, 247 candidatos etiquetados por el agente; curva,
+criterio de verdad, textos y límites en `outputs/t11/NOTAS.md`, sección «Ronda 3».
+
+Solo el nivel alto puede aportar metros, y únicamente desde `SPEAK_METERS` del mismo frame
+dentro de `depth.range_m`. Se agrupa por zona, clase y nivel; la reserva no se extiende a
+los objetos afirmados ni hereda sus medidas. Si solo quedan candidatos medios, se describen
+con reserva. La abstención por confianza exige que no quede ningún candidato persistente.
+El presupuesto estimado es ocho segundos, incluidos avisos y pausas: se intenta quitar
+conteo anónimo y detalle métrico antes de retirar nombres completos. La espera de cuatro
+segundos permite recibir una segunda vista tardía. Hasta ocho instancias; sin audio real
+medido todavía. Tests sin dispositivos/modelos; la revisión de clips no sustituye M10.
+
 ## Ejecucion y audio
 
 ### Interactivo y científico — T07
