@@ -31,6 +31,8 @@ def build_handlers(
     geometry: StereoGeometry,
     spoken: Callable[[str], str],
     on_event: Callable[[str, dict[str, Any]], None] | None = None,
+    *,
+    prewarm_reading: bool = False,
 ) -> dict[Mode, Any]:
     """Buscar y distancia comparten la memoria del objetivo guiado."""
     settings = ModeSettings.from_config(cfg)
@@ -49,5 +51,7 @@ def build_handlers(
         ),
         Mode.SEARCH: SearchHandler(geometry, spoken, settings, memory, on_event),
         Mode.DISTANCE: DistanceHandler(geometry, spoken, settings, memory, on_event),
-        Mode.READ: ReadHandler(settings=ReadingSettings.from_config(cfg), on_event=on_event),
+        Mode.READ: ReadHandler(
+            settings=ReadingSettings.from_config(cfg), on_event=on_event, prewarm=prewarm_reading
+        ),
     }

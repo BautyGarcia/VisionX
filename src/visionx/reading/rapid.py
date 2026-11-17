@@ -1,7 +1,7 @@
 """RapidOCR 3.10 + PP-OCRv5 latino, ONNX Runtime CPU, sin descargas implícitas.
 
 Los tres hashes vienen del catálogo del tag v3.10.0 de RapidAI/RapidOCR.
-El import opcional y la carga viven en read(), que el modo llama desde su worker.
+El import opcional y la carga viven en el worker (warmup/read), nunca en el controlador.
 """
 
 from __future__ import annotations
@@ -117,6 +117,11 @@ class RapidReader:
 
     def read(self, image: np.ndarray) -> list[TextBlock]:
         return self.read_region(image)
+
+    def warmup(self) -> None:
+        """Crea las sesiones ONNX una sola vez, serializado por ReadingWorker."""
+        if self._engine is None:
+            self._load()
 
     def read_region(
         self, image: np.ndarray, object_box: tuple[float, float, float, float] | None = None

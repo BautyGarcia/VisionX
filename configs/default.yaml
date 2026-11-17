@@ -121,7 +121,9 @@ modes:
 
 # OCR beta T10. Pesos aparte: `python -m visionx.reading descargar`. Siempre CPU.
 reading:
-  window_s: 1.5             # s tras la orden; elegir la izquierda con mayor varianza del Laplaciano
+  pre_s: 0.8                # s antes de la orden; la persona apunta y después habla
+  window_s: 0.4             # s máximos tras la orden; elegir la izquierda de mayor nitidez
+  early_sharpness: 90.0     # varianza Laplaciano absoluta (0 desactiva); piloto ELP rectificada 1920x1080
   # Piloto ELP (7 segmentos completos): CER medio 90,95 % rectificada / 93,56 % original.
   # Remap puede deformar texto en otras lentes: conservar ambas rutas y volver a comparar.
   image_source: rectified  # original | rectified; `evaluar --imagen ambas`, mismo tamaño por ojo

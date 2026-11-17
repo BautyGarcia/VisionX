@@ -51,7 +51,9 @@ class FakeReader:
 
 @dataclass(frozen=True, slots=True)
 class ReadingSettings:
-    window_s: float = 1.5
+    window_s: float = 0.4
+    pre_s: float = 0.8
+    early_sharpness: float = 90.0
     min_score: float = 0.65
     speech_min_score: float = 0.90
     line_height_ratio: float = 0.5
@@ -88,7 +90,14 @@ class ReadingSettings:
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"reading.{name} debe ser positivo y finito")
-        for name in ("border_px", "small_text_px", "speech_base_s", "crop_margin"):
+        for name in (
+            "border_px",
+            "small_text_px",
+            "speech_base_s",
+            "crop_margin",
+            "pre_s",
+            "early_sharpness",
+        ):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"reading.{name} debe ser no negativo y finito")

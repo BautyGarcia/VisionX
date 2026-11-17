@@ -589,7 +589,20 @@ para llegar a la transcripción correcta; su definición está en métricas.
 
 Implementación T10 (`visionx.reading`): seleccionar izquierda y ejecutar OCR en un worker
 persistente, con un solo pedido pendiente reemplazable. Cancelar invalida el resultado;
-una inferencia ONNX nativa termina en segundo plano. No cambia schema 3. `reading.crop`
+una inferencia ONNX nativa termina en segundo plano. Al construir la app con fuente real,
+el mismo worker precarga las sesiones OCR sin bloquear el arranque; una orden durante la
+carga espera allí y conserva su captura elegible, sin cargar otro modelo. La fuente
+sintética y los tests no precargan modelos. Un fallo de carga se informa al pedir leer.
+El controlador ofrece capturas aun inactivo; el worker conserva el máximo móvil de
+nitidez de hasta `pre_s=0,8` s previos (máximo 32 izquierdas, buzón más nuevo y captura
+del pedido; sin copiar píxeles). La ventana posterior máxima baja a `window_s=0,4` s.
+Si la mejor captura elegible tiene varianza del Laplaciano >= `early_sharpness=90`,
+se inicia OCR inmediatamente; 0 deshabilita este corte. Umbral absoluto de desarrollo
+para ELP rectificada 1920×1080: evita aceptar un máximo relativo aun completamente borroso,
+pero textura del fondo puede superarlo y exige volver a medir al cambiar ruta/resolución.
+Se filtran antigüedad, futuro y ventana del pedido; cambios de sesión/geometría/calibración
+vacían el historial. Cancelación y cierre tampoco esperan el precalentamiento nativo.
+No cambia schema 3. `reading.crop`
 permite `none`, `center` (fracción configurable), `text` (detección a `text_probe_px`,
 envolvente con margen, segundo det+rec a `det_limit_px`) y `object` (caja más central de
 `View.seen`, solamente con identidad, geometría, calibración y tamaño compatibles con el

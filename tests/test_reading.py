@@ -76,10 +76,12 @@ def wait_for(condition, timeout=2):
 def handlers():
     created = []
 
-    def build(reader=None, **overrides):
+    def build(reader=None, *, prewarm=False, **overrides):
         overrides.setdefault("image_source", "original")  # frames sintéticos de estos tests
         handler = ReadHandler(
-            reader if reader is not None else FakeReader([block()]), ReadingSettings(**overrides)
+            reader if reader is not None else FakeReader([block()]),
+            ReadingSettings(**overrides),
+            prewarm=prewarm,
         )
         created.append(handler)
         return handler
@@ -131,6 +133,10 @@ def test_tall_title_does_not_absorb_small_lines():
         {"speech_min_score": 1.01},
         {"speech_min_score": float("nan")},
         {"window_s": 0},
+        {"pre_s": -1},
+        {"pre_s": float("inf")},
+        {"early_sharpness": -1},
+        {"early_sharpness": float("nan")},
         {"max_age_s": float("nan")},
         {"image_source": "auto"},
         {"threads": 0},
@@ -160,7 +166,7 @@ def test_selects_sharpest_left_after_command(handlers):
             return super().read(selected)
 
     reader = Inspect([block()])
-    handler, cmd = handlers(reader), command()
+    handler, cmd = handlers(reader, pre_s=0, window_s=1.5, early_sharpness=0), command()
     # Anterior a la orden: más nítido pero no debe entrar.
     old = replace(frame(0, 0, image), received_ns=0)
     handler.start(replace(cmd, issued_ns=1), View(captured=old), 1)
@@ -172,6 +178,160 @@ def test_selects_sharpest_left_after_command(handlers):
     assert [s.text_or_sound for s in says] == ["Hola"] and not done
     assert np.array_equal(reader.selected, image)
     assert says[0].priority is Priority.LONG and says[0].cancelable
+
+
+class WarmingReader(FakeReader):
+    """Carga demorada por Event, sin import opcional, modelos ni hardware."""
+
+    def __init__(self):
+        super().__init__([block("listo")])
+        self.started, self.release = threading.Event(), threading.Event()
+        self.loads = self.reads = 0
+        self.thread_id = None
+
+    def warmup(self):
+        self.loads += 1
+        self.thread_id = threading.get_ident()
+        self.started.set()
+        assert self.release.wait(3)
+
+    def read(self, image):
+        assert self.release.is_set() and threading.get_ident() == self.thread_id
+        self.reads += 1
+        return super().read(image)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_order_during_warmup_waits_once_without_blocking_and_can_cancel(handlers, cancel):
+    reader = WarmingReader()
+    h = handlers(reader, prewarm=True)
+    assert reader.started.wait(2) and not h._worker.ready.is_set()
+    ctl, sink, clock = controller(h, View(captured=frame(0)))
+    try:
+        ctl.handle_text("leé")
+        job = h._job
+        clock.set(SEC)
+        for _ in range(20):
+            ctl.tick()  # carga sigue bloqueada; selección puede vencer sin perder captura
+        h.observe(View(captured=frame(1, 2)), SEC)  # buzón global fuera de ventana
+        assert not job.result.done() and reader.reads == 0 and reader.loads == 1
+        if cancel:
+            ctl.handle_text("cancelar")
+            assert job.cancelled.is_set()
+    finally:
+        reader.release.set()
+    wait_for(lambda: job.result.done())
+    ctl.tick()
+    assert h._worker.ready.is_set() and reader.loads == 1
+    assert reader.reads == (0 if cancel else 1)
+    assert ("listo" in [e.text_or_sound for e in sink.events]) is not cancel
+    ctl.close()
+
+
+def test_warmup_alone_never_reads_or_blocks_close(handlers):
+    reader = WarmingReader()
+    h = handlers(reader, prewarm=True)
+    assert reader.started.wait(2) and reader.reads == 0
+    try:
+        h.close()
+        assert not h._worker.ready.is_set()  # close vuelve aun con carga bloqueada
+    finally:
+        reader.release.set()
+    wait_for(lambda: not h._worker._thread.is_alive())
+
+
+def test_failed_warmup_is_reported_without_retrying_load(handlers):
+    class Broken(FakeReader):
+        loads = 0
+
+        def warmup(self):
+            self.loads += 1
+            raise RuntimeError("carga rota")
+
+        def read(self, image):
+            pytest.fail("no inferir tras una carga fallida")
+
+    reader = Broken()
+    h = handlers(reader, prewarm=True)
+    wait_for(lambda: h._worker.ready.is_set())
+    for request in (1, 2):
+        cmd = command(request)
+        h.start(cmd, View(captured=frame(0)), 0)
+        says, done = finish_selection(h, cmd)
+        assert done and says[0].text_or_sound.startswith("No pude leer.")
+    assert reader.loads == 1
+
+
+def test_previous_frames_are_observed_while_controller_is_inactive(handlers):
+    h = handlers(early_sharpness=0)
+    ctl, _, clock = controller(h, View(captured=frame(0.5)))
+    clock.set(SEC // 2)
+    ctl.tick()
+    wait_for(lambda: h._worker._history)
+    assert ctl.active is None
+    clock.set(SEC)
+    ctl.handle_text("leé")
+    clock.set(2 * SEC)
+    ctl.tick()
+    wait_for(lambda: h._job.result.done())
+    assert h._job.selected_key == frame(0.5).key
+    ctl.close()
+
+
+def test_previous_window_excludes_older_frames_and_selects_sharpest(handlers):
+    image = np.random.default_rng(1).integers(0, 256, (120, 160, 3), dtype=np.uint8)
+    h = handlers(early_sharpness=0)
+    # Fuera de pre_s, aunque es el más nítido.
+    h.observe(View(captured=frame(0.1, 1, image)), SEC // 10)
+    wait_for(lambda: h._worker._history)
+    blur = cv2.GaussianBlur(image, (5, 5), 2)
+    h.observe(View(captured=frame(0.5, 2, blur)), SEC // 2)
+    wait_for(lambda: h._worker._history[-1][1].frame_id == 2)
+    h.observe(View(captured=frame(0.9, 3)), int(0.9 * SEC))
+    wait_for(lambda: h._worker._history[-1][1].frame_id == 3)
+    cmd = replace(command(), issued_ns=SEC)
+    h.start(cmd, View(), SEC)
+    finish_selection(h, cmd)
+    assert h._job.selected_key.frame_id == 2
+
+
+def test_sharp_previous_frame_cuts_early_but_blur_waits_for_window(handlers):
+    image = np.random.default_rng(2).integers(0, 256, (120, 160, 3), dtype=np.uint8)
+    h = handlers()
+    h.observe(View(captured=frame(0.5, image=image)), SEC // 2)
+    wait_for(lambda: h._worker._history)
+    cmd = replace(command(), issued_ns=SEC)
+    h.start(cmd, View(), SEC)
+    wait_for(lambda: h._job.result.done())
+    assert h._job.early and h._job.complete.is_set()
+    says, _ = h.tick(cmd, View(), SEC)
+    assert says[0].text_or_sound == "Hola"
+    blur = handlers()
+    blur.start(cmd, View(captured=frame(0.9)), SEC)
+    wait_for(lambda: blur._job.selected_key is not None)
+    assert not blur._job.complete.is_set() and not blur._job.result.done()
+    finish_selection(blur, cmd)
+    assert not blur._job.early
+
+
+def test_sharp_new_frame_cuts_early_and_context_change_discards_prior_scene(handlers):
+    image = np.random.default_rng(3).integers(0, 256, (120, 160, 3), dtype=np.uint8)
+    h = handlers(early_sharpness=0)
+    h.observe(View(captured=frame(0.5, image=image)), SEC // 2)
+    wait_for(lambda: h._worker._history)
+    new = replace(frame(0.9, 2), session_id="otra-sesion")
+    h.observe(View(captured=new), int(0.9 * SEC))
+    wait_for(lambda: h._worker._history[-1][1] == new.key)
+    cmd = replace(command(), issued_ns=SEC)
+    h.start(cmd, View(), SEC)
+    finish_selection(h, cmd)
+    assert h._job.selected_key == new.key
+    early = handlers()
+    early.start(cmd, View(captured=frame(1, 3)), SEC)
+    wait_for(lambda: early._job.selected_key is not None)
+    early.tick(cmd, View(captured=frame(1.1, 4, image)), int(1.1 * SEC))
+    wait_for(lambda: early._job.result.done())
+    assert early._job.selected_key.frame_id == 4 and early._job.early
 
 
 def test_original_and_rectified_are_explicit_and_not_interchanged(handlers):
@@ -502,9 +662,11 @@ def test_rapid_adapter_is_cpu_and_returns_input_pixel_boxes(tmp_path, monkeypatc
         OCRVersion=SimpleNamespace(PPOCRV5="v5"),
     )
     monkeypatch.setitem(sys.modules, "rapidocr", fake_module)
-    result = RapidReader(ReadingSettings(weights_dir=str(tmp_path), crop="none")).read(
-        np.zeros((30, 30, 3), np.uint8)
-    )
+    reader = RapidReader(ReadingSettings(weights_dir=str(tmp_path), crop="none"))
+    reader.warmup()
+    reader.warmup()
+    result = reader.read(np.zeros((30, 30, 3), np.uint8))
+    assert len(params_seen) == 1  # dos warmup + read comparten las mismas sesiones
     assert result == [block("español", 0.8, (0, 1, 18, 30))]
     params = params_seen[0]
     assert params["Rec.lang_type"] == "latin"
@@ -544,7 +706,7 @@ def test_evaluation_uses_only_window_and_preserves_sources(tmp_path):
         [folder],
         tmp_path / "result.csv",
         FakeReader([block("Hola"), block("120 g", box=(10, 31, 70, 39))]),
-        ReadingSettings(speech_max_blocks=1),
+        ReadingSettings(speech_max_blocks=1, window_s=1.5),
         {},
         warmup=True,
     )
@@ -578,12 +740,14 @@ def test_evaluation_uses_only_window_and_preserves_sources(tmp_path):
     from visionx.shared.errors import SourceError
 
     with pytest.raises(SourceError, match="faltan"):
-        evaluate([folder], tmp_path / "missing.csv", FakeReader(), ReadingSettings(), {})
+        evaluate(
+            [folder], tmp_path / "missing.csv", FakeReader(), ReadingSettings(window_s=1.5), {}
+        )
     partial = evaluate(
         [folder],
         tmp_path / "partial.csv",
         FakeReader(),
-        ReadingSettings(),
+        ReadingSettings(window_s=1.5),
         {},
         allow_incomplete=True,
     )
