@@ -40,6 +40,37 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-17 — Decisión: el test público se guarda para la ventana final; hipótesis escrita
+
+**Tareas:** T12, T15. **Persona/agente:** Bauty (decisión) / Claude Code (propuesta y registro).
+
+**Decisión.** MiddEval3-H y ETH3D **no** se usan ahora con Fusion. Se corren una sola vez en la
+ventana del calendario (27/11–3/12), junto con la incertidumbre (T13) y los comparadores (T14),
+con todo congelado. Motivo: la validación fuera de dominio mostró que la ventaja de Fusion
+sobre B5 vista en InStereo2K val no se traslada; no hay apuro por gastar el test y lo urgente
+son la ubicación espacial, el banco ELP y los comparadores.
+
+**Hipótesis escritas antes del test** (para no acomodarlas después):
+1. B5 mejora a B4 en bad-2 y AbsRel a igual cobertura (esperado: sí; ya se vio en val y en dev).
+2. Fusion sobre B5 no se distingue de B5 en error (esperado: empate), y aporta la incertidumbre b.
+3. Fusion sobre B4 mejora a B4 pero no a B5.
+4. En Middlebury, el estéreo sin filtros (B0) puede ganarle a todas las variantes con monocular,
+   como en T05.
+Métricas, región y comparaciones: las de TECNICO, «Estado del test público y condiciones».
+
+**Candidata aprendida para el test:** Fusion F3 sobre **B5** (no la de base B4 congelada el
+17/11 a la mañana: ese paquete, `fusion-f3-b701d067`, queda como variante). Entre semilla 0,
+semilla 1 y sin dilataciones no hay diferencia medible; se elige al cerrar T13, sin mirar el test.
+Cambiar el estéreo de base o los umbrales por lo visto en el dev sería ajustar sobre el dev: si
+se hace, se declara y se confirma en otra partición.
+
+**Estado de T12.** Código, controles, paquete, latencia y dos validaciones en el PR #28.
+Pendiente dentro de T12: ablaciones mínimas de TECNICO (sin monocular, sin confianza clásica),
+recepción del paquete en la app y evidencia en la ELP.
+
+**Próximo paso.** Ubicación espacial `depth/spatial/` (parte A de T09, la espera Tomás), sesiones
+del banco ELP (T04) y preparación de los comparadores (T14).
+
 ## 2026-11-17 — T12/T04: segunda validación fuera de dominio (Middlebury 2014 extra)
 
 **Tareas:** T12 y T04. **Persona/agente:** Bauty / Claude Code (coordinador + subagentes).

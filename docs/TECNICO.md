@@ -434,8 +434,11 @@ El entrenamiento y la aplicación deben coincidir dentro de tolerancia declarada
 - **Receta v2** (`configs/fusion-v2*.yaml`): F3, 5 niveles (32–256) con bloques dilatados
   opcionales, recortes 640×1080. Se libera la memoria de MPS al final de cada época.
 - **Latencia:** `python -m visionx.depth.fusion latencia <paquete> <clip>`, protocolo M9.
-- **Candidato al 17/11:** F3 sobre B4 (`fusion-f3-b701d067`). Resultados, ablaciones y límites:
-  BITACORA 2026-11-16 y 2026-11-17.
+- **Estado al 17/11:** en InStereo2K val, F3 sobre B4 le ganaba a B5; en la validación fuera
+  de dominio (`midd2014extra`, grupo `dev`) Fusion mejora a B4 pero no a B5. Candidata para el
+  test: F3 sobre B5. Resultados, ablaciones, hipótesis y límites: BITACORA 2026-11-16 y 2026-11-17.
+- **Validación fuera de dominio:** `midd2014extra` (13 escenas de Middlebury 2014 que no están
+  en MiddEval3, a media resolución). `midd2021` no pasó la auditoría de GT y no se usa.
 
 ## Incertidumbre y objetos
 
