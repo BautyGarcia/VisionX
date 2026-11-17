@@ -8,6 +8,7 @@ El reloj es manual: los tiempos son exactos y no dependen de la máquina.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -23,6 +24,13 @@ from visionx.modes import build_handlers
 from visionx.modes.__main__ import main as modes_main
 from visionx.modes.__main__ import parse_order
 from visionx.modes.common import ModeSettings, direction, measure, measure_phrase, meters
+from visionx.modes.describe import (
+    DescribeHandler,
+    DescribeSettings,
+    PresenceFact,
+    SceneFacts,
+    TemplateNarrator,
+)
 from visionx.modes.distance import DistanceHandler
 from visionx.modes.search import SearchHandler
 from visionx.modes.simulate import RecordingSink
@@ -656,3 +664,532 @@ def test_audio_schedule_queues_and_cancel_cuts():
     assert [s.text for s in sched.segments] == ["a" * 20, "nuevo"]
     assert sched.segments[0].end_s == pytest.approx(cut)
     assert sched.segments[1].start_s == pytest.approx(cut)
+
+
+# --- describir (T11): una escena congelada y números solo desde mediciones aceptadas -------
+
+
+def describe(settings=S, options=None, **kwargs):
+    # Estas pruebas aíslan composición y unión; la persistencia/default se prueba aparte.
+    options = replace(options or DescribeSettings(), persist_hits=1, max_speech_s=60)
+    return DescribeHandler(G, CATALOG.spoken, settings, options, **kwargs)
+
+
+def test_describe_groups_class_and_zone_with_catalog_plurals():
+    h, c = describe(), cmd(Mode.DESCRIBE, None, t_s=1)
+    m = joint(
+        1.1,
+        11,
+        [
+            ("cup", -20, 1, 0.54, SPEAK),
+            ("cup", -10, 2, 0.8, SPEAK),
+            ("chair", 0, 3, 1.63, SPEAK),
+            ("person", 20, 4, None, DistancePolicy.DIRECTION_ONLY),
+        ],
+        measured=True,
+    )
+    assert texts(h.start(c, View(None, m), int(1.2 * SEC))) == [
+        "Al frente, una silla a 1,6 metros.",
+        "A la izquierda, dos tazas, la más cercana a 0,5 metros.",
+        "A la derecha, una persona.",
+    ]
+    assert h.facts.frame_id == 11 and len(h.facts.measured) == 3
+    assert h.tick(c, View(None, m), int(1.3 * SEC)) == ([], True)
+
+
+@pytest.mark.parametrize(
+    "policy,z",
+    [
+        (DistancePolicy.DIRECTION_ONLY, 1.0),
+        (DistancePolicy.ABSTAIN, 1.0),
+        (DistancePolicy.ASK_REFRAME, 1.0),
+        (SPEAK, 0.49),
+        (SPEAK, 3.01),
+    ],
+)
+def test_describe_never_speaks_meters_without_policy_or_outside_range(policy, z):
+    h = describe()
+    m = joint(1.1, 11, [("cup", 0, None, z, policy)], measured=True)
+    said = texts(h.start(cmd(Mode.DESCRIBE, None, t_s=1), View(None, m), int(1.2 * SEC)))
+    assert said == ["Al frente, una taza."]
+    assert not h.facts.measured
+
+
+def test_describe_partial_group_does_not_claim_nearest():
+    h = describe()
+    m = joint(
+        1.1,
+        11,
+        [("cup", -20, 1, 0.5, SPEAK), ("cup", -10, 2, None, DistancePolicy.DIRECTION_ONLY)],
+        measured=True,
+    )
+    said = texts(h.start(cmd(Mode.DESCRIBE, None, t_s=1), View(None, m), int(1.2 * SEC)))
+    assert said == ["A la izquierda, dos tazas."]
+
+
+def test_describe_limits_individual_objects_and_counts_remaining():
+    h = describe(options=DescribeSettings(max_objects=2))
+    m = joint(
+        1.1,
+        11,
+        [
+            ("cup", -20, 1, 0.5, SPEAK),
+            ("cup", -10, 2, 0.8, SPEAK),
+            ("chair", 0, 3, 1.6, SPEAK),
+            ("person", 20, 4, 2.0, SPEAK),
+        ],
+        measured=True,
+    )
+    said = texts(h.start(cmd(Mode.DESCRIBE, None, t_s=1), View(None, m), int(1.2 * SEC)))
+    assert said == [
+        "A la izquierda, dos tazas, la más cercana a 0,5 metros, y 2 cosas más.",
+    ]
+
+
+def test_describe_prioritizes_people_and_large_boxes_when_no_distance():
+    h = describe(options=DescribeSettings(max_objects=2))
+    m = joint(
+        1.1,
+        11,
+        [
+            ("cup", -20, 1, None, DistancePolicy.DIRECTION_ONLY),
+            ("chair", 0, 2, None, DistancePolicy.DIRECTION_ONLY),
+            ("person", 20, 3, None, DistancePolicy.DIRECTION_ONLY),
+        ],
+        measured=True,
+    )
+    # Una silla con caja grande; el área es imagen ocupada, no una estimación de tamaño real.
+    boxes = m.detection.boxes.copy()
+    boxes[1] = [200, 60, 440, 300]
+    det = build_detection(
+        m.frame,
+        model_id="test",
+        boxes_xyxy=boxes,
+        class_names=m.detection.classes,
+        scores=m.detection.scores,
+        inference_ms=1.0,
+    )
+    m = Joint(m.frame, det, m.depth, m.objects)
+    said = texts(h.start(cmd(Mode.DESCRIBE, None, t_s=1), View(None, m), int(1.2 * SEC)))
+    assert said == [
+        "Al frente, una silla.",
+        "A la derecha, una persona, y 1 cosa más.",
+    ]
+
+
+def test_describe_empty_scene():
+    h = describe()
+    m = joint(1.1, 11, [], measured=True)
+    assert texts(h.start(cmd(Mode.DESCRIBE, None, t_s=1), View(None, m), int(1.2 * SEC))) == [
+        "No reconozco objetos con suficiente confianza."
+    ]
+
+
+def test_describe_waits_for_post_order_joint_and_never_mixes_seen_and_depth():
+    h, c = describe(), cmd(Mode.DESCRIBE, None, t_s=1)
+    old = joint(0.99, 9, [("cup", 0, None, 0.5, SPEAK)], measured=True)
+    assert h.start(c, View(None, old), SEC) == []  # aun dentro de accept_before_s: posterior
+    seen = joint(1.2, 12, [("person", 20, None)])
+    assert h.tick(c, View(seen, old), int(1.2 * SEC)) == ([], False)
+    fresh = joint(1.1, 11, [("chair", -20, None, 1.63, SPEAK)], measured=True)
+    says, done = h.tick(c, View(seen, fresh), int(1.3 * SEC))
+    assert done and texts(says) == ["A la izquierda, una silla a 1,6 metros."]
+    assert h.facts.frame_id == 11
+
+
+def test_describe_timeout_uses_only_seen_even_if_it_has_objects():
+    h, c = describe(), cmd(Mode.DESCRIBE, None, t_s=1)
+    h.start(c, View(), SEC)
+    seen = joint(3.9, 39, [("cup", -20, None, 0.54, SPEAK)], measured=True)
+    says, done = h.tick(c, View(seen, None), 4 * SEC)
+    assert done and texts(says) == [
+        "No pude medir distancias.",
+        "A la izquierda, una taza.",
+    ]
+    assert h.facts.measured == () and h.facts.depth_model_id is None
+
+
+@pytest.mark.parametrize("frame_t", [0.9, 2.9, 4.1])
+def test_describe_rejects_old_pre_order_or_future_seen(frame_t):
+    h, c = describe(), cmd(Mode.DESCRIBE, None, t_s=1)
+    h.start(c, View(), SEC)
+    seen = joint(frame_t, 1, [("cup", 0, None)])
+    says, done = h.tick(c, View(seen, None), 4 * SEC)
+    assert done and texts(says) == ["No pude obtener una imagen reciente para describir."]
+
+
+def test_describe_hysteresis_keeps_center_while_waiting():
+    h, c = describe(), cmd(Mode.DESCRIBE, None, t_s=1)
+    h.start(c, View(joint(1, 10, [("cup", 7, 1)]), None), SEC)
+    m = joint(1.2, 12, [("cup", 9.5, 1, 1.0, SPEAK)], measured=True)
+    says, done = h.tick(c, View(m, m), int(1.3 * SEC))
+    assert done and texts(says) == ["Al frente, una taza a 1 metro."]
+
+
+def test_describe_deadline_and_old_request_never_speak():
+    h, c = describe(), cmd(Mode.DESCRIBE, None, t_s=1, deadline_s=2)
+    h.start(c, View(), SEC)
+    m = joint(2.9, 29, [("cup", 0, None, 0.5, SPEAK)], measured=True)
+    assert h.tick(c, View(m, m), 3 * SEC) == ([], True)
+    c2 = cmd(Mode.DESCRIBE, None, t_s=3, request_id=2)
+    assert h.start(c2, View(), 3 * SEC) == []
+    assert h.tick(c, View(m, m), 3 * SEC) == ([], True)
+
+
+def test_describe_short_deadline_falls_back_before_expiring():
+    h, c = describe(), cmd(Mode.DESCRIBE, None, t_s=1, deadline_s=2)
+    h.start(c, View(), SEC)
+    says, done = h.tick(c, View(joint(2, 20, []), None), 2 * SEC)
+    assert done and texts(says) == [
+        "No reconozco objetos con suficiente confianza.",
+    ]
+
+
+def test_describe_controller_cancels_waiting_and_completed_narrations():
+    clock = ManualClock(SEC)
+    sink = RecordingSink(clock, lambda: SEC)
+    state = [View()]
+    controller = Controller(
+        CommandParser(CATALOG),
+        sink,
+        latest_view=lambda: state[0],
+        handlers=build_handlers({}, G, CATALOG.spoken),
+        clock=clock,
+        deadlines_s={"describe": 20},
+    )
+    controller.handle_text("describí")
+    controller.handle_text("cancelar")
+    clock.advance(SEC)
+    m = joint(2, 20, [("cup", 0, None, 0.5, SPEAK)], measured=True)
+    state[0] = View(m, m)
+    controller.tick()
+    assert [s.text for s in sink.spoken] == ["Describo.", "sonido:cancelado"]
+    controller.handle_text("qué ves")
+    clock.advance(int(0.2 * SEC))
+    m = joint(2.2, 22, [("cup", 0, None, 0.5, SPEAK)], measured=True)
+    state[0] = View(m, m)
+    controller.tick()
+    rid = sink.spoken[-1].request_id
+    assert controller.active is None
+    assert sink.spoken[-1].text == "Al frente, una taza a 0,5 metros."
+    controller.handle_text("buscá la silla")
+    assert sink.cancelled[-1] == (1.2, rid)  # cancela aunque el cálculo ya terminó
+
+
+def test_describe_config_respects_depth_range_even_with_modes_override():
+    h = build_handlers(
+        {
+            "depth": {"range_m": [1.0, 2.0]},
+            "modes": {"range_m": [0.5, 3]},
+            "describe": {"max_objects": 2},
+        },
+        G,
+        CATALOG.spoken,
+    )[Mode.DESCRIBE]
+    assert h.s.range_m == (1.0, 2.0) and h.describe.max_objects == 2
+    with pytest.raises(ValueError):
+        DescribeSettings.from_config({"describe": {"typo": 3}})
+    for options in (
+        {"max_objects": 0},
+        {"max_objects": 1.5},
+        {"wait_measure_s": -1},
+        {"wait_measure_s": float("nan")},
+        {"large_area_fraction": 0},
+    ):
+        with pytest.raises(ValueError):
+            DescribeSettings(**options)
+
+
+def test_narrator_has_no_metric_text_channel_and_invalid_plans_are_rejected():
+    assert TemplateNarrator().plan((PresenceFact(2, "cup", "al frente", 0.1),)) == ((2,),)
+
+    class InvalidNarrator:
+        def plan(self, ordered):
+            return ((999,),)
+
+    h = describe(narrator=InvalidNarrator())
+    m = joint(1.1, 11, [("cup", 0, None, 0.5, SPEAK)], measured=True)
+    with pytest.raises(ValueError, match="índices"):
+        h.start(cmd(Mode.DESCRIBE, None, t_s=1), View(m, m), int(1.2 * SEC))
+
+
+def test_describe_stale_measurement_falls_back_to_current_presence():
+    h, c = describe(), cmd(Mode.DESCRIBE, None, t_s=1)
+    h.start(c, View(), SEC)
+    old = joint(1.01, 1, [("chair", 0, None, 1.0, SPEAK)], measured=True)
+    seen = joint(4.1, 41, [("person", 20, None)])
+    says, done = h.tick(c, View(seen, old), int(4.2 * SEC))
+    assert done and texts(says) == [
+        "No pude medir distancias.",
+        "A la derecha, una persona.",
+    ]
+    assert not h.facts.measured
+
+
+@pytest.mark.parametrize(
+    "label,expected",
+    [
+        ("toothbrush", "cepillos de dientes"),
+        ("baseball glove", "guantes de béisbol"),
+        ("skis", "esquís"),
+        ("broccoli", "brócolis"),
+        ("snowboard", "snowboards"),
+        ("laptop", "computadoras portátiles"),
+        ("remote", "controles remotos"),
+    ],
+)
+def test_describe_catalog_compound_plurals(label, expected):
+    h = describe()
+    m = joint(
+        1.1,
+        11,
+        [
+            (label, -20, 1, None, DistancePolicy.DIRECTION_ONLY),
+            (label, -10, 2, None, DistancePolicy.DIRECTION_ONLY),
+        ],
+        measured=True,
+    )
+    said = texts(h.start(cmd(Mode.DESCRIBE, None, t_s=1), View(m, m), int(1.2 * SEC)))
+    assert said == [f"A la izquierda, dos {expected}."]
+
+
+def test_describe_simulation_records_frozen_facts_and_snapshots(tmp_path):
+    import json
+
+    trace = tmp_path / "trace.jsonl"
+    captures = tmp_path / "frames"
+    assert (
+        modes_main(
+            [
+                "simular",
+                "--fuente",
+                "sintetica",
+                "--frames",
+                "100",
+                "--orden",
+                "0.5:describí",
+                "--traza",
+                str(trace),
+                "--capturas",
+                str(captures),
+            ]
+        )
+        == 0
+    )
+    events = [json.loads(line) for line in trace.read_text(encoding="utf8").splitlines()]
+    answers = [e for e in events if e["tipo"] == "describir-respuesta"]
+    assert len(answers) == 1 and not answers[0]["solo_presencia"]
+    frame_id = answers[0]["hechos"]["frame_id"]
+    assert list(captures.glob(f"*-measured-{frame_id}.jpg"))
+    assert "Esa función todavía no está disponible." not in trace.read_text(encoding="utf8")
+
+
+def test_describe_lists_each_zone_once_after_selecting_relevant_objects():
+    h = describe(options=DescribeSettings(max_objects=5))
+    m = joint(
+        1.1,
+        11,
+        [
+            ("chair", 0, 1, 1.4, SPEAK),
+            ("chair", 12, 2, 0.6, SPEAK),
+            ("chair", 18, 3, 0.9, SPEAK),
+            ("bottle", 24, 4, 2.1, SPEAK),
+            ("laptop", -20, 5, None, DistancePolicy.DIRECTION_ONLY),
+            ("cup", -10, 6, None, DistancePolicy.DIRECTION_ONLY),
+        ],
+        measured=True,
+    )
+    assert texts(h.start(cmd(Mode.DESCRIBE, None, t_s=1), View(m, m), int(1.2 * SEC))) == [
+        "Al frente, una silla a 1,4 metros.",
+        "A la izquierda, una computadora portátil.",
+        "A la derecha, dos sillas, la más cercana a 0,6 metros y una botella a 2,1 metros, "
+        "y 1 cosa más.",
+    ]
+
+
+@pytest.mark.parametrize(
+    "labels,expected",
+    [
+        (["cup"], "una taza"),
+        (["cup", "bottle"], "una taza y una botella"),
+        (["cup", "bottle", "chair"], "una taza, una botella y una silla"),
+        (["mouse", "mouse", "cup"], "dos mouses y una taza"),
+        (["tv"], "una pantalla"),
+        (["tv", "tv"], "dos pantallas"),
+    ],
+)
+def test_describe_natural_lists_without_heading(labels, expected):
+    h = describe()
+    scene = SceneFacts(
+        "s",
+        11,
+        tuple(PresenceFact(i, label, "a la derecha", 0.1) for i, label in enumerate(labels)),
+        (),
+        None,
+    )
+    assert h._render(scene) == [f"A la derecha, {expected}."]
+
+
+def persistent(options=None):
+    return DescribeHandler(G, CATALOG.spoken, describe=options)
+
+
+def test_describe_score_filter_applies_to_current_and_past_without_counting_doubtful_extras():
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    objs = [
+        ("cup", -20, 1, None, DistancePolicy.DIRECTION_ONLY),
+        ("bottle", 0, 2, None, DistancePolicy.DIRECTION_ONLY),
+        ("chair", 20, 3, None, DistancePolicy.DIRECTION_ONLY),
+    ]
+    first = joint(1, 10, objs, scores=[0.8, 0.59, 0.3])
+    assert h.start(c, View(first), SEC) == []
+    second = joint(1.2, 12, objs, measured=True, scores=[0.8, 0.8, 0.3])
+    says, done = h.tick(c, View(second, second), int(1.3 * SEC))
+    assert done and texts(says) == ["A la izquierda, una taza."]
+    assert [f.label for f in h.facts.presence] == ["cup"]
+    # El mismo frame débil sigue disponible para buscar; no se cambia detección ni candidatos.
+    from visionx.modes.common import candidates
+
+    assert len(candidates(second, None, G)) == 3
+
+
+def test_describe_repeated_ticks_and_seen_measured_count_as_one_frame():
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    m = joint(1, 10, [("cup", 0, 1, 0.8, SPEAK)], measured=True)
+    assert h.start(c, View(m, m), SEC) == []
+    for t in (1.1, 1.2, 1.3):
+        assert h.tick(c, View(m, m), int(t * SEC)) == ([], False)
+    assert h.facts is None
+    newer = joint(1.5, 15, [("cup", 0, 1, 0.9, SPEAK)], measured=True)
+    says, done = h.tick(c, View(newer, newer), int(1.6 * SEC))
+    assert done and texts(says) == ["Al frente, una taza a 0,9 metros."]
+
+
+@pytest.mark.parametrize("kind", ["old", "future", "other-session", "other-class", "other-id"])
+def test_describe_persistence_excludes_unrelated_frames(kind):
+    previous = joint(1, 10, [("cup", 0, 1)])
+    if kind == "other-class":
+        previous = joint(1, 10, [("bottle", 0, 1)])
+    if kind == "other-id":
+        previous = joint(1, 10, [("cup", 0, 2)])
+    if kind == "other-session":
+        previous = replace(previous, frame=replace(previous.frame, session_id="another"))
+    if kind == "future":
+        previous = joint(3, 30, [("cup", 0, 1)])
+    c = cmd(Mode.DESCRIBE, None, t_s=1.1)
+    h = persistent(DescribeSettings(persist_s=1))
+    h.start(c, View(previous), int(1.1 * SEC))
+    t = 2.2 if kind == "old" else 1.2
+    current = joint(t, 22, [("cup", 0, 1, 0.8, SPEAK)], measured=True)
+    assert h.tick(c, View(current, current), int((t + 0.1) * SEC)) == ([], False)
+    assert not h._confirmed(current)
+
+
+def test_describe_future_observation_cannot_confirm_older_measurement():
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    old = joint(1.1, 11, [("cup", 0, 1, 0.8, SPEAK)], measured=True)
+    future = joint(1.2, 12, [("cup", 0, 1)])
+    assert h.start(c, View(future, old), int(1.3 * SEC)) == []
+    assert not h._confirmed(old)
+
+
+def test_describe_persistence_without_tracking_matches_instances_one_to_one():
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    first = joint(1, 10, [("cup", 11, None)])
+    h.start(c, View(first), SEC)
+    current = joint(
+        1.2,
+        12,
+        [
+            ("cup", 10, None, None, DistancePolicy.DIRECTION_ONLY),
+            ("cup", 12, None, None, DistancePolicy.DIRECTION_ONLY),
+        ],
+        measured=True,
+    )
+    # Las cajas casi se tocan; ambas solapan con la previa, pero no son duplicados entre sí.
+    says, done = h.tick(c, View(current, current), int(1.3 * SEC))
+    assert done and texts(says) == ["A la derecha, una taza."]
+    assert len(h.facts.presence) == 1
+
+
+def test_describe_three_hits_and_new_order_resets_persistence():
+    h = persistent(DescribeSettings(persist_hits=3))
+    c = cmd(Mode.DESCRIBE, None, t_s=1)
+    first = joint(1, 10, [("cup", 0, 1)])
+    h.start(c, View(first), SEC)
+    second = joint(1.2, 12, [("cup", 0, 1, None, DistancePolicy.DIRECTION_ONLY)], measured=True)
+    assert h.tick(c, View(second, second), int(1.3 * SEC)) == ([], False)
+    third = joint(1.4, 14, [("cup", 0, 1, None, DistancePolicy.DIRECTION_ONLY)], measured=True)
+    assert h.tick(c, View(third, third), int(1.5 * SEC))[1]
+    assert (
+        h.start(cmd(Mode.DESCRIBE, None, t_s=1.5, request_id=2), View(third), int(1.5 * SEC)) == []
+    )
+    assert len(h._history) == 1
+
+
+def test_describe_default_duration_budget_counts_only_filtered_omissions():
+    from visionx.modes.common import speech_s
+
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    objs = [
+        ("cup", -20, 1, 0.5, SPEAK),
+        ("bottle", -10, 2, 1.0, SPEAK),
+        ("laptop", 0, 3, 1.5, SPEAK),
+        ("chair", 12, 4, 2.0, SPEAK),
+        ("person", 20, 5, 2.5, SPEAK),
+        ("banana", 24, 6, 0.6, SPEAK),
+    ]
+    h.start(c, View(joint(1, 10, objs, scores=[0.8] * 5 + [0.3])), SEC)
+    m = joint(1.2, 12, objs, measured=True, scores=[0.8] * 5 + [0.3])
+    says, done = h.tick(c, View(m, m), int(1.3 * SEC))
+    result = texts(says)
+    assert done and sum(speech_s(t, S) for t in result) <= 8
+    assert len(h.facts.presence) == 5
+    assert result == [
+        "A la izquierda, una taza a 0,5 metros y una botella a 1 metro, y 3 cosas más."
+    ]
+    assert "banana" not in " ".join(result) and "Veo" not in " ".join(result)
+
+
+def test_describe_timeout_abstains_when_score_never_reaches_threshold():
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    h.start(c, View(joint(1, 10, [("cup", 0, 1)], scores=[0.59])), SEC)
+    m = joint(3.9, 39, [("cup", 0, 1, 0.8, SPEAK)], measured=True, scores=[0.59])
+    says, done = h.tick(c, View(m, m), 4 * SEC)
+    assert done and texts(says) == ["No reconozco objetos con suficiente confianza."]
+    assert not h.facts.presence and not h.facts.measured
+
+
+def test_describe_presence_fallback_includes_warning_in_duration_budget():
+    from visionx.modes.common import speech_s
+
+    h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
+    objs = [("cup", 0, 1), ("chair", 12, 2), ("bottle", -12, 3)]
+    h.start(c, View(), SEC)
+    assert h.tick(c, View(joint(3.5, 35, objs)), int(3.5 * SEC)) == ([], False)
+    says, done = h.tick(c, View(joint(3.9, 39, objs)), 4 * SEC)
+    result = texts(says)
+    assert done and result[0] == "No pude medir distancias."
+    assert sum(speech_s(t, S) for t in result) <= 8
+    assert not h.facts.measured and "metros" not in " ".join(result)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"min_score": -0.1},
+        {"min_score": 1.1},
+        {"min_score": float("nan")},
+        {"persist_hits": 0},
+        {"persist_hits": True},
+        {"persist_hits": 1.5},
+        {"persist_hits": 257},
+        {"persist_s": 0},
+        {"persist_s": float("inf")},
+        {"max_speech_s": -1},
+        {"max_speech_s": float("nan")},
+    ],
+)
+def test_describe_filter_config_validation(options):
+    with pytest.raises(ValueError):
+        DescribeSettings(**options)

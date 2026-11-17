@@ -1,4 +1,4 @@
-"""Modos buscar y distancia (T09) sobre una grabación, con tiempo grabado y latencias emuladas.
+"""Modos buscar, distancia y describir sobre clips, con tiempo y latencias emulados.
 
     uv run python -m visionx.modes simular --fuente recordings/dev-1114-buscar-a \\
         --orden "1:buscá la botella" [--orden "20:a qué distancia está"] \\
@@ -103,6 +103,41 @@ def cmd_simular(args: argparse.Namespace) -> int:
             on_event=on_event,
         )
 
+    # Capturas del frame que respalda lo dicho, no del frame actual de la cámara: detector
+    # y profundidad pueden llegar más tarde. Sirve para revisar cualquier modo sin audio.
+    spoken_count = 0
+
+    def capture(t_s, frame, view, sink):
+        nonlocal spoken_count
+        if not args.capturas or len(sink.spoken) == spoken_count:
+            return
+        import cv2
+
+        folder = Path(args.capturas)
+        folder.mkdir(parents=True, exist_ok=True)
+        spoken_count = len(sink.spoken)
+        for kind, joint in (("seen", view.seen), ("measured", view.measured)):
+            if joint is None:
+                continue
+            canvas = joint.frame.left.copy()
+            for i, (box, label) in enumerate(
+                zip(joint.detection.boxes, joint.detection.classes, strict=True)
+            ):
+                x1, y1, x2, y2 = (int(v) for v in box)
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                cv2.putText(
+                    canvas,
+                    f"{i}: {label}",
+                    (x1, max(20, y1)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 255),
+                    2,
+                )
+            path = folder / f"{t_s:07.3f}-{kind}-{joint.frame.frame_id}.jpg"
+            if not cv2.imwrite(str(path), canvas):
+                raise InvalidInput(f"no se pudo escribir {path}")
+
     result = simulate(
         source,
         detector,
@@ -116,6 +151,7 @@ def cmd_simular(args: argparse.Namespace) -> int:
         every=args.cada,
         tick_s=tick_s,
         tail_s=args.cola,
+        on_frame=capture,
     )
     print(f"fuente: {args.fuente}  ({result.frames} frames, {result.duration_s:.1f} s grabados)")
     print(f"detector: {detector.model_id} ({result.detections} frames procesados, "
@@ -127,7 +163,9 @@ def cmd_simular(args: argparse.Namespace) -> int:
     for s in result.spoken:
         print(f"  {s.t_s:7.2f} s  [#{s.request_id}] {s.text}")
     counts = Counter(
-        kind for _, kind, _ in result.events if kind.startswith(("buscar", "distancia"))
+        kind
+        for _, kind, _ in result.events
+        if kind.startswith(("buscar", "distancia", "describir"))
     )
     print("\neventos:", dict(counts) or "-")
     for t, kind, data in result.events:
@@ -269,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("simular", help="buscar/distancia sobre una grabación, tiempo grabado")
+    p = sub.add_parser("simular", help="modos sobre una grabación, tiempo grabado")
     p.add_argument("--fuente", required=True, help="carpeta de grabación o 'sintetica'")
     p.add_argument("--orden", action="append", help="SEGUNDO:frase (se puede repetir)")
     p.add_argument("--ordenes", help="JSONL con {t_s, texto}")
@@ -280,12 +318,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--frames", type=int, default=0, help="solo sintética: cuántos frames")
     p.add_argument("--cola", type=float, default=3.0, help="s simulados tras el último frame")
     p.add_argument("--traza", help="JSONL con lo dicho y los eventos")
+    p.add_argument(
+        "--capturas", help="carpeta para frames anotados al pedir audio (sin reproducirlo)"
+    )
     p.add_argument("--config")
     p.set_defaults(fn=cmd_simular)
 
     d = sub.add_parser("demo", help="como simular, más un MP4 con imagen, subtítulos y voz")
     for action in p._actions:  # mismas opciones que simular
-        if action.dest not in ("help", "traza"):
+        if action.dest not in ("help", "traza", "capturas"):
             d._add_action(action)
     d.add_argument("--salida", required=True, help="archivo .mp4")
     d.add_argument("--sin-voz", action="store_true", help="sin Piper: subtítulos y silencio")
