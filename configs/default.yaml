@@ -267,7 +267,7 @@ audio:
   max_record_s: 8           # tope de una orden con el botón, s
   deadlines_s:              # vigencia de cada orden, s; vencida, su respuesta ya no se dice (candidatos, sin medir)
     search: 30
-    distance: 5
+    distance: 10            # respuesta con dos instancias ~5 s de habla + medir (arranque en frío ~2 s) + margen
     read: 30
     describe: 20
     choose: 10

@@ -40,6 +40,101 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-17 — Beta (tarde): profundidad a pedido, Fusion/B5 enchufables, M1, protocolos y revisión
+
+**Tarea:** T07, T08, T09, T10, T11 (y recepción de T12). **Persona/agente:** Tomás / Codex
+(implementación P1–P5, F1, F2, revisión R1) y Claude Code (coordinación, revisión, integración).
+**Rama:** `b/beta-integracion` (PR #27), con `main` integrado en `60d0135` (PR #28 Fusion y #29
+ubicación de A). **Equipo:** i7-10700K, Windows 11, CPU.
+
+**Objetivo.** Avanzar sin Fusion lo que la beta necesita: profundidad precisa a pedido con lugar
+para Fusion, arreglos de buscar/distancia, M1 automatizado, M9 en esta PC y herramientas de
+anotación para M7/M8/M10.
+
+**Hecho.**
+- **Profundidad a pedido (P1, `141a92e`, `98290da`).** `app/depth_registry.build_estimator`
+  arma B0–B5, `fusion` (con `load_estimator` de A sobre la config completa, `87cb0fd`) y
+  entradas de `depth.estimadores` (fábrica o `{tipo: fusion, paquete}`). `--profundidad-precisa`
+  hace que distancia y describir pidan una medición en un worker aparte (`app/precision.py`),
+  con espera `depth.precisa.espera_s` y caída a la continua. Comando
+  `python -m visionx.app recibir-profundidad NOMBRE --contra ...` para recibir un estimador.
+- **Buscar/distancia (P2, `8c8781c`; F1, `93e902a`).** La elección entre iguales sobrevive a
+  una pérdida y no se repite «¿Cuál?» más de una vez cada 12 s; distancia sin objeto usa el
+  último pedido (60 s); «eso/esa» solo es referencia implícita; «la más cercana» ya no cae en
+  una instancia más lejana; leer conserva «no/ni/sin» y números («-5» → «menos 5»).
+- **M1 (P3, `97383fb`, `3428e99`).** `python -m visionx.app m1 --repeticiones 3`: 8 casos con
+  reloj virtual. El banco encontró audio viejo (guía de 1,12 s de edad): se agregó la vigencia
+  del hecho (`Say.valid_until_ns`, `AudioEvent.valid_until_ns` opcional, sin cambio de schema);
+  `AudioOutput` descarta lo vencido antes y después de sintetizar (`vencido-hecho`).
+- **Protocolos (P5, `954ce40`, `786bca2`, `abe2449`).** `python -m visionx.protocolos`
+  `voz|m7|m8|ocr|describir plantilla|evaluar`: planilla → comando → tabla (TECNICO).
+- **Revisión R1** del PR: 5 bugs confirmados. F1 arregló 1, 2 y 4; F2 (`948bd36`) el 3 (el aviso
+  de vencimiento se cortaba: ahora cada modo reserva la duración del cierre) y el 5 («Repetí»
+  sobrevivía a una orden nueva: ahora tiene id propio y se cancela). Si la orden repetida ya
+  venció, dice «Ya no está vigente. Pedilo de nuevo.» en vez de callar. Traza para M8:
+  `orden` con `request_id`/`issued_ns`/`deadline_ns`; `audio` con `started_ns`, `finished_ns`,
+  `valid_until_ns`, `fact_received_ns`, `fact_age_ms`.
+- **Ubicación de A adoptada** (`87cb0fd`): `build_spatial` devuelve `build_locator` de
+  `depth/spatial`; `spatial_provisional.usar: true` vuelve a la provisoria. Mide en disparidad:
+  un estimador sin `depth_m` ahora da metros.
+- **Vigencia de distancia 5 → 10 s.** Con F2 la respuesta ya no se corta, y eso mostró que una
+  respuesta con dos instancias («Veo 2 tazas: …», ~5,2 s estimados) nunca entraba en 5 s: el
+  primer pedido del clip decía «No pude medir a tiempo.» teniendo la medida (unión a los 2,1 s,
+  arranque en frío). Candidato sin medir, como el resto de `deadlines_s`.
+
+**Evidencia.**
+- Suite con extras: 1022 aprobados; core (`outputs/venv-core`): 893 aprobados y 8 omitidos. Ruff OK.
+- M1 ×3 (`outputs/beta/final3/m1`): los 8 casos PASAN 3/3, cero audio viejo, cancelación lógica
+  P95 ≤ 200 ms, detección → bip P95 ≤ 500 ms (lógicos, con reloj virtual).
+- Recepción sobre `dev-1114-distancias` (5 pares, 1280×720; cinta 0,50 / 1,00 / 1,00 m):
+
+  | Método | P50 / P95 ms | vaso | taza | botella |
+  |---|---|---|---|---|
+  | B0 | 280 / 377 | 0,525 | 1,069 | 1,035 |
+  | B4 | 1531 / 1619 | 0,528 | 1,081 | 1,043 |
+  | B5 | 1647 / 1717 | 0,528 | 1,081 | 1,046 |
+
+- Humo de los 4 modos sobre clips con la ubicación de A (`outputs/beta/final3/`): 0 errores;
+  61 frases reproducidas y 1 guía descartada por vencida (en `buscar-a`, justo al «Repetí»).
+  Buscar espera la elección entre dos botellas (recuerda a los 12 s) en vez de elegir sola;
+  «¿A qué distancia está?» tras buscar mide la botella (antes: una bicicleta).
+
+**M9 de la app en esta PC** (`outputs/m9/exp2/`, scripts `outputs/m9/correr.py` y
+`analizar.py`, fuera de Git). `ejecutar` sobre 120 s de `dev-1114-escenas` (yolo26s @960,
+1280×720), una corrida por variante, en serie y sin otra carga; 50 eventos de calentamiento.
+Detector n = 420–510; profundidad n = 190–250 (B2: 76), menos que los 300 del protocolo.
+
+| Variante | detector P50/P95 | profundidad P50/P95 | edad de la unión P50/P95 | uniones/s |
+|---|---|---|---|---|
+| B0, replay sin ritmo | 207 / 268 | 424 / 476 | 812 / 1056 | 2,1 |
+| B0, ritmo real | 199 / 228 | 418 / 439 | 797 / 953 | 2,1 |
+| B0, ritmo real, torch 6 hilos | 208 / 286 | 323 / 459 | 703 / 1031 | 2,6 |
+| B0, ritmo real, torch 6 + OpenCV 4 | 241 / 292 | 409 / 484 | 875 / 1022 | 2,2 |
+| B2, ritmo real | 206 / 291 | 878 / 1032 | 1282 / 1570 | 1,1 |
+| B0 + B4 a pedido, ritmo real | 203 / 258 | 384 / 474 | 781 / 1052 | 2,3 |
+
+(ms.) Orden → primera frase de describir: 906 ms con B0 (n = 3); 2000 ms con B4 a pedido.
+- Replay con o sin ritmo da lo mismo: la carga de captura no explica la lentitud.
+- B0 tarda ~420 ms dentro de la app contra 61 ms solo: compite con YOLO (torch usa 15 hilos
+  por defecto). Con `detection.threads: 6` baja a 323 ms y la unión gana ~0,5 uniones/s;
+  acotar OpenCV a 4 hilos empeora. Con una corrida por variante no alcanza para cambiar el
+  default: queda como candidato para `configs/local.yaml` de esta PC.
+- **B4 a pedido no llega:** tarda ~2,2 s dentro de la app (1,5 s en la recepción, 1,1 s solo),
+  supera `depth.precisa.espera_s` (2 s) las 3 veces y se usa B0, con 2 s de espera perdidos.
+  En esta PC, B4 a pedido necesita `depth.precisa.compute: [640, 360]` (0,6 s en la prueba de
+  humo de P1, mismos metros que B0) o no usarse; Fusion (~2× B4 en la Mac) tampoco entraría
+  a 1280×720 en esta CPU.
+
+**Problemas.** Codex se quedó sin créditos a las 10:38 con F2 casi terminado (faltaba la
+verificación final, que hizo Claude Code). El CI de macOS del PR #27 falló porque GitHub no
+asignó máquina («job was not acquired», capacidad), no por un test.
+
+**Límites.** Sin ELP, micrófono ni parlantes reales; clips de desarrollo de una sesión. Las
+vigencias y la espera de la precisa son candidatos. Fusion no se probó: el paquete está en la Mac.
+
+**Próximo paso.** Prueba de micrófono (CHECKLIST §0); recepción de Fusion cuando Bauty suba el
+paquete a Drive `pesos/fusion/`; sesión en vivo con la ELP.
+
 ## 2026-11-17 — Tiempos por componente en la PC de escritorio (Windows CPU, sin carga ajena)
 
 **Tarea:** T06, T05 (uso en T07), T08, T10. **Persona/agente:** Tomás / Claude Code.
