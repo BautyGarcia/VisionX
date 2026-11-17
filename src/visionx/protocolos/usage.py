@@ -10,7 +10,7 @@ def evaluate(sheet: Path, out: Path, *, trace: Path | None = None):
     annotations = read_csv(sheet)
     loaded, intervals, rows = {}, {}, []
     total_absent = false_beeps = searches = successes = cancels = losses = 0
-    late_cancel = late_deadline = suspects = 0
+    late_cancel = late_deadline = suspects = stale_guides = 0
     audio_without_start = 0
     audios = missing_cancel = missing_request = 0
     for r in annotations:
@@ -85,6 +85,8 @@ def evaluate(sheet: Path, out: Path, *, trace: Path | None = None):
             else:
                 late_cancel += int(cancelled is not None and started > cancelled)
                 late_deadline += int(expired is not None and started > expired)
+                valid_until = e.get("valid_until_ns")
+                stale_guides += int(valid_until is not None and started > valid_until)
         rows.append(
             {
                 **r,
@@ -111,11 +113,12 @@ def evaluate(sheet: Path, out: Path, *, trace: Path | None = None):
         if audios and not (audio_without_start or missing_request)
         else None,
         "ensayos_sin_request_en_traza": missing_request,
-        "violaciones_inicio_observadas": late_cancel + late_deadline,
         "callbacks_posteriores_cancelar_a_revisar": suspects,
-        "guia_vencida": None,
-        "limitaciones": "Sin edad/frame de guía no se verifica guía vencida. "
-        "Sin started_ns no se verifica inicio tras cancelar/vencer. "
+        # Frase con vigencia del hecho (guía de buscar) que empezó a sonar ya vencida.
+        "guia_vencida": stale_guides if audios and not audio_without_start else None,
+        "violaciones_inicio_observadas": late_cancel + late_deadline + stale_guides,
+        "limitaciones": "Sin started_ns no se verifica inicio tras cancelar/vencer "
+        "ni guía vencida. "
         "Bips son callbacks reproducidos, no medición audible; revisar bordes de intervalos.",
         "protocolo_completo": searches >= 30
         and len({r["ambiente"] for r in rows if r["resultado_real"] in ("exito", "fallo")}) >= 3

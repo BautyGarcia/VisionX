@@ -189,7 +189,13 @@ def test_m8_started_time_not_callback(tmp_path):
             (
                 2,
                 "audio",
-                dict(request_id=1, texto="hola", resultado="reproducido", started_ns=int(0.5e9)),
+                dict(
+                    request_id=1,
+                    texto="Taza a la izquierda.",
+                    resultado="reproducido",
+                    started_ns=int(0.5e9),
+                    valid_until_ns=int(0.4e9),  # guía que empezó a sonar ya vencida
+                ),
             ),
             (
                 3,
@@ -217,6 +223,8 @@ def test_m8_started_time_not_callback(tmp_path):
     )
     s = usage.evaluate(sheet, tmp_path / "r")["resumen"]
     assert s["respuestas_tras_cancelar"] == 1
+    assert s["guia_vencida"] == 1
+    assert s["violaciones_inicio_observadas"] == 2
 
 
 def test_ocr_reuses_numeric_and_text_metrics(tmp_path):
