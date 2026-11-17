@@ -80,6 +80,8 @@ class Controller:
         self.output = output
         self.latest_view = latest_view
         self.handlers = handlers or {}
+        self._audio_request_id: int | None = None
+        self._audio_deadline_ns: int | None = None
         self.deadlines_s = deadlines_s or {}
         self.clock = clock or MonotonicClock()
         self._on_event = on_event or (lambda kind, data: None)
@@ -132,13 +134,17 @@ class Controller:
                 self.history.append((None, interp))
                 return None
 
-            if self.active is not None:
-                self.output.cancel(self.active.request_id)  # la orden nueva invalida la vieja
+            if self._audio_request_id is not None:
+                # También si el handler terminó pero su último bloque sigue sonando.
+                self.output.cancel(self._audio_request_id)
+            self._cancel_handler()
             request_id = self._new_id()
             deadline_s = self.deadlines_s.get(interp.mode.value)  # type: ignore[union-attr]
             deadline = now + int(deadline_s * 1e9) if deadline_s else None
             command = interp.to_command(request_id, now, deadline)
             self.active = command
+            self._audio_request_id = request_id
+            self._audio_deadline_ns = deadline
             self.history.append((command, interp))
             ack = acknowledgement(interp, self.parser.catalog)
             if command.mode is Mode.DISTANCE:
@@ -157,7 +163,9 @@ class Controller:
         """El botón de cancelar (o la orden "cancelar")."""
         with self._lock:
             self.output.cancel_all()
+            self._audio_deadline_ns = None
             previous = self.active
+            self._cancel_handler()
             self.active = None
             self._on_event("cancelado", {"request_id": previous.request_id if previous else None})
             self.output.submit(
@@ -167,11 +175,17 @@ class Controller:
     def tick(self) -> None:
         """Llamar periódicamente (por ejemplo, en cada cuadro del dashboard)."""
         with self._lock:
+            now = self.clock.now_ns()
+            if self._audio_deadline_ns is not None and now >= self._audio_deadline_ns:
+                # Un modo puede haber terminado de emitir antes de acabar la reproducción.
+                # La vigencia también corta su último bloque que aún esté sonando/en cola.
+                self.output.cancel(self._audio_request_id)
+                self._audio_deadline_ns = None
             command = self.active
             if command is None:
                 return
-            now = self.clock.now_ns()
-            if command.deadline_ns is not None and now > command.deadline_ns:
+            if command.deadline_ns is not None and now >= command.deadline_ns:
+                self._cancel_handler()
                 self.active = None
                 self._on_event("vencido", {"request_id": command.request_id})
                 return
@@ -184,6 +198,23 @@ class Controller:
                 self._on_event("terminado", {"request_id": command.request_id})
 
     # -- interno ---------------------------------------------------------------------------
+
+    def _cancel_handler(self) -> None:
+        """Hook opcional: invalidar selección/trabajo pendiente sin esperar inferencia."""
+        if self.active is not None:
+            cancel = getattr(self.handlers.get(self.active.mode), "cancel", None)
+            if cancel is not None:
+                cancel()
+
+    def close(self) -> None:
+        """Cerrar workers de modos al salir de la aplicación, sin esperar OCR nativo."""
+        with self._lock:
+            self._cancel_handler()
+            self.active = None
+            for handler in self.handlers.values():
+                close = getattr(handler, "close", None)
+                if close is not None:
+                    close()
 
     def _new_id(self) -> int:
         self._next_id += 1

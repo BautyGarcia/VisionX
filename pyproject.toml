@@ -30,6 +30,9 @@ voz = [
     "faster-whisper>=1.2",
     "piper-tts>=1.8",
 ]
+# OCR T10: RapidOCR actual + ONNX Runtime CPU (Windows/macOS, Python 3.11).
+# Pesos latinos fijados y descargados aparte con `python -m visionx.reading descargar`.
+ocr = ["rapidocr==3.10.0", "onnxruntime>=1.23,<2"]
 
 [project.scripts]
 visionx = "visionx.cli:main"
@@ -38,7 +41,11 @@ visionx = "visionx.cli:main"
 # Ultralytics pide opencv-python, pero el proyecto usa opencv-contrib-python (ArUco/ChArUco y
 # WLS de ximgproc). Ambos instalan el mismo módulo cv2 y uno pisaría al otro: se excluye
 # opencv-python con un marcador que nunca se cumple. contrib ya provee todo lo que usa YOLO.
-override-dependencies = ["opencv-python; sys_platform == 'never'"]
+# RapidOCR también pide headless, que pisa cv2 y elimina la ventana del dashboard.
+override-dependencies = [
+    "opencv-python; sys_platform == 'never'",
+    "opencv-python-headless; sys_platform == 'never'",
+]
 
 [dependency-groups]
 dev = [
