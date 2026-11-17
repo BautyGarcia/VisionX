@@ -26,10 +26,11 @@ class Target:
     angle_h_deg: float
     track_id: int | None
     last_seen_ns: int
-    measured_z_m: float | None = None  # último Z decible, para "llegaste"
+    angle_v_deg: float = 0.0
 
     def update(self, c: Candidate) -> None:
         self.angle_h_deg = c.angle_h_deg
+        self.angle_v_deg = c.angle_v_deg
         self.track_id = c.track_id if c.track_id is not None else self.track_id
         self.last_seen_ns = c.received_ns
 
