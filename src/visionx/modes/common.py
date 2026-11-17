@@ -49,6 +49,10 @@ class ModeSettings:
     # sobrevive a una salida de cuadro: BITACORA 2026-11-14).
     gate_deg: float = 15.0  # salto de ángulo aceptado entre dos frames seguidos...
     gate_deg_per_s: float = 60.0  # ...más esto por segundo transcurrido (la cámara gira)
+    reassociate_gate_deg: float = 35.0  # con varios: acotar la ventana tras una pérdida
+    match_margin_deg: float = 5.0  # ventaja mínima del mejor candidato; empate: aclarar
+    target_memory_s: float = 60.0  # referencia implícita tras buscar/medir, aun si no se ve
+    choice_repeat_s: float = 12.0  # mínimo entre preguntas «¿Cuál?», incluso tras pérdidas
     # Sin ver el objetivo durante esto: "lo perdí". En los clips buscar (cámara en mano), pasar
     # de 1,5 a 2,5 s bajó los avisos de pérdida que se recuperan en < 3 s y no bajó la cobertura
     # de guía (BITACORA T09 mejoras). Más largo demora en avisar una pérdida real.
