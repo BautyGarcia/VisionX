@@ -29,12 +29,10 @@ from visionx.modes.common import (
     measure,
     measure_phrase,
 )
-from visionx.modes.target import TargetMemory, plural
+from visionx.modes.target import Target, TargetMemory, plural
 from visionx.shared.contracts import Command
 from visionx.shared.geometry import StereoGeometry
 
-# Cuánto vale "lo que se estaba guiando" para una pregunta de distancia sin objeto.
-MEMORY_S = 5.0
 # Sin objeto nombrado ni guía: "al frente" tolera el doble del margen central.
 FRONT_FACTOR = 2.0
 
@@ -55,18 +53,24 @@ class DistanceHandler:
         self._on_event = on_event or (lambda kind, data: None)
         self.request_id: int | None = None
         self._label: str | None = None
-        self._guided_angle: float | None = None
+        self._guided_target: Target | None = None
         self._answered = False
 
     def start(self, command: Command, view: View, now_ns: int) -> list[Say]:
         self.request_id = command.request_id
         self._label = command.target
-        self._guided_angle = None
         self._answered = False  # start() puede responder ya; el tick siguiente solo cierra
-        remembered = self.memory.recent(now_ns, MEMORY_S)
+        self._guided_target = None
+        remembered = self.memory.recent(now_ns, self.s.target_memory_s)
+        if self._label is None:
+            self._label = self.memory.recent_label(now_ns, self.s.target_memory_s)
         if remembered is not None and (self._label is None or self._label == remembered.label):
             self._label = remembered.label
-            self._guided_angle = remembered.angle_h_deg
+            self._guided_target = remembered
+        if command.target:
+            if remembered is None:
+                self.memory.remember(None)
+            self.memory.request(command.target, now_ns)
         says, _ = self.tick(command, view, now_ns)
         return says
 
@@ -115,14 +119,20 @@ class DistanceHandler:
                 return None  # se lo ve pero no en este frame medido: esperar el próximo
             self._event("sin-objeto", {"frame_id": joint.frame.frame_id})
             return f"No veo {name}."
-        if self._guided_angle is not None:
-            chosen = min(cands, key=lambda c: abs(c.angle_h_deg - self._guided_angle))
+        if self._guided_target is not None:
+            chosen = self._guided_target.match(cands, self.s)
+            if chosen is None:
+                self._event("ambiguo", {"frame_id": joint.frame.frame_id})
+                return f"No puedo distinguir {name}. Decí buscá {name} para elegir."
             return self._single(chosen, name, joint)
         if len(cands) == 1:
             return self._single(cands[0], name, joint)
         return self._several(cands, name, joint)
 
     def _single(self, c: Candidate, name: str, joint: Joint) -> str:
+        target = Target(c.label, c.angle_h_deg, c.track_id, c.received_ns, c.angle_v_deg)
+        target.remember_measure(c)
+        self.memory.remember(target)
         m = measure(c.obj, self.s)
         self._event("respuesta", self._data(joint, c, m.z_m, m.reason))
         where = direction(c.angle_h_deg, self.s, c.angle_v_deg)

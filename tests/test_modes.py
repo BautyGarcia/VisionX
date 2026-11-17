@@ -23,7 +23,14 @@ from visionx.detection.convert import build_detection
 from visionx.modes import build_handlers
 from visionx.modes.__main__ import main as modes_main
 from visionx.modes.__main__ import parse_order
-from visionx.modes.common import ModeSettings, direction, measure, measure_phrase, meters
+from visionx.modes.common import (
+    ModeSettings,
+    candidates,
+    direction,
+    measure,
+    measure_phrase,
+    meters,
+)
 from visionx.modes.describe import (
     DescribeHandler,
     DescribeSettings,
@@ -35,7 +42,7 @@ from visionx.modes.describe import (
 from visionx.modes.distance import DistanceHandler
 from visionx.modes.search import SearchHandler
 from visionx.modes.simulate import RecordingSink
-from visionx.modes.target import TargetMemory, plural
+from visionx.modes.target import Target, TargetMemory, plural
 from visionx.shared.clock import ManualClock
 from visionx.shared.contracts import (
     Command,
@@ -361,9 +368,9 @@ def test_unanswered_choice_is_asked_again_not_decided_for_the_user():
     h, c = search(), cmd(Mode.SEARCH, "bottle")
     h.start(c, View(), 0)
     two = [("bottle", -20, None), ("bottle", -10, None)]
-    out, _ = run(h, c, [joint(0.1 * i, i, two) for i in range(1, 100)])
+    out, _ = run(h, c, [joint(0.1 * i, i, two) for i in range(1, 160)])
     asked = [t for t, x in out if "¿Cuál" in x]
-    assert len(asked) == 2 and asked[1] - asked[0] == pytest.approx(2 * S.repeat_s, abs=0.11)
+    assert len(asked) == 2 and asked[1] - asked[0] == pytest.approx(S.choice_repeat_s, abs=0.11)
     assert h.state == "eligiendo" and h.target is None
 
 
@@ -421,6 +428,20 @@ def test_choose_nearest_needs_meters_and_choose_without_search_says_so():
     assert [s.text for s in sink.spoken][-2:] == ["sonido:bip", "Taza un poco a la derecha."]
 
 
+def test_nearest_choice_does_not_guide_to_an_instance_only_in_old_depth():
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    two = [("cup", -20, 1), ("cup", 20, 2)]
+    run(h, c, [joint(0.1, 1, two), joint(0.2, 2, two)])
+    measured = joint(
+        0.25, 3, [("cup", -20, 1, 0.8, SPEAK), ("cup", 20, 2, 1.5, SPEAK)], measured=True
+    )
+    seen = joint(0.3, 4, [("cup", 19, 2)])
+    says = h.choose(c, "cerca", View(seen, measured), int(0.3 * SEC))
+    assert texts(says)[-1] == "Taza un poco a la derecha."
+    assert h.target.track_id == 2 and h.target.last_seen_ns == int(0.3 * SEC)
+
+
 def test_meters_during_guidance_only_when_fresh_and_valid_and_arrival_ends():
     h, c = search(), cmd(Mode.SEARCH, "cup")
     h.start(c, View(), 0)
@@ -462,6 +483,138 @@ def test_search_closes_before_deadline():
     run(h2, c2, [joint(0.1, 1, [("cup", 0, None)]), joint(0.2, 2, [("cup", 0, None)])])
     says, done = h2.tick(c2, View(), int(9.5 * SEC))
     assert done and texts(says) == ["Terminé de buscar taza."]
+
+
+@pytest.mark.parametrize("explicit_choice", [True, False])
+def test_search_remembers_selection_after_loss_with_two_new_tracks(explicit_choice):
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    two = [("cup", -20, 1), ("cup", 20, 2)]
+    initial = two if explicit_choice else two[:1]
+    run(h, c, [joint(0.1, 1, initial), joint(0.2, 2, initial)])
+    if explicit_choice:
+        h.choose(c, "izquierda", View(joint(0.2, 2, two)), int(0.2 * SEC))
+    run(h, c, [joint(3, 30, [])])
+    back = [("cup", -18, 11), ("cup", 18, 12)]
+    out, _ = run(h, c, [joint(3.1, 31, back), joint(3.2, 32, back)])
+    assert h.state == "guiando" and h.target.angle_h_deg == pytest.approx(-18, abs=0.1)
+    assert not any("¿Cuál" in text for _, text in out)
+
+
+def test_ambiguous_reassociation_asks_at_most_once_per_configured_interval():
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    two = [("cup", -20, None), ("cup", 20, None)]
+    run(h, c, [joint(0.1, 1, two), joint(0.2, 2, two)])
+    h.choose(c, "izquierda", View(joint(0.2, 2, two)), int(0.2 * SEC))
+    run(h, c, [joint(3, 30, [])])
+    ambiguous = [("cup", -24, None), ("cup", -16, None)]
+    out, _ = run(h, c, [joint(3 + i / 10, 30 + i, ambiguous) for i in range(1, 145)])
+    asked = [t for t, text in out if "¿Cuál" in text]
+    assert h.state == "eligiendo" and h.target is None
+    assert len(asked) == 1 and asked[0] >= S.choice_repeat_s
+
+
+def test_choice_cannot_acquire_an_object_from_stale_or_empty_video():
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    two = [("cup", -20, None), ("cup", 20, None)]
+    j = joint(0.2, 2, two)
+    run(h, c, [joint(0.1, 1, two), j])
+    out, _ = run(h, c, [joint(0.3, 3, []), joint(9, 90, [])])
+    assert not any("¿Cuál" in text for _, text in out)
+    says = h.choose(c, "izquierda", View(j), 10 * SEC)
+    assert h.target is None and not any("sonido:bip" == t for t in texts(says))
+
+
+def test_target_uses_surviving_id_then_position_and_rejects_a_tie():
+    target = Target("cup", -20, 7, SEC)
+    same_id = candidates(joint(4, 40, [("cup", -19, 8), ("cup", 20, 7)]), "cup", G)
+    assert target.match(same_id, S).track_id == 7
+    no_ids = candidates(joint(4, 40, [("cup", -19, None), ("cup", 20, None)]), "cup", G)
+    assert target.match(no_ids, S).angle_h_deg == pytest.approx(-19, abs=0.1)
+    tied = candidates(joint(4, 40, [("cup", -24, None), ("cup", -16, None)]), "cup", G)
+    assert target.match(tied, S) is None
+
+
+def test_target_depth_breaks_position_tie_without_inventing_depth():
+    target = Target("cup", 0, None, SEC)
+    original = candidates(joint(1, 10, [("cup", 0, None, 1.0, SPEAK)], measured=True), "cup", G)[0]
+    target.update(original)
+    cands = candidates(
+        joint(4, 40, [("cup", -4, None, 1.1, SPEAK), ("cup", 4, None, 2.8, SPEAK)], measured=True),
+        "cup",
+        G,
+    )
+    assert target.match(cands, S).index == 0
+    # Sin Z fiable, la posición empatada no alcanza para afirmar identidad.
+    no_depth = [replace(c, obj=None) for c in cands]
+    assert target.match(no_depth, S) is None
+
+
+def test_new_search_replaces_implicit_reference_even_before_detection():
+    memory = TargetMemory()
+    h = search(memory=memory)
+    h.start(cmd(Mode.SEARCH, "bottle"), View(), 0)
+    h.start(cmd(Mode.SEARCH, "cup", t_s=10, request_id=2), View(), 10 * SEC)
+    m = joint(15, 150, [("bottle", 0, None, 1.0, SPEAK)], measured=True)
+    says = distance(memory).start(cmd(Mode.DISTANCE, None, t_s=15), View(m, m), 15 * SEC)
+    assert texts(says) == ["No veo taza."]
+
+
+def test_new_measurement_without_target_cannot_trigger_arrival_from_previous_z():
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("cup", -30, 1)]), joint(0.2, 2, [("cup", -30, 1)])])
+    m1 = joint(0.3, 3, [("cup", -30, 1, 0.55, SPEAK)], measured=True)
+    assert not h.tick(c, View(m1, m1), int(0.3 * SEC))[1]
+    m2 = joint(0.4, 4, [], measured=True)
+    seen = joint(0.5, 5, [("cup", 0, 1)])
+    says, done = h.tick(c, View(seen, m2), int(0.5 * SEC))
+    assert not done and not any("Llegaste" in text for text in texts(says))
+
+
+def test_distance_after_arrival_keeps_reference_and_never_measures_other_class():
+    memory = TargetMemory()
+    h, c = search(memory=memory), cmd(Mode.SEARCH, "bottle")
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("bottle", 0, 1)]), joint(0.2, 2, [("bottle", 0, 1)])])
+    m = joint(0.3, 3, [("bottle", 0, 1, 0.55, SPEAK)], measured=True)
+    assert h.tick(c, View(m, m), int(0.3 * SEC))[1]
+    d, dc = distance(memory), cmd(Mode.DISTANCE, None, t_s=15)
+    other = joint(15, 150, [("bicycle", 0, 2, 1.2, SPEAK)], measured=True)
+    assert texts(d.start(dc, View(other, other), 15 * SEC)) == ["No veo botella."]
+
+
+def test_implicit_distance_remembers_last_measurement_and_refreshes_reference():
+    memory = TargetMemory()
+    d = distance(memory)
+    for t, label in [(1, "cup"), (40, None), (80, None)]:
+        m = joint(
+            t, t * 10, [("cup", -15, 1, 1.1, SPEAK), ("bicycle", 0, 2, 2.5, SPEAK)], measured=True
+        )
+        says = d.start(cmd(Mode.DISTANCE, label, t_s=t, request_id=t), View(m, m), t * SEC)
+        assert texts(says) == ["Taza un poco a la izquierda, a 1,1 metros."]
+
+
+def test_distance_reference_survives_loss_but_expires_with_configuration():
+    memory = TargetMemory()
+    h, c = search(memory=memory), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    run(
+        h, c, [joint(0.1, 1, [("cup", -20, 1)]), joint(0.2, 2, [("cup", -20, 1)]), joint(3, 30, [])]
+    )
+    m = joint(10, 100, [("bottle", 0, 2, 1.0, SPEAK)], measured=True)
+    assert texts(
+        distance(memory).start(cmd(Mode.DISTANCE, None, t_s=10), View(m, m), 10 * SEC)
+    ) == ["No veo taza."]
+    settings = replace(S, target_memory_s=5)
+    d = DistanceHandler(G, CATALOG.spoken, settings, memory)
+    assert texts(d.start(cmd(Mode.DISTANCE, None, t_s=20), View(), 20 * SEC)) == []
+    m = joint(20, 200, [("bottle", 0, 2, 1.0, SPEAK)], measured=True)
+    assert texts(d.tick(cmd(Mode.DISTANCE, None, t_s=20), View(m, m), 20 * SEC)[0]) == [
+        "Botella al frente, a 1 metro."
+    ]
 
 
 # --- distancia ---------------------------------------------------------------------------

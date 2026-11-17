@@ -170,7 +170,11 @@ class CommandParser:
 
         if _DISTANCE.search(text):
             cls = find_object(text, self.catalog)
-            wanted = " ".join(_object_words(text))
+            # Pronombres solos remiten al objetivo reciente; un nombre desconocido sigue
+            # pidiendo aclaración ("esa puerta" no debe terminar midiendo otra cosa).
+            object_words = _object_words(text)
+            implicit = {"eso", "ese", "esa", "esto", "este", "esta", "objeto"}
+            wanted = " ".join(object_words) if set(object_words) - implicit else ""
             if cls is None and wanted:
                 # Nombró algo que no conocemos ("la puerta"): medir el centro en su lugar
                 # sería responder otra pregunta sin avisar.

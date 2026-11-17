@@ -77,6 +77,20 @@ def test_unknown_object_asks_instead_of_guessing():
         interp.to_command(1, 0)
 
 
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "¿A qué distancia está eso?",
+        "¿A qué distancia está esa?",
+        "¿A qué distancia está?",
+        "¿Qué tan lejos está ese objeto?",
+    ],
+)
+def test_distance_pronouns_are_implicit_references(phrase):
+    interp = CommandParser(CATALOG).parse(phrase)
+    assert interp.ok and interp.mode is Mode.DISTANCE and interp.target is None
+
+
 def test_cancel_wins_even_with_more_words():
     interp = CommandParser(CATALOG).parse("Pará, pará, buscá la taza")
     assert (interp.mode, interp.target) == (Mode.CONTROL, CANCEL)

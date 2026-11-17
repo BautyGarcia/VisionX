@@ -108,6 +108,10 @@ modes:
   max_measure_age_s: 3.0    # Z más viejo que esto no se dice, s (la profundidad tarda más)
   gate_deg: 15.0            # salto de ángulo aceptado para seguir al mismo objetivo...
   gate_deg_per_s: 60.0      # ...más esto por segundo sin verlo (la cámara gira)
+  reassociate_gate_deg: 35.0 # con varios iguales: límite de salto tras pérdida, grados
+  match_margin_deg: 5.0     # ventaja mínima en posición/continuidad; sin ella pide aclarar
+  target_memory_s: 60.0     # s desde buscar/ver/medir: «está/eso» refiere a ese objetivo
+  choice_repeat_s: 12.0     # s mínimos entre «¿Cuál?», también al perder/reasociar
   lost_s: 2.5               # sin ver el objetivo durante esto: "Perdí ...", s (clips buscar: menos avisos falsos)
   min_interval_s: 1.2       # mínimo entre dos frases de guía, s
   repeat_s: 4.0             # repetir la dirección aunque no cambie, s

@@ -16,8 +16,8 @@ Reglas (TECNICO T09):
   `max_measure_age_s` no se dice. Si el sistema se atrasa, la guía calla; "Perdí" exige
   `lost_s` de video fresco sin el objetivo (un pico del detector no es una pérdida).
 - Metros solo con la política SPEAK_METERS de quien ubica el objeto y dentro del rango.
-- Con varios iguales se pregunta cuál; perdido el elegido, se suspende la guía y no se le
-  asigna su identidad al primero parecido.
+- Se conserva la selección tras una pérdida. Solo se reasocia con continuidad suficiente;
+  ante ambigüedad se suspende la guía y se pregunta con un intervalo configurable.
 
 Todo lo que se dice sale con prioridad SHORT: el bip y la dirección deben sonar DESPUÉS del
 "Busco taza." de confirmación, no cortarlo (una prioridad mayor lo interrumpiría).
@@ -72,6 +72,8 @@ class SearchHandler:
         self.request_id = command.request_id if command else None
         self.state = SEARCHING
         self.target: Target | None = None
+        self._selected: Target | None = None  # se conserva aun cuando no se puede guiar
+        self._last_choice_ns: int | None = None
         self.found_once = False
         self._hits: deque[tuple[int, int]] = deque()  # (received_ns, cuántos) con candidatos
         self._single_since: int | None = None  # eligiendo: desde cuándo se ve uno solo
@@ -91,6 +93,8 @@ class SearchHandler:
     def start(self, command: Command, view: View, now_ns: int) -> list[Say]:
         self._reset(command)
         self.memory.remember(None)  # una búsqueda nueva reemplaza al objetivo anterior
+        if command.target:
+            self.memory.request(command.target, now_ns)
         says, _ = self.tick(command, view, now_ns)
         return says
 
@@ -117,14 +121,15 @@ class SearchHandler:
             self._last_seen_key = seen.frame.key  # type: ignore[union-attr]
             cands = candidates(seen, label, self.geometry)  # type: ignore[arg-type]
             says += self._on_frame(cands, name, now_ns)
-        if self.state == CHOOSING and self._last_say_ns is not None:
-            # Sin respuesta, se vuelve a preguntar de vez en cuando (no se elige por el usuario).
-            if (now_ns - self._last_say_ns) / 1e9 >= 2 * self.s.repeat_s and self._choices:
-                says.append(
-                    self._phrase(
-                        f"¿Cuál {name}? Decí izquierda, derecha, centro o la más cercana.", now_ns
-                    )
+        if not fresh:
+            self._choices = []
+            self._single_since = None
+        if self.state == CHOOSING and self._choices and self._can_ask(now_ns):
+            says.append(
+                self._ask(
+                    f"¿Cuál {name}? Decí izquierda, derecha, centro o la más cercana.", now_ns
                 )
+            )
         if self.state == GUIDING and self.target is not None:
             # "Perdí" necesita evidencia de ausencia: frames frescos que cubran lost_s de video
             # sin el objetivo, medido en tiempo de FRAME. Si el sistema se atrasa (no llegan
@@ -145,7 +150,7 @@ class SearchHandler:
                 self._event("perdido", {"angulo_h": round(last, 1)})
                 self.state, self.target = SEARCHING, None
                 self._hits.clear()
-                self.memory.remember(None)
+                self._measure = None
                 # Si salió por un costado, decir hacia dónde quedó ayuda a volver a girar.
                 where = horizontal(last, self.s)
                 lost = (
@@ -171,6 +176,11 @@ class SearchHandler:
             return [Say(f"Ya te estoy guiando hacia {name}.")]
         if self.state != CHOOSING or not self._choices:
             return [Say("No hay nada para elegir ahora.")]
+        if view.seen is None or age_s(view.seen, now_ns) > self.s.max_age_s:
+            return [Say(f"No veo {name} ahora. Sigo buscando.")]
+        self._choices = candidates(view.seen, command.target, self.geometry)
+        if not self._choices:
+            return [Say(f"No veo {name} ahora. Sigo buscando.")]
         chosen: Candidate | None
         if choice == "izquierda":
             chosen = self._choices[0]
@@ -197,11 +207,20 @@ class SearchHandler:
                 self.memory.remember(self.target)
             return []
         if not cands:
+            self._choices = []
+            self._single_since = None
             return []
         received = cands[0].received_ns
         self._hits.append((received, len(cands)))
         while self._hits and (received - self._hits[0][0]) / 1e9 > self.s.confirm_s:
             self._hits.popleft()
+        if self._selected is not None and len(self._hits) >= self.s.confirm_hits:
+            match = self._selected.match(cands, self.s)
+            if match is not None:
+                return self._acquire(match, name, now_ns, continued=True)
+            # Con selección previa, ni un único candidato dudoso autoriza cambiar de objeto.
+            self.state, self._choices = CHOOSING, cands
+            return []
         if self.state == CHOOSING:
             self._choices = cands  # la elección se aplica a lo último que se vio
             # Si queda uno solo de forma estable, ya no hay entre qué elegir: se guía a ese.
@@ -227,20 +246,33 @@ class SearchHandler:
             self._event("varios", {"cantidad": len(cands)})
             listed = min(len(cands), self.s.max_listed)
             more = "o más " if len(cands) > listed else ""
-            return [
-                Say(BIP),
-                self._phrase(
-                    f"Veo {listed} {more}{plural(name)}. ¿Cuál? Decí izquierda, derecha, centro "
-                    "o la más cercana.",
-                    now_ns,
-                ),
-            ]
+            return (
+                [
+                    Say(BIP),
+                    self._ask(
+                        f"Veo {listed} {more}{plural(name)}. ¿Cuál? "
+                        "Decí izquierda, derecha, centro o la más cercana.",
+                        now_ns,
+                    ),
+                ]
+                if self._can_ask(now_ns)
+                else []
+            )
         return self._acquire(cands[0], name, now_ns)
 
-    def _acquire(self, c: Candidate, name: str, now_ns: int) -> list[Say]:
+    def _acquire(
+        self, c: Candidate, name: str, now_ns: int, *, continued: bool = False
+    ) -> list[Say]:
         reacquired = self.found_once
         self.state, self.found_once = GUIDING, True
-        self.target = Target(c.label, c.angle_h_deg, c.track_id, c.received_ns, c.angle_v_deg)
+        if continued and self._selected is not None:
+            self.target = self._selected
+            self.target.update(c)
+        else:
+            self.target = Target(c.label, c.angle_h_deg, c.track_id, c.received_ns, c.angle_v_deg)
+        self.target.remember_measure(c)
+        self._selected = self.target
+        self._choices = []
         self._h_word = self._v_word = None
         self.memory.remember(self.target)
         self._measure = None
@@ -285,6 +317,16 @@ class SearchHandler:
         self._last_phrase, self._last_say_ns = text, now_ns
         return Say(text)
 
+    def _can_ask(self, now_ns: int) -> bool:
+        return (
+            self._last_choice_ns is None
+            or (now_ns - self._last_choice_ns) / 1e9 >= self.s.choice_repeat_s
+        )
+
+    def _ask(self, text: str, now_ns: int) -> Say:
+        self._last_choice_ns = now_ns
+        return self._phrase(text, now_ns)
+
     def _update_measure(self, view: View, label: str, now_ns: int) -> None:
         """Toma el Z del objetivo de la unión medida más nueva (mismo frame que su máscara)."""
         joint = view.measured
@@ -299,6 +341,9 @@ class SearchHandler:
         match = self.target.match(candidates(joint, label, self.geometry), self.s)
         if match is not None:
             self._measure = (measure(match.obj, self.s), joint.frame.received_ns)
+            self.target.remember_measure(match)
+        else:
+            self._measure = None  # la unión nueva ya no respalda el Z anterior
 
     def _fresh_measure(self, now_ns: int) -> Measure | None:
         if self._measure is None:
@@ -311,7 +356,14 @@ class SearchHandler:
         if joint is None or age_s(joint, now_ns) > self.s.max_measure_age_s:
             return None
         decible = [c for c in candidates(joint, label, self.geometry) if measure(c.obj, self.s).ok]
-        return min(decible, key=lambda c: c.obj.z_m) if decible else None  # type: ignore[union-attr]
+        # La profundidad puede ir detrás del video: elegir por Z en el par medido, pero
+        # anunciar solo una instancia que todavía se pueda asociar en la vista fresca.
+        for c in sorted(decible, key=lambda c: c.obj.z_m):  # type: ignore[union-attr]
+            previous = Target(c.label, c.angle_h_deg, c.track_id, c.received_ns, c.angle_v_deg)
+            match = previous.match(self._choices, self.s)
+            if match is not None:
+                return match
+        return None
 
     def _event(self, kind: str, data: dict[str, Any]) -> None:
         self._on_event(f"buscar-{kind}", {"request_id": self.request_id, **data})
