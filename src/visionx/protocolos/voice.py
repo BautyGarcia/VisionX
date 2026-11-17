@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .audio_devices import readable_name, resolve_device
 from .common import percentile, read_csv, report, sha, write_json
 
 
@@ -25,6 +26,7 @@ def capture(seconds: float, device=None) -> tuple[np.ndarray, dict]:
 
     from visionx.voice.engines import resample
 
+    device = resolve_device(device, sd)
     info = sd.query_devices(device, "input")
     rate = int(info["default_samplerate"])
     blocks, overflows = [], []
@@ -48,7 +50,7 @@ def capture(seconds: float, device=None) -> tuple[np.ndarray, dict]:
     audio = resample(audio[: int(seconds * rate)], rate, 16000)
     return audio, {
         "dispositivo": str(device),
-        "nombre": info["name"],
+        "nombre": readable_name(info["name"]),
         "rate_original": rate,
         "overflows": overflows,
     }
@@ -119,6 +121,9 @@ def record(
                     continue
                 peak = float(np.max(np.abs(audio)))
                 rms = float(np.sqrt(np.mean(audio**2)))
+                # WAV de captura: mono 16 kHz. Energía RMS al final indica posible corte,
+                # no demuestra que la frase haya terminado: conservar aviso y permitir reintento.
+                tail_rms = float(np.sqrt(np.mean(audio[-3200:] ** 2)))
                 warnings = []
                 if peak < 0.02:
                     warnings.append("casi silencio")
@@ -126,6 +131,10 @@ def record(
                     warnings.append("saturación")
                 if meta.get("overflows"):
                     warnings.append("pérdida de bloques")
+                if tail_rms >= max(0.02, 0.5 * rms):
+                    warnings.append(
+                        "posible frase cortada: energía alta en últimos 200 ms; aumentar --segundos"
+                    )
                 attempt = int(prior.get("intentos", 0)) + 1
                 wav = f"wav/{int(key):03}-{attempt:03}.wav"
                 write_wav(sheet.parent / wav, audio, 16000)
@@ -135,6 +144,7 @@ def record(
                     "intentos": attempt,
                     "pico": peak,
                     "rms": rms,
+                    "rms_ultimos_200ms": tail_rms,
                     "advertencias": warnings,
                     **meta,
                 }

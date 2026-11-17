@@ -283,7 +283,7 @@ def test_phrases_same_as_t08():
 def test_voice_record_retry_skip_resume_and_input_level(tmp_path):
     sheet = plantilla("voz", tmp_path / "voz")
     write_csv(sheet, read_csv(sheet)[:3])
-    answers = iter(["", "r", "", "", "s", "q"])
+    answers = iter(["", "r", "", "a", "s", "q"])
     calls = []
 
     def recorder(seconds, device):
@@ -299,7 +299,7 @@ def test_voice_record_retry_skip_resume_and_input_level(tmp_path):
     assert state["frases"]["1"]["rms"] == pytest.approx(0.1)
     assert state["frases"]["2"]["estado"] == "saltada"
     assert len(list((sheet.parent / "wav").glob("*.wav"))) == 2
-    answers = iter(["", ""])
+    answers = iter(["", "a"])
     state = voice.record(sheet, countdown=0, recorder=recorder, ask=lambda _: next(answers))
     assert state["frases"]["3"]["estado"] == "ok"
     assert len(calls) == 3
@@ -334,7 +334,7 @@ def test_voice_interrupt_error_and_silence(tmp_path):
 def test_voice_evaluation_two_models_and_cache(tmp_path):
     sheet = plantilla("voz", tmp_path / "voz")
     write_csv(sheet, read_csv(sheet)[:1])
-    answers = iter(["", ""])
+    answers = iter(["", "a"])
     voice.record(
         sheet,
         countdown=0,
@@ -497,3 +497,192 @@ def test_capture_level_and_stream_cleanup_without_microphone(monkeypatch, capsys
     assert "pico 0.250" in capsys.readouterr().out
     assert metadata["overflows"] == ["input overflow"]
     assert closed == [True]
+
+
+@pytest.mark.parametrize("kind", ["laplace_b", "lr_consistency"])
+def test_m7_config_factory_cli(tmp_path, monkeypatch, kind):
+    import sys
+
+    import yaml
+
+    from visionx.protocolos import vision
+    from visionx.shared.config import load_config
+    from visionx.shared.contracts import UncertaintyKind
+
+    fake = FakeVision()
+    adapter = object.__new__(vision.OfflineVision)
+    adapter.geometry = fake.geometry
+    adapter.detector = fake.detector
+    adapter.inputs = []
+    adapter.estimators = {}
+    adapter.frames = fake.frames
+    calls = []
+
+    class Estimator(FakeDepthEstimator):
+        def predict(self, frame):
+            depth = super().predict(frame)
+            return replace(
+                depth,
+                uncertainty=np.full(depth.valid_mask.shape, 0.4, np.float32),
+                uncertainty_kind=UncertaintyKind(kind),
+            )
+
+    def factory(cfg, geometry):
+        calls.append(cfg)
+        return Estimator(geometry, source=fake.source)
+
+    monkeypatch.setitem(sys.modules, "fake_m7_factory", SimpleNamespace(build=factory))
+    config = tmp_path / "local.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "depth": {
+                    "estimadores": {"fusion": {"fabrica": "fake_m7_factory:build", "parametro": 7}}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapter.cfg = load_config(config)
+    monkeypatch.setattr(vision, "OfflineVision", lambda cfg: adapter)
+    sheet = m7_sheet(tmp_path)
+    assert (
+        main(
+            [
+                "m7",
+                "evaluar",
+                "--planilla",
+                str(sheet),
+                "--salida",
+                str(tmp_path / "r"),
+                "--metodos",
+                "fusion",
+                "--config",
+                str(config),
+            ]
+        )
+        == 0
+    )
+    assert calls == [{"parametro": 7}]
+    rows = read_csv(tmp_path / "r/detalle.csv")
+    assert float(rows[0]["incertidumbre_px"]) == pytest.approx(0.4)
+    table = read_csv(tmp_path / "r/tabla.csv")
+    assert table[0]["tipo_incertidumbre"] == kind
+    assert float(table[0]["mae_confianza_50_m"]) == pytest.approx(0.2, abs=1e-5)
+    assert float(table[0]["cobertura_confianza_50"]) == 1  # ceil con una fila
+    # El import usado por protocolos es exactamente el constructor público.
+    from visionx.app.depth_registry import build_estimator
+
+    assert vision.build_estimator is build_estimator
+
+
+def test_m7_risk_coverage_order_missing_ties_and_abstention():
+    rows = [
+        dict(
+            metodo="fusion",
+            referencia_z_m=1,
+            z_pred_m=1 + error,
+            incertidumbre_px=u,
+            tipo_incertidumbre="laplace_b",
+        )
+        for error, u in [(0.1, 1), (0.2, 1), (0.4, 3), (0.8, 4)]
+    ]
+    rows += [
+        dict(metodo="fusion", referencia_z_m=1, z_pred_m=z, incertidumbre_px=None)
+        for z in (1.9, None)
+    ]
+    result = objects.summarize(rows)[0]
+    assert result["n_con_incertidumbre"] == 4
+    assert result["cobertura_confianza_100"] == 4 / 6
+    assert result["mae_confianza_100_m"] == pytest.approx(0.375)
+    assert result["cobertura_confianza_90"] == 4 / 6
+    assert result["cobertura_confianza_75"] == 3 / 6
+    assert result["mae_confianza_75_m"] == pytest.approx(0.7 / 3)
+    assert result["cobertura_confianza_50"] == 2 / 6
+    assert result["mae_confianza_50_m"] == pytest.approx(0.15)
+    missing = objects.summarize(rows[-2:])[0]
+    assert missing["mae_confianza_100_m"] is None
+    assert missing["cobertura_confianza_100"] is None
+    rows[0]["tipo_incertidumbre"] = "lr_consistency"
+    assert objects.summarize(rows)[0]["mae_confianza_100_m"] is None
+
+
+def test_m7_uncertainty_uses_resized_object_mask_only():
+    from visionx.shared.geometry import resize_mask
+
+    mask = np.zeros((8, 8), bool)
+    mask[2:6, 2:6] = True
+    small = resize_mask(mask, 4, 4)
+    valid = np.ones((4, 4), bool)
+    valid[1, 1] = False
+    uncertainty = np.full((4, 4), 100, np.float32)
+    uncertainty[small] = 0.2
+    uncertainty[~valid] = np.nan
+    depth = SimpleNamespace(uncertainty=uncertainty, size=(4, 4), valid_mask=valid)
+    detection = SimpleNamespace(masks=np.array([mask]))
+    assert objects.object_uncertainty(depth, detection, 0) == pytest.approx(0.2)
+    assert objects.object_uncertainty(depth, SimpleNamespace(masks=None), 0) is None
+
+
+def fake_audio_devices():
+    devices = [
+        dict(name="Micr�fono (Yeti Nano)", hostapi=0, max_input_channels=1),
+        dict(name="Micrófono (Yeti Nano)", hostapi=1, max_input_channels=1),
+        dict(name="Micrófono (Yeti Nano)", hostapi=2, max_input_channels=1),
+        dict(name="MicrÃ³fono (USB)", hostapi=0, max_input_channels=1),
+        dict(name="Parlantes", hostapi=2, max_input_channels=0),
+    ]
+    return SimpleNamespace(
+        query_devices=lambda: devices,
+        query_hostapis=lambda: [
+            dict(name=n) for n in ("MME", "Windows DirectSound", "Windows WASAPI")
+        ],
+    )
+
+
+def test_voice_device_names_and_matching_without_audio(monkeypatch, capsys):
+    import sys
+
+    from visionx.protocolos.audio_devices import input_devices, resolve_device
+
+    sd = fake_audio_devices()
+    devices = input_devices(sd)
+    assert [d["name"] for d in devices] == ["Micrófono (Yeti Nano)"] * 3 + ["Micrófono (USB)"]
+    assert resolve_device("yeti nano", sd) == 2
+    assert resolve_device("MICROFONO (YETI", sd) == 2
+    assert resolve_device("microfono (usb)", sd) == 3
+    assert resolve_device("0", sd) == 0
+    assert resolve_device(None, sd) is None
+    with pytest.raises(ValueError, match="ambiguo"):
+        resolve_device("microfono", sd)
+    with pytest.raises(ValueError, match="no hay entrada"):
+        resolve_device("ausente", sd)
+    monkeypatch.setitem(sys.modules, "sounddevice", sd)
+    assert main(["voz", "dispositivos"]) == 0
+    output = capsys.readouterr().out
+    assert "Micrófono (Yeti Nano)" in output
+    assert "�" not in output
+
+
+@pytest.mark.parametrize("cut", [True, False])
+def test_voice_end_energy_warning_and_default_duration(tmp_path, capsys, cut):
+    sheet = plantilla("voz", tmp_path / "voz")
+    write_csv(sheet, read_csv(sheet)[:1])
+    audio = np.zeros(16000 * 4, np.float32)
+    audio[16000:32000] = 0.15
+    if cut:
+        audio[-3200:] = 0.15
+    durations = []
+    answers = iter(["", "q"])
+
+    def recorder(seconds, device):
+        durations.append(seconds)
+        return audio, {}
+
+    state = voice.record(sheet, countdown=0, recorder=recorder, ask=lambda _: next(answers))
+    assert durations == [4]
+    item = state["frases"]["1"]
+    assert bool(item["advertencias"]) == cut
+    assert item["rms_ultimos_200ms"] == pytest.approx(0.15 if cut else 0)
+    assert ("posible frase cortada" in capsys.readouterr().out) == cut
+    assert item["estado"] == "pendiente"

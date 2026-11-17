@@ -21,7 +21,7 @@ def main(argv=None) -> int:
         ev.add_argument("--config", help="override YAML explícito")
         if metric in ("m7", "describir"):
             ev.add_argument(
-                "--metodos", nargs="+", choices=("B0", "B1", "B2", "B3", "B4"), default=["B0"]
+                "--metodos", nargs="+", default=["B0"], help="B0–B4 o depth.estimadores"
             )
             ev.add_argument("--ventana", type=float, default=0.4, help="ancho total en s")
             ev.add_argument("--frames", type=int, default=3)
@@ -37,9 +37,12 @@ def main(argv=None) -> int:
             rec = commands.add_parser("grabar", help="Enter graba, r reintenta, s saltea, q sale")
             rec.add_argument("--planilla", type=Path, required=True)
             rec.add_argument(
-                "--dispositivo", help="índice o nombre; omitir usa entrada por defecto"
+                "--dispositivo",
+                help="índice o subcadena sin acentos; omitir usa entrada por defecto",
             )
-            rec.add_argument("--segundos", type=float, default=4)
+            rec.add_argument(
+                "--segundos", type=float, default=4, help="duración por frase (default: 4 s)"
+            )
             rec.add_argument("--cuenta", type=int, default=3)
             rec.add_argument("--revisar-saltadas", action="store_true")
     args = parser.parse_args(argv)
@@ -50,9 +53,10 @@ def main(argv=None) -> int:
             print(plantilla(args.metrica, args.salida))
             return 0
         if args.accion == "dispositivos":
-            import sounddevice as sd
+            from .audio_devices import input_devices
 
-            print(sd.query_devices())
+            for device in input_devices():
+                print(f"{device['index']}: {device['name']} [{device['api']}]")
             return 0
         if args.accion == "grabar":
             from .voice import record
