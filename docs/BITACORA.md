@@ -40,6 +40,55 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-17 — T12: segunda semilla y ablaciones de Fusion v2
+
+**Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-fusion` (T12 commiteado
+en `a55ede4`; `main` integrado en `c2767fb`, conflicto de BITACORA resuelto conservando todas
+las entradas; suite completa sin fallos y ruff limpio).
+
+**Hecho.** Cola nocturna en serie (`outputs/fusion/cola-2026-11-16.sh`, M2 Max, MPS, 22:53 →
+04:30), con la receta de `configs/fusion-v2.yaml` salvo lo indicado:
+`v2-f3-b5-s1` (semilla 1), `v2-f3-b4-s0` (base B4, `fusion-v2-base-b4.yaml`) y
+`v2-f3-b5-sindil-s0` (sin bloques dilatados, `fusion-v2-sin-dilatacion.yaml`: 4,21 M parámetros
+y campo receptivo 260 px). Se agregaron `--semilla` en `entrenar` y liberar la memoria de MPS al
+final de cada época: el pico del driver bajó de 23,6 a 16–18 GB y la época volvió a ~5,5 min
+(antes 10–17 min).
+
+**Resultados en InStereo2K val** (102 muestras, media por muestra, mejor checkpoint de cada run
+por EPE de val; script `outputs/fusion/analisis/soporte_comun_b5epe.py` con `RUN=<run>`).
+
+| run | EPE 3 vías | EPE B5 3 vías | EPE 97 muestras | B5-EPE 97 | acierto-2 GT |
+|---|---|---|---|---|---|
+| v2 base B5, semilla 0 (época 20) | 1,735 | 1,801 | 1,677 | 1,678 | 77,65 |
+| v2 base B5, semilla 1 (época 20) | 1,724 | 1,802 | 1,664 | 1,679 | 77,81 |
+| v2 base B5 sin dilataciones (época 20) | 1,730 | 1,801 | 1,669 | 1,678 | 77,79 |
+| **v2 base B4 (época 15)** | **1,678** | 1,800 | **1,496** | 1,677 | 77,67 |
+
+- "3 vías": soporte GT ∩ B4 ∩ B5 ∩ Fusion (98,7 % de la GT), las 102 muestras. "97 muestras":
+  se sacan las 5 donde la recta Huber de B5-EPE se rechaza (000415, 000475, 000476, 000486,
+  000496); en el resto los cuatro métodos cubren los mismos píxeles. B4 2,054 y B5-EPE no
+  entran en la tabla de 3 vías porque B5-EPE pierde cobertura en esas 5.
+- **La mejora de v2 sobre B5 se repite con otra semilla** (1,735 y 1,724 contra 1,801–1,802).
+  Contra la mejor regla fija por EPE (B5-EPE), las corridas sobre B5 empatan (1,664–1,677
+  contra 1,678–1,679).
+- **Sin dilataciones da lo mismo** (1,730 contra 1,735/1,724): el contexto lejano lo trae el
+  canal F3, no la red. Con la mitad de parámetros, es la variante más barata sobre B5.
+- **Base B4 con F3 es la mejor:** −6,8 % de EPE contra B5 en las 102 muestras y **−10,8 %
+  contra B5-EPE en las 97 comparables** (1,496 contra 1,677). Recibe la corrección de B5 como
+  canal pero no queda atada a ella como punto de partida. Acierto-2 parecido a las demás.
+- **Su punto débil:** hereda los fallos de B4. En 000476, donde RANSAC eligió una pendiente
+  anómala (B4 ~17,7 px), Fusion sobre B4 queda en 14,1 px contra 3,8–4,2 de las otras.
+- Fusion sobre B5 también mejora las zonas con estéreo (EPE 1,14 → 1,05–1,08), que las reglas
+  fijas no tocan.
+
+**Límites.** Todo es val, que es casi una escena y se usó para elegir B5 y los checkpoints.
+La variante con base B4 tiene una sola semilla y su mejor época (15) se eligió con val. Sin
+ELP, sin test público, sin latencia. La versión sin dilataciones solo se probó sobre B5.
+
+**Próximo paso.** Elegir el candidato a congelar (propuesta: F3 sobre B4), segunda semilla de
+ese candidato, latencia en MPS a 1280×720, paquete y evaluación única en el test público con
+`--test-congelado`. Abrir el PR de T12 cuando Bauty lo pida.
+
 ## 2026-11-16 — T12: Fusion v2 sobre B5 mejora a la regla fija en val (una semilla)
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-fusion`, local, sin commits.
