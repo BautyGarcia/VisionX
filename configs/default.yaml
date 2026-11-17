@@ -65,6 +65,22 @@ depth:
     seed: 0
   b4:
     estereo: B2               # anclas y estéreo de B3/B4: B2 ganó a B1 en val (72,0 contra 68,8 de acierto-2)
+  # B5 (T12, src/visionx/depth/hybrid.py y align.local_affine): control fijo sin aprendizaje. Estéreo
+  # de depth.b4.estereo donde es válido; en los huecos, monocular con una recta global más una
+  # corrección afín local desde las anclas. Hereda depth.alineacion salvo `method` y lo que redefina
+  # `alineacion` acá. Ajustado el 16/11 en InStereo2K val, ver BITACORA (grilla de 24 por acierto-2,
+  # `python -m visionx.depth.fusion ajustar-b5`): val 76,40 % contra 71,96 % de B4; el orden de los 3
+  # mejores se mantiene en 100 pares de train.
+  b5:
+    method: ransac            # recta global: ransac (la de B4) | huber. Huber baja la EPE pero rechaza
+                              # la recta en 5/102 pares de val (RANSAC en 2): menos cobertura y acierto-2
+    sigma_px: 120.0           # σ de la ventana gaussiana, px (120 > 180 > 240 en val y en train)
+    slope_lambda_px2: 100.0   # λ: ata la pendiente local a la global, px² del monocular alineado
+    exclude_px: 0.0           # anclas a menos de esto de un hueco no se usan (16 baja la EPE, no el acierto-2)
+    samples_per_sigma: 8.0    # grilla reducida para las sumas: paso = σ / esto (no ajustado)
+    min_density: 1.0e-4       # bajo esta fracción de anclas en la ventana queda la recta global (no ajustado)
+    max_slope_ratio: 2.0      # pendiente local en [global/2, global·2] (no ajustado)
+    alineacion: {}            # overrides de depth.alineacion solo para B5 (vacío = hereda todo)
   evaluacion:
     # Rango de búsqueda por dataset, en px (redondeado a múltiplo de 16). Sale de lo que publica
     # cada dataset, no de un número único: con 96 fijo, SGBM no puede ver la mitad de la escena.
@@ -72,6 +88,19 @@ depth:
       middeval3: calib      # ndisp de calib.txt por escena (120-380 px en H)
       eth3d: 64             # calib.txt trae ndisp = ancho (relleno); máx. GT de T04: 61,3 px
       instereo2k: 272       # README y auditoría T04: disparidad 20-265 px
+      midd2021: calib       # dev de otro dominio (17/11): ndisp de calib.txt, 100-380 px a 1920x1080
+      midd2014extra: calib  # dev de otro dominio (17/11): ndisp de calib.txt ya reducido a H
+  # SpatialDepth-Fusion (T12, src/visionx/depth/fusion/). U-Net residual que corrige B4 y estima
+  # incertidumbre b (Laplace). Entrenamiento: configs/fusion-entrenamiento.yaml y
+  # `python -m visionx.depth.fusion`. Los canales son parte del modelo: cambiarlos invalida pesos.
+  fusion:
+    variante: F1              # F0 (10 canales) | F1 (+ valid_mono, 11 canales)
+    canales:                  # ChannelParams (channels.py); viajan dentro del checkpoint/paquete
+      error_gain: 32.0        # ganancia de error L/R y estéreo-monocular, en unidades d/W_ref
+      lr_cap: 1.0             # tope del error L/R (y valor donde no se puede calcular)
+      gradient_gain: 0.25     # Sobel 3x3 del gris/255 por esta ganancia, tope 1
+    paquete: ""               # carpeta de un paquete (outputs/fusion/paquetes/<nombre>); vacío = sin Fusion
+    cache_root: data/cache/fusion   # ingredientes por muestra (estéreo, monocular, alineación); fuera de Git
 
 detection:
   # yolo26s + 960 px (BITACORA T09 mejoras): en clips ELP detecta la taza blanca a 1 m y el bolso
@@ -99,6 +128,35 @@ spatial_provisional:
   max_rel_spread: 0.5       # IQR de la capa / Z; más que esto es una capa difusa: solo dirección
   spread_allowance_m: 0.4   # ...salvo que la IQR no pase esto (m): profundidad propia de un objeto (silla de cerca)
   border_px: 2              # caja a esta distancia del borde lateral: objeto cortado, reencuadrar
+
+# Ubicación por objeto de A (src/visionx/depth/spatial/, `build_locator`; T09, política calibrada:
+# T13). Z = percentil del frente de la capa más cercana de la máscara, medida en disparidad
+# efectiva d + doffs y pasada a metros con la geometría. Valores elegidos con clips de DESARROLLO
+# de una sola sesión (dev-1114-distancias y acercarse-1, BITACORA T09 parte A): n chico, no son
+# la calibración; la definitiva sale del banco ELP (T04/T13). spatial_provisional queda para el
+# ubicador provisorio de B hasta que la app cambie.
+spatial:
+  min_valid: 0.5            # fracción mínima de la máscara con profundidad para decir metros
+  min_valid_px: 30          # y píxeles válidos mínimos en el interior (grilla de depth.compute); red
+                            # de seguridad para objetos diminutos, no se activó en los clips (mín. 850)
+  layer_min_frac: 0.25      # una capa cuenta como objeto con al menos esto de los píxeles válidos
+  layer_bin_rel: 0.03       # ancho relativo de los intervalos de capa (3 % en d = 3 % en Z)
+  layer_bin_min_px: 0.0     # piso del ancho en px de disparidad; 0,25-0,5 no cambian nada en los
+                            # clips y 1,0 baja los metros de la silla en B4/B5 de ~96 % a ~70 %
+  layer_floor: 0.01         # un intervalo con menos que esto de los píxeles separa capas
+  front_percentile: 20      # percentil de Z en la capa = superficie del frente (p50 aleja 0,3-17 cm)
+  max_rel_spread: 0.5       # IQR de la capa / Z; más que esto es una capa difusa: solo dirección
+  spread_allowance_m: 0.4   # ...salvo que la IQR no pase esto (m): profundidad propia de un objeto
+  erode_frac: 0.0           # interior adaptativo: erosión = esta fracción del radio inscripto. Apagado:
+                            # 0,2-0,5 no mejoran el error contra cinta y en la silla alejan el frente
+                            # 2-12 cm y suben el temblor cuadro a cuadro ~35 %
+  erode_max_px: 6.0         # tope de la erosión, px de la grilla de profundidad (si erode_frac > 0)
+  min_interior_px: 50       # si la erosión deja menos que esto, se usa la máscara entera
+  border_px: 2              # caja a esta distancia del borde lateral: objeto cortado, reencuadrar
+  reframe_bottom: false     # reencuadrar también si se corta abajo y el frente llega al borde. En
+                            # acercarse-1 se activaría en 18 de 20 frames con la silla a <= 0,52 m
+                            # (al llegar) y la frase del modo dice "girá hacia ese lado": queda apagado
+  bottom_band_px: 2         # franja inferior (px de la grilla de profundidad) para esa regla
 
 # Modos buscar y distancia (T09, src/visionx/modes/). Candidatos sin medir: M1/M7/M8 los fijan.
 # El rango que se anuncia en metros sale de depth.range_m.

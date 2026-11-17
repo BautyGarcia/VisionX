@@ -233,6 +233,21 @@ Congelar cuál variante estéreo aporta B4 y sus umbrales con validación, antes
 **B4 es el control clave:** ya combina ambas fuentes; si Fusion mejora SGBM pero no B4,
 no habremos demostrado que aprender la combinación agrega valor.
 
+**B5, segundo control fijo (T12, 16/11; `align.py`, `hybrid.py`, sección `depth.b5`).** Nació
+del diagnóstico de Fusion: el 72 % del error de B4 en val está en los huecos rellenados con
+monocular, porque una sola recta no vale para toda la imagen.
+- **Qué hace:** estéreo donde es válido; en los huecos, monocular con la recta global más una
+  **corrección afín local**: en cada píxel, mínimos cuadrados con pesos gaussianos (σ) sobre las
+  anclas estéreo, con la pendiente atada a la global (λ). Sin aprendizaje.
+- **Ajuste:** mismo protocolo que T05 (acierto-2 en InStereo2K val, confirmación en train) con
+  `python -m visionx.depth.fusion ajustar-b5`. Congelado: RANSAC, σ 120 px, λ 100, sin exclusión.
+  Con σ ≤ 60 px empeora: el estéreo pegado a los huecos es el menos confiable.
+- **Para qué sirve:** B4 sigue siendo el control de T05. B5 evita atribuirle a la red lo que
+  logra una regla escrita a mano: Fusion tiene que ganarle a los dos.
+- `AlignParams.method` admite `huber`; por EPE da algo mejor, pero rechaza más rectas y pierde
+  cobertura. Esa variante («B5-EPE») se informa como control adicional, no se usa en la app.
+- Umbrales en px elegidos a ~1080×860: revisar σ con el banco ELP, como los de la alineación.
+
 ### Monocular preentrenada
 
 Usar el mapa relativo flotante de **Depth Anything V2 Small**, no una imagen coloreada del
@@ -300,6 +315,12 @@ F1 agrega el canal 11, **máscara monocular válida y alineada**. Es la primera 
 recomendada: un cero de relleno no comunica por sí solo que el monocular no tiene escala fiable.
 F0 conserva utilidad como referencia; toda variante debe manejar validez correctamente.
 
+**F3, implementada (T12, `fusion-canales-2`).** F1 más tres canales que traen contexto lejano,
+calculados sobre el frame completo antes de recortar: `corr_local` (cuánto corrige B5 respecto de
+B4), `dist_ancla` (distancia a la ancla estéreo más cercana) y `densidad_anclas`. Motivo: la
+señal útil está a cientos de px y una U-Net chica no la alcanza. La F2 prevista (calidad del
+ajuste) no se implementó.
+
 Opciones posteriores, no agregados automáticos: F2 introduce calidad del ajuste, como ratio
 de anclas y residuo; F3 introduce distancia a anclas fiables. Compararlas con igual protocolo
 y registrar si no ayudan. Gradiente/diferencia pueden ser redundantes: ablarlos si el piloto
@@ -321,6 +342,20 @@ No agregar profundidad anterior como otro canal sin compensar movimiento de cám
   finitas y máscaras explícitas; conservar NaN fuera de validez en los resultados públicos.
 - Invalidar caché si cambia par, pesos, configuración, transformación, versión de canales o
   alineación. **Caché** significa reutilizar un cálculo guardado, no una verdad permanente.
+
+**Implementado (`src/visionx/depth/fusion/channels.py`, `cache.py`).** `build_inputs` es la
+única función que arma canales, para entrenar y para aplicar (`CHANNELS_VERSION`).
+- **Ganancia de los canales de error:** el error L/R y la diferencia estéreo−mono van en d/W
+  por una ganancia fija de 32, con tope 1. Sin ganancia valen ~0,002 y casi no pesan.
+  Donde el error L/R no se puede calcular (SGBM inválido, fuera de imagen o relleno de WLS)
+  vale el tope: «sin evidencia de consistencia».
+- **Error fotométrico:** se calcula con la disparidad de la base B4 (estéreo o monocular
+  alineado), muestreando la derecha en x − d. Vale 0 sin base o fuera de imagen.
+- **W_ref:** es el ancho del frame completo; los canales se arman sobre el frame y después se recorta.
+- **Caché:** guarda los ingredientes caros (B2, error L/R, monocular, alineación), no los
+  canales. La clave incluye archivos, SGBM, alineación, monocular y `doffs`. El entrenamiento
+  lee en modo solo-lectura y falla si la clave no coincide. Las versiones de librerías van en
+  `meta` y solo avisan.
 
 ### Arquitectura y pérdida
 
@@ -355,6 +390,17 @@ Este enfoque es **fusión tardía de mapas**: no reconstruye un volumen completo
 correspondencias entre ojos. Si ambos mapas perdieron una superficie, una corrección local
 puede no recuperarla. Esa diferencia frente a comparadores forma parte de las limitaciones.
 
+**Implementado (`model.py`, `loss.py`).**
+- U-Net de 4 niveles (32/64/128/192), 1,74 M de parámetros. La base B4 entra además como canal
+  propio: 12 canales en la primera capa con F1.
+- Salidas en d/W_ref con `residual_scale` 1/128. La disparidad final se arma en px como
+  `d_B4_px + delta·W_ref`, sin pasar la base por d/W (así el residual inicial cumple 1e-5 px).
+- **Normalización:** BatchNorm. Con GroupNorm la salida de un píxel depende de toda la imagen
+  y un recorte no da lo mismo que el frame completo (test de localidad). `ModelConfig.norm`
+  conserva `group` y `none` para comparar.
+- **Validez:** Fusion responde donde B4 responde, con `d + doffs > 0` y `b > 0`. No rellena
+  huecos donde fallan ambas fuentes; la comparación con B4 es a igual cobertura.
+
 ### Entrenar y entregar
 
 Antes de una corrida larga: auditar canales y GT, fijar split/métrica/checkpoint/presupuesto;
@@ -370,6 +416,29 @@ Entregar checkpoint local inmutable, hash, arquitectura, orden de canales, norma
 versión de preprocesamiento, datos/split, backend/precisión y una **model card**, ficha que
 explica uso, entrenamiento, resultados y límites. Recibirlo desde un proceso limpio, sin notebook.
 El entrenamiento y la aplicación deben coincidir dentro de tolerancia declarada.
+
+**Implementado (`train.py`, `package.py`, `estimator.py`, `python -m visionx.depth.fusion`).**
+- **Comandos:** `cache`, `overfit`, `entrenar` (`--run`, `--reanudar`), `evaluar` (un `.pt` o un
+  paquete contra B4; test solo con `--test-congelado`) y `empaquetar`.
+- **Receta:** `configs/fusion-entrenamiento.yaml`. Recortes de ancho completo (320×1080): con
+  recortes angostos al azar, la franja izquierda, donde está un tercio del error de B4, casi no se ve.
+- **Selección:** EPE media **por muestra** en val, frames completos. Se aparta de «por escena»
+  porque val tiene dos tramos y uno con 2 pares (igual que T05). La media por escena se informa.
+- **Run:** `outputs/fusion/<run>/` con `config.yaml`, `meta.json`, `curvas.csv`, `ultimo.pt` y `mejor.pt`.
+- **Paquete:** `modelo.pt`, `paquete.yaml` (sha256, canales, base con la que se entrenó) y
+  `MODEL_CARD.md`. `load_package` rechaza hash, versión de canales o base distintos.
+- **Aplicación:** `load_estimator(cfg, geometry)` devuelve un `FusionEstimator`. El `DepthResult`
+  trae b en px como `LAPLACE_B`. Se activa con `depth.fusion.paquete`.
+- **Base configurable:** `base: B4 | B5` en la config de entrenamiento. El paquete registra la
+  base y sus parámetros, y el estimador la reconstruye.
+- **Receta v2** (`configs/fusion-v2*.yaml`): F3, 5 niveles (32–256) con bloques dilatados
+  opcionales, recortes 640×1080. Se libera la memoria de MPS al final de cada época.
+- **Latencia:** `python -m visionx.depth.fusion latencia <paquete> <clip>`, protocolo M9.
+- **Estado al 17/11:** en InStereo2K val, F3 sobre B4 le ganaba a B5; en la validación fuera
+  de dominio (`midd2014extra`, grupo `dev`) Fusion mejora a B4 pero no a B5. Candidata para el
+  test: F3 sobre B5. Resultados, ablaciones, hipótesis y límites: BITACORA 2026-11-16 y 2026-11-17.
+- **Validación fuera de dominio:** `midd2014extra` (13 escenas de Middlebury 2014 que no están
+  en MiddEval3, a media resolución). `midd2021` no pasó la auditoría de GT y no se usa.
 
 ## Incertidumbre y objetos
 
@@ -534,6 +603,14 @@ Política candidata:
 
 Cuando A entregue su `SpatialEstimator`, se reemplaza en `app/__main__.py::build_depth` sin tocar
 los modos, que solo leen `policy` y `z_m`.
+
+**Ubicación de A (`src/visionx/depth/spatial/`, BITACORA 2026-11-17).** `ObjectLocator` y
+`build_locator(cfg, geometry, depth_geometry)`, con la sección `spatial`. Misma idea de capa
+cercana y percentil 20, medida en disparidad; dirección desde el centroide de la capa; política
+con los cuatro valores (suma ABSTAIN y un mínimo de píxeles válidos) y `locate_detailed` con
+diagnóstico por objeto. En los clips con cinta da los mismos metros que la provisoria (≤ 0,3 cm).
+La erosión adaptativa de la máscara y el reencuadre por borde inferior existen pero quedan
+apagados: en los clips no ayudaron. Adopción en la app: una línea en `build_spatial`.
 
 **Voz de la guía.**
 - En distancia, el acuse es `sonido:ok` y no «Mido la distancia a taza.»: la respuesta ya nombra
@@ -979,6 +1056,20 @@ Congelar modelo/config/umbrales/commit antes del test reservado. Comparar difere
 por escena y registrar casos que empeoran si aparecen. La hipótesis puede fallar sin que eso
 invalide la evaluación. Después del test, nuevos cambios se etiquetan como exploratorios;
 no presentar el mismo test reutilizado como una segunda confirmación independiente.
+
+**Estado del test público y condiciones para usarlo con Fusion (decidido 17/11).**
+- MiddEval3-H y ETH3D ya se usaron una vez para B0–B4 (T05, 14/11). B5 y Fusion se diseñaron
+  después, con diagnósticos de InStereo2K val; el test no eligió nada, pero ya se había visto
+  que en Middlebury la alineación aceptaba rectas malas. Se declara como límite.
+- InStereo2K val es casi una sola escena (100 de 102 pares de `tramo-04`) y eligió B5, la
+  arquitectura, la base y la época. Antes del test hace falta una **segunda validación de otro
+  dominio**, que además ejercite el evaluador con `doffs` y rangos por escena.
+- El test se corre **una vez**, con el candidato, la config y el commit congelados, y con el
+  protocolo escrito antes en BITACORA: métricas principales AbsRel y bad-2 en Middlebury (13/11),
+  región noc, media por escena, cobertura propia y soporte común; comparaciones Fusion contra B4
+  (la que define el resultado), contra B5 y contra B5-EPE; diferencias pareadas por escena.
+- Lo ideal es usarlo en la ventana del calendario (27/11–3/12), junto con la incertidumbre
+  (T13) y los comparadores (T14) sobre los mismos pares.
 
 ### Lite y Fusion-FFS — T17/T18
 
