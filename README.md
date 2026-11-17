@@ -20,10 +20,11 @@ Completar la entrega académica no equivale a terminar todas las capacidades de 
 
 ## Estado real
 
-Hay entorno, contratos y geometría compartida, validadores, tests y utilidades de diagnóstico.
-La aplicación completa, la CNN entrenada, los comparadores y las mediciones físicas siguen
-pendientes. Los detalles y la evidencia están en ROADMAP y BITACORA.
-Esta revisión documental no implementa los módulos futuros.
+Hay captura y calibración de la ELP, profundidad B0–B4, detección, voz y una aplicación con
+los cuatro modos (buscar/guiar, distancia, leer y describir) probada sobre clips grabados
+(BITACORA 2026-11-17). Falta la prueba en vivo con la ELP, micrófono y parlantes, la CNN
+Fusion, los comparadores y las métricas M1/M7–M10. Los detalles y la evidencia están en
+ROADMAP y BITACORA.
 
 ## Preparar el entorno cuando se vaya a implementar
 
