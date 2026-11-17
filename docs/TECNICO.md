@@ -640,7 +640,7 @@ Proveedor/modelo de API todavía no elegido: comparar calidad, latencia, coste, 
 timeouts y funcionamiento sin red. Enviar imagen solo al pedirlo, con ruta remota explícita.
 El VLM no controla directamente la máquina de estados ni la selección de un objeto.
 
-**Plantilla local implementada (T11, ronda 3; recepción pendiente).** Cada presencia de
+**Plantilla local implementada (T11, ronda 4; recepción pendiente).** Cada presencia de
 `SceneFacts` tiene nivel `high` o `cautious`. El primero exige score actual y confirmaciones
 >=0,60; el segundo >=0,27 y se dice «parece haber». Ambos requieren dos frames distintos
 en tres segundos, asociados uno a uno por clase e ID o IoU >=0,3 sin IDs contradictorios.
@@ -654,10 +654,16 @@ Solo el nivel alto puede aportar metros, y únicamente desde `SPEAK_METERS` del 
 dentro de `depth.range_m`. Se agrupa por zona, clase y nivel; la reserva no se extiende a
 los objetos afirmados ni hereda sus medidas. Si solo quedan candidatos medios, se describen
 con reserva. La abstención por confianza exige que no quede ningún candidato persistente.
-El presupuesto estimado es ocho segundos, incluidos avisos y pausas: se intenta quitar
-conteo anónimo y detalle métrico antes de retirar nombres completos. La espera de cuatro
-segundos permite recibir una segunda vista tardía. Hasta ocho instancias; sin audio real
-medido todavía. Tests sin dispositivos/modelos; la revisión de clips no sustituye M10.
+El presupuesto estimado es ocho segundos, incluidos avisos y pausas. Se recortan primero
+los «parece haber», después los metros secundarios y luego los nombres por relevancia.
+Se conservan los metros del afirmado más cercano de cada zona mientras alcance; el de
+menor Z de toda la escena nunca se retira. Los grupos con medidas parciales se separan
+para no perder esos metros ni comparar contra instancias sin medida. Todo nombre omitido
+cuenta en «y N cosas más». Si un override no admite ni el hecho global mínimo con conteo,
+prevalecen sus metros aunque exceda el presupuesto; no ocurre en las corridas a ocho segundos.
+Evidencia y comparación R3→R4 en `outputs/t11/NOTAS.md`, sección «Ronda 4».
+La espera de cuatro segundos permite recibir una segunda vista tardía. Hasta ocho instancias;
+sin audio real medido todavía. Tests sin dispositivos/modelos; los clips no sustituyen M10.
 
 ## Ejecucion y audio
 

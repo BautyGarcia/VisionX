@@ -439,22 +439,61 @@ class DescribeHandler:
             important = f.label == "person" or f.area_fraction >= self.describe.large_area_fraction
             return bucket, not important, -f.area_fraction, f.detection_index
 
-        selected = tuple(sorted(scene.presence, key=relevance)[: self.describe.max_objects])
+        # Proteger la menor Z sin redondear: dos distancias pueden sonar iguales y tener
+        # áreas distintas. El desempate de relevancia nunca debe desplazar la más cercana.
+        nearest_by_zone: dict[str, int] = {}
+        for fact in sorted(
+            scene.presence, key=lambda f: (distances.get(f.detection_index, math.inf), relevance(f))
+        ):
+            if fact.detection_index in distances:
+                nearest_by_zone.setdefault(fact.zone, fact.detection_index)
+        nearest = min(distances, key=lambda i: (distances[i], i), default=None)
+        protected = set(nearest_by_zone.values())
+        if nearest is not None:
+            protected.add(nearest)
+
+        def priority(f: PresenceFact) -> tuple:
+            return (
+                f.detection_index != nearest,
+                f.detection_index not in protected,
+                f.confidence != "high",
+                relevance(f),
+            )
+
+        selected = tuple(sorted(scene.presence, key=priority)[: self.describe.max_objects])
+        detail = dict(distances)
         while True:
-            # Los nombres tienen prioridad sobre el detalle métrico: primero intentar con
-            # metros, luego sin ellos, antes de retirar una instancia. No acelerar la voz.
-            for detail in (distances, {}):
-                # El conteo anónimo también es prescindible si ocupa el lugar de un nombre.
-                for total in (len(scene.presence), len(selected)):
-                    parts = self._compose(selected, detail, total)
-                    if not measured:
-                        parts.insert(0, "No pude medir distancias.")
-                    if sum(speech_s(p, self.s) for p in parts) <= self.describe.max_speech_s:
-                        return parts
+            parts = self._compose(selected, detail, len(scene.presence))
+            if not measured:
+                parts.insert(0, "No pude medir distancias.")
+            if sum(speech_s(p, self.s) for p in parts) <= self.describe.max_speech_s:
+                return parts
+
+            # Recortar de menor a mayor prioridad. Una medida agrupada se quita entera:
+            # retirar solo una Z podría alargar el texto al separar instancias de la clase.
+            cautious = [f for f in selected if f.confidence == "cautious"]
+            if cautious and len(selected) > 1:
+                selected = tuple(f for f in selected if f != cautious[-1])
+                continue
+            metric_groups: dict[tuple[str, str], set[int]] = {}
+            for fact in selected:
+                if fact.detection_index in detail:
+                    metric_groups.setdefault((fact.zone, fact.label), set()).add(
+                        fact.detection_index
+                    )
+            secondary = [ids for ids in metric_groups.values() if not ids & protected]
+            if secondary:
+                for index in secondary[-1]:
+                    detail.pop(index)
+                continue
+
             if len(selected) == 1:
-                # Un presupuesto local muy pequeño puede no admitir ni un nombre completo.
+                # Si un override no admite ni el hecho obligatorio con su conteo, prevalece
+                # conservar sus metros. Con la config entregada este mínimo cabe en 8 s.
+                if nearest is not None:
+                    return parts
                 return ["No pude resumir la escena a tiempo."]
-            selected = selected[:-1]  # retirar primero la instancia de menor relevancia
+            selected = selected[:-1]  # nombres; representantes de zona al final, global nunca
 
     def _compose(
         self, selected: tuple[PresenceFact, ...], distances: dict[int, float], total: int
@@ -465,6 +504,7 @@ class DescribeHandler:
         if len(flat) != len(selected) or set(flat) != set(by_index):
             raise ValueError("SceneNarrator debe conservar exactamente los índices seleccionados")
         zones: dict[str, dict[str, list[str]]] = {}
+        groups = []
         for group in plan:
             if not group:
                 raise ValueError("SceneNarrator devolvió un grupo vacío")
@@ -477,6 +517,13 @@ class DescribeHandler:
                 raise ValueError("SceneNarrator mezcló clases, zonas o confianza")
             if first.confidence not in ("high", "cautious"):
                 raise ValueError("SceneNarrator recibió confianza desconocida")
+            # Una instancia sin medida no debe silenciar los metros de otra de su clase.
+            # Separar ambos subgrupos evita llamar «la más cercana» a una medida parcial.
+            with_meters = tuple(i for i in group if i in distances and first.confidence == "high")
+            without_meters = tuple(i for i in group if i not in with_meters)
+            groups.extend(g for g in (with_meters, without_meters) if g)
+        for group in groups:
+            first = by_index[group[0]]
             # El score alto no distingue monitor de TV: usar el término visual compartido.
             # Buscar conserva el nombre y el umbral de su catálogo, sin cambios en T06.
             name = "pantalla" if first.label == "tv" else self.spoken(first.label)

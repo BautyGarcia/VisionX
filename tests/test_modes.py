@@ -27,6 +27,7 @@ from visionx.modes.common import ModeSettings, direction, measure, measure_phras
 from visionx.modes.describe import (
     DescribeHandler,
     DescribeSettings,
+    MetricFact,
     PresenceFact,
     SceneFacts,
     TemplateNarrator,
@@ -717,7 +718,7 @@ def test_describe_never_speaks_meters_without_policy_or_outside_range(policy, z)
     assert not h.facts.measured
 
 
-def test_describe_partial_group_does_not_claim_nearest():
+def test_describe_partial_group_preserves_meters_without_claiming_nearest():
     h = describe()
     m = joint(
         1.1,
@@ -726,7 +727,7 @@ def test_describe_partial_group_does_not_claim_nearest():
         measured=True,
     )
     said = texts(h.start(cmd(Mode.DESCRIBE, None, t_s=1), View(None, m), int(1.2 * SEC)))
-    assert said == ["A la izquierda, dos tazas."]
+    assert said == ["A la izquierda, una taza a 0,5 metros y una taza."]
 
 
 def test_describe_limits_individual_objects_and_counts_remaining():
@@ -744,7 +745,8 @@ def test_describe_limits_individual_objects_and_counts_remaining():
     )
     said = texts(h.start(cmd(Mode.DESCRIBE, None, t_s=1), View(None, m), int(1.2 * SEC)))
     assert said == [
-        "A la izquierda, dos tazas, la más cercana a 0,5 metros, y 2 cosas más.",
+        "Al frente, una silla a 1,6 metros.",
+        "A la izquierda, una taza a 0,5 metros, y 2 cosas más.",
     ]
 
 
@@ -1132,7 +1134,7 @@ def test_describe_three_hits_and_new_order_resets_persistence():
     assert len(h._history) == 1
 
 
-def test_describe_default_duration_prioritizes_names_over_filtered_omission_count():
+def test_describe_default_duration_preserves_nearest_and_omission_count():
     from visionx.modes.common import speech_s
 
     h, c = persistent(), cmd(Mode.DESCRIBE, None, t_s=1)
@@ -1150,11 +1152,8 @@ def test_describe_default_duration_prioritizes_names_over_filtered_omission_coun
     result = texts(says)
     assert done and sum(speech_s(t, S) for t in result) <= 8
     assert len(h.facts.presence) == 5
-    assert result == [
-        "Al frente, una computadora portátil.",
-        "A la izquierda, una taza y una botella.",
-        "A la derecha, una silla.",
-    ]
+    assert "una taza a 0,5 metros" in " ".join(result)
+    assert "cosas más" in result[-1]
     assert "banana" not in " ".join(result) and "Veo" not in " ".join(result)
 
 
@@ -1336,7 +1335,7 @@ def test_describe_default_wait_allows_second_observation_after_three_seconds():
     assert not h.facts.measured
 
 
-def test_describe_budget_omits_anonymous_count_before_removing_a_name():
+def test_describe_budget_keeps_anonymous_count_when_removing_a_name():
     from visionx.modes.common import speech_s
 
     h = DescribeHandler(G, CATALOG.spoken, describe=DescribeSettings(max_objects=2, max_speech_s=3))
@@ -1352,8 +1351,102 @@ def test_describe_budget_omits_anonymous_count_before_removing_a_name():
         None,
     )
     result = h._render(scene)
-    assert result == ["Al frente, una taza y una silla."]
+    assert result == ["Al frente, una taza, y 2 cosas más."]
     assert sum(speech_s(p, S) for p in result) <= 3
+
+
+@pytest.mark.parametrize(
+    "budget, expected",
+    [
+        (
+            8,
+            "una taza a 0,5 metros, una botella a 1 metro y una silla a 1,5 metros; "
+            "parece haber un gato.",
+        ),
+        (
+            6.5,
+            "una taza a 0,5 metros, una botella a 1 metro y una silla a 1,5 metros, y 1 cosa más.",
+        ),
+        (6, "una taza a 0,5 metros, una botella a 1 metro y una silla, y 1 cosa más."),
+        (5, "una taza a 0,5 metros, una botella y una silla, y 1 cosa más."),
+        (4.5, "una taza a 0,5 metros y una botella, y 2 cosas más."),
+        (4, "una taza a 0,5 metros, y 3 cosas más."),
+    ],
+)
+def test_describe_budget_cuts_cautious_then_secondary_meters_then_names(budget, expected):
+    from visionx.modes.common import speech_s
+
+    h = DescribeHandler(G, CATALOG.spoken, describe=DescribeSettings(max_speech_s=budget))
+    scene = SceneFacts(
+        "s",
+        10,
+        (
+            PresenceFact(0, "cup", "al frente", 0.1),
+            PresenceFact(1, "bottle", "al frente", 0.1),
+            PresenceFact(2, "chair", "al frente", 0.1),
+            PresenceFact(3, "cat", "al frente", 0.1, "cautious"),
+        ),
+        (MetricFact(0, 0.5), MetricFact(1, 1.0), MetricFact(2, 1.5)),
+        "B0",
+    )
+    result = h._render(scene)
+    assert result == ["Al frente, " + expected]
+    assert sum(speech_s(p, S) for p in result) <= budget
+
+
+@pytest.mark.parametrize("budget", [9, 10, 12])
+def test_describe_budget_keeps_nearest_meters_in_each_zone_while_they_fit(budget):
+    from visionx.modes.common import speech_s
+
+    h = DescribeHandler(G, CATALOG.spoken, describe=DescribeSettings(max_speech_s=budget))
+    scene = SceneFacts(
+        "s",
+        10,
+        (
+            PresenceFact(0, "cup", "al frente", 0.1),
+            PresenceFact(1, "bottle", "a la izquierda", 0.1),
+            PresenceFact(2, "chair", "a la derecha", 0.1),
+            PresenceFact(3, "keyboard", "al frente", 0.1),
+            PresenceFact(4, "tv", "al frente", 0.1),
+        ),
+        tuple(MetricFact(i, z) for i, z in enumerate((0.5, 1.0, 2.0, 0.7, 0.9))),
+        "B0",
+    )
+    result = h._render(scene)
+    said = " ".join(result)
+    assert "una taza a 0,5 metros" in said
+    assert "una botella a 1 metro" in said
+    assert "una silla a 2 metros" in said
+    assert sum(speech_s(p, S) for p in result) <= budget
+    if budget == 9:
+        assert "teclado" not in said and "pantalla" not in said and "y 2 cosas más" in said
+
+
+@pytest.mark.parametrize("max_objects", [1, 2, 8])
+def test_describe_nearest_uses_exact_z_before_rounded_relevance_or_area(max_objects):
+    h = DescribeHandler(
+        G, CATALOG.spoken, describe=DescribeSettings(max_objects=max_objects, max_speech_s=4)
+    )
+    scene = SceneFacts(
+        "s",
+        10,
+        (
+            PresenceFact(0, "person", "al frente", 0.8),
+            PresenceFact(1, "cup", "al frente", 0.2),
+            PresenceFact(2, "bottle", "al frente", 0.01),
+        ),
+        (MetricFact(0, 0.54), MetricFact(1, 0.53), MetricFact(2, 0.51)),
+        "B0",
+    )
+    assert h._render(scene) == ["Al frente, una botella a 0,5 metros, y 2 cosas más."]
+
+
+def test_describe_impossibly_small_override_never_silences_nearest_meters():
+    h = DescribeHandler(G, CATALOG.spoken, describe=DescribeSettings(max_speech_s=1))
+    scene = SceneFacts(
+        "s", 10, (PresenceFact(0, "cup", "al frente", 0.1),), (MetricFact(0, 0.5),), "B0"
+    )
+    assert h._render(scene) == ["Al frente, una taza a 0,5 metros."]
 
 
 def test_describe_medium_match_cannot_leave_orphan_high_metrics():
