@@ -40,6 +40,312 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-16 — T12: Fusion v2 sobre B5 mejora a la regla fija en val (una semilla)
+
+**Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-fusion`, local, sin commits.
+
+**Corrida `v2-f3-b5-s0`** (`configs/fusion-v2.yaml`: F3, base B5, 5 niveles + dilataciones,
+7,75 M parámetros, recortes 640×1080, NLL, 20 épocas; M2 Max, MPS). Mejor checkpoint: época 20.
+Evaluación con `python -m visionx.depth.fusion evaluar outputs/fusion/v2-f3-b5-s0/mejor.pt
+--grupo val`; artefactos en `outputs/fusion/evaluaciones/20261116-223941-v2-f3-b5-s0-mejor-instereo2k-val/`.
+
+InStereo2K val, 102 muestras, media por muestra, soporte común GT ∩ B4 ∩ B5 ∩ Fusion (98,7 %
+de la GT):
+
+| | EPE px | bad-2 % | acierto-2 % |
+|---|---|---|---|
+| B4 | 2,054 | 26,99 | 73,01 |
+| B5 | 1,801 | 22,55 | 77,45 |
+| **Fusion v2** | **1,735** | **21,30** | **78,70** |
+
+- Contra B5: −3,7 % de EPE y +1,25 puntos de acierto-2. Sobre toda la GT, acierto-2 77,65 %
+  contra 76,40 % de B5; misma cobertura (98,70 %).
+- Por muestra: mejora 85, empeora 16, igual 1 (mediana −0,08 px). Peores casos: 000488
+  (8,94 → 9,88 px), 000490 (7,55 → 8,30) y 000492 (3,99 → 4,59).
+- Por escena: tramo-04 (100 muestras) 1,821 → 1,755; tramo-00 (2) 0,796 → 0,774.
+- Curva: ya en la época 1 le ganaba a B5 (1,786); mejoró despacio hasta 1,735, sin caer
+  después. NLL val 1,649, b mediana 1,07 px. Train: 1,163 contra 1,213 px de B5 (−4 %).
+
+**Comparación justa.** B5 se eligió por acierto-2. Por EPE, la mejor variante de la grilla de
+B5 (Huber, σ 120, λ 1000, exclusión 16 px) da **1,676 px** sobre toda la GT: **mejor que Fusion
+v2 en EPE**, aunque con menos cobertura (97,3 %) y menos acierto-2 (74,91 %). Esa comparación
+no era en el mismo soporte; se midió después (script en `outputs/fusion/analisis/
+soporte_comun_b5epe.py`, solo CPU, 333 s). Soporte GT ∩ B4 ∩ B5 ∩ B5-EPE ∩ Fusion = 96,46 % de
+la GT; controles de cordura reproducen la evaluación oficial (diferencia máx. 1,9e-7 px por
+muestra) y la grilla (B5-EPE 1,6765 px, 74,906 %, 97,30 %):
+
+| | EPE común | bad-2 común | acierto-2 común | cobertura | acierto-2 toda la GT |
+|---|---|---|---|---|---|
+| B4 | 1,788 | 25,56 | 74,44 | 98,70 % | 71,96 |
+| B5 congelada | 1,722 | 21,34 | 78,66 | 98,70 % | 76,40 |
+| B5-EPE (huber, σ 120, λ 1000, excl. 16) | 1,664 | 22,17 | 77,83 | 97,30 % | 74,91 |
+| **Fusion v2** | **1,661** | **20,00** | **80,00** | 98,70 % | **77,65** |
+
+- **En EPE, Fusion v2 empata con la mejor regla fija** (1,661 contra 1,664 px). Gana en 73 de
+  102 muestras (mediana −0,09 px), pero la media de la diferencia es −0,003 px: pocas muestras
+  donde pierde por mucho compensan.
+- **En errores grandes y acierto-2 sí la supera:** +2,2 puntos de acierto-2 en el soporte común
+  y +2,7 sobre toda la GT; no pierde cobertura cuando Huber rechaza la recta (5 de 102 muestras).
+- Por fuente del píxel: en estéreo (57 %) las tres reglas dan igual (EPE 1,142) y Fusion 1,077;
+  en los huecos (43 %), B4 2,762 / B5 2,448 / B5-EPE 2,432 / Fusion 2,360.
+- Lectura: la red no mejora la mejor regla fija en EPE medio, pero produce menos errores grandes
+  y corrige también donde mide el estéreo. Sigue siendo una semilla en un val casi de una escena.
+
+**Problema operativo.** La memoria del driver MPS creció de 15,0 a 23,6 GB a lo largo de la
+corrida y el sistema llegó a 7 de 8 GB de swap; las épocas pasaron de ~5,5 a 10–17 minutos.
+Probable fuga o fragmentación en MPS (sin diagnosticar). Mitigación posible: cortar y reanudar
+cada pocas épocas, o vaciar la caché de MPS entre épocas.
+
+**Límites.** Una semilla; val casi de una escena y usado para elegir B5 y el checkpoint; sin
+ablaciones (F3 sin dilataciones, F1 sobre B5, F3 sobre B4); sin ELP ni test público; sin latencia.
+
+**Integración (pedido de Bauty).** Se integraron a `main` los PR de Tomás #24 (T07), #25 y #26
+(T09). Estaban apilados y los squash sucesivos contra `main` chocaban en BITACORA, así que se
+integraron de arriba hacia abajo (#26 → #25 → #24): un solo commit en `main`, `8e0a94a`, con
+árbol idéntico al head de #26 y CI en verde en macOS, Ubuntu y Windows.
+
+**Próximo paso.** Medir la mejor B5 por EPE en el soporte común; ablaciones mínimas y otra
+semilla del modelo principal; integrar `main` en `a/T12-fusion` antes del PR.
+
+## 2026-11-16 — T12: control B5 ajustado y Fusion v2 (canales F3, más contexto)
+
+**Tarea:** T12. **Persona/agente:** Bauty / Claude Code (coordinador + subagente ejecutor).
+**Rama:** `a/T12-fusion`, local y sin commits.
+
+**Objetivo.** Probar el rediseño que sugirió el diagnóstico: darle a la red la información de
+las anclas lejanas y compararla contra una regla fija que ya la usa, para no atribuirle a la
+red lo que logra una corrección escrita a mano. Decisión de Bauty: seguir con la versión 2.
+
+**Hecho (implementado localmente).**
+- **Control B5** (`align.py`, `hybrid.py`, sin aprendizaje): estéreo donde es válido; en los
+  huecos, monocular alineado más una **corrección afín local** desde las anclas con pesos
+  gaussianos (σ en px, pendiente atada a la global con λ). Las sumas ponderadas se calculan a
+  resolución reducida. `AlignParams.method` admite `huber` además de `ransac`. B4 no cambia.
+- **Variante F3** (`channels.py`, versión `fusion-canales-2`): F1 más `corr_local`
+  ((B5 − B4)/W · 16, tope ±1), `dist_ancla` (distancia a la ancla fiable más cercana / W · 4,
+  tope 1) y `densidad_anclas`. Se calculan sobre el frame completo antes de recortar, así llevan
+  contexto lejano. Los paquetes F0/F1 con la versión anterior se siguen cargando.
+- **Base configurable** B4 | B5 en entrenamiento, paquete y estimador; `evaluar` informa B4, B5
+  y Fusion en un mismo soporte (columnas `*_comun_*`).
+- **Red con más contexto:** `bottleneck_dilations` y `receptive_field()`. Receta v2:
+  5 niveles (32–256) más dilataciones 2/4/8, 7 753 666 parámetros, campo receptivo teórico
+  1156 px (v1: 124 px).
+- CLI: `python -m visionx.depth evaluar B5 …` y `python -m visionx.depth.fusion ajustar-b5`.
+
+**Ajuste de B5 con el protocolo de T05** (InStereo2K val, 102 pares, objetivo acierto-2 sobre
+toda la GT, media por muestra; confirmación en 100 pares de train que no elige nada).
+Grilla: método ransac/huber × σ {120, 180, 240} × λ {100, 1000} × exclusión {0, 16 px}.
+Artefactos en `outputs/b5/20261116-185522-ajuste-b5-instereo2k-val/`.
+
+| candidata | acierto-2 % | EPE px | bad-2 % | cobertura |
+|---|---|---|---|---|
+| B4 | 71,96 | 2,056 | 26,99 | 98,70 % |
+| solo recta global Huber | 71,05 | 1,783 | 26,62 | 97,30 % |
+| **B5: ransac, σ 120, λ 100, sin exclusión (elegida)** | **76,40** | 1,803 | 22,56 | 98,70 % |
+| ransac, σ 120, λ 1000, sin exclusión | 76,07 | 1,794 | 22,88 | 98,70 % |
+| ransac, σ 120, λ 100, exclusión 16 px | 76,07 | 1,735 | 22,89 | 98,70 % |
+| huber, σ 120, λ 100, sin exclusión | 75,72 | 1,764 | 21,95 | 97,30 % |
+
+- **Confirmación en train:** B5 85,88 % contra B4 79,07 % de acierto-2; EPE 1,582 → 1,261 px.
+  El orden de los tres mejores se mantiene.
+- Huber baja la EPE pero rechaza la recta en 5 de 102 pares (RANSAC en 2): los criterios de
+  aceptación cuentan anclas a menos de 4 px, lo que favorece a RANSAC. Por eso pierde acierto-2.
+- σ = 120 queda en el borde de la grilla; σ = 60 ya era peor en el diagnóstico.
+- Valores congelados en `depth.b5`. B4 por el evaluador de T05 sigue en 2,0556 px y 71,964 %;
+  B5 en vivo (SGBM + monocular en MPS) coincide con la grilla (1,8026 px, 76,398 %).
+- Tiempos en CPU a 1080×860 (mediana de 30): B5 completo 61 ms; `build_inputs` F3 50 ms (F1: 41 ms).
+
+**Pruebas de Fusion v2 (M2 Max, MPS).**
+- Overfit F3, receta v2: EPE 3,550 → 0,497 px (**−86,0 %**, meta ≥ 80 %), 400 pasos, 694 s.
+- Corrida corta (40 train, 20 val, 1 época, recortes 320×1080): ~1,47 s por paso, pico MPS
+  10,7 GB asignados y 15,0 GB del driver; los datos no frenan a la GPU (~39 imágenes/s con 4
+  workers contra ~2,7 que consume).
+- Suite completa: 548 tests aprobados, 2 salteados (detección sin `ultralytics`); ruff limpio.
+
+**Decisiones del coordinador para la corrida larga** (`configs/fusion-v2.yaml`).
+- **Base B5:** la red arranca igual al mejor control fijo; cualquier mejora en val es sobre B5.
+  Fusion sobre B4 con F3 queda como corrida siguiente, si hace falta.
+- **Recortes 640×1080, 4 por paso** (los mismos píxeles por paso que 8 de 320×1080): con 320 de
+  alto y 1156 px de campo receptivo, el nivel más bajo de la red veía casi solo relleno en
+  vertical (20 filas contra 54 en el frame completo).
+
+**Límites y riesgos.**
+- Comparación justa: B5 se eligió por acierto-2 y Fusion elige checkpoint por EPE. Por EPE hay
+  variantes de B5 mejores que la elegida (huber, σ 120, λ 1000, exclusión 16: 1,677 px). El
+  informe tiene que comparar con las dos métricas y no presentar solo la favorable.
+- Val es casi una sola escena y tanto B5 como Fusion se eligen con val. Test sin tocar.
+- Recortes de 640 sin medir en memoria (los píxeles por paso son los mismos que en la corrida
+  corta, así que se espera algo parecido).
+
+**Próximo paso.** Corrida `v2-f3-b5-s0`, 20 épocas, lanzada el 16/11 con la Mac sin suspensión
+(`caffeinate`); su resultado va en la entrada siguiente.
+
+## 2026-11-16 — T12: corrida larga con mejora mínima y dónde hay señal predecible
+
+**Tarea:** T12. **Persona/agente:** Bauty / Claude Code (coordinador + subagente de diagnóstico).
+**Rama:** `a/T12-fusion`, local y sin commits.
+
+**Objetivo.** Saber si con más pasos Fusion le gana a B4 y, si no, si existe algo predecible
+sin GT que la red no esté viendo.
+
+**Corrida larga `f1-batch-nll-ancho-s0`** (BatchNorm, NLL, recortes 320×1080, 20 épocas
+previstas; M2 Max, MPS). Primero se registró el estado a la época 11; esta versión lo
+reemplaza con la corrida terminada (20 épocas, 5600 pasos):
+- Épocas 1–11: EPE val Fusion entre 2,064 y 2,115 px, siempre peor que B4 (2,056 px).
+- Recién desde la época 17 le gana: 2,035 (17), **2,025 (18, `mejor.pt`)**, 2,027 (19) y
+  2,025 px (20), contra B4 2,055 px. bad-2 val 26,77 contra 26,98 %. Mejora de ~1,5 % en EPE.
+- En recortes de train, época 20: Fusion 1,440 contra B4 1,520 px (−5 %).
+- La ganancia en val es chica, con una sola semilla y en un val que es casi una escena: es una
+  señal, no una conclusión. Queda muy por debajo de la corrección local sin aprendizaje (abajo).
+- ~5 min por época; entre las épocas 4 y 5 pasó casi una hora de reloj (causa sin confirmar;
+  probable suspensión de la Mac). El proceso terminó escribiendo todos los artefactos.
+
+**Diagnóstico sin aprendizaje** (val, n = 102, media por muestra, mismo soporte que B4; solo
+CPU, scripts fuera del repo; la GT solo evalúa). Exploración sobre val: los parámetros se
+eligieron mirando val, que además es casi una sola escena (100 de 102 cuadros de `tramo-04`),
+así que los números son optimistas.
+
+| variante | EPE px | bad-2 % |
+|---|---|---|
+| B4 | 2,056 | 26,99 |
+| offset local desde anclas, gaussiana σ = 15 / 60 px | 2,539 / 2,086 | 27,2 / 23,8 |
+| offset local, σ = 120 / 240 px | 1,832 / 1,795 | 23,0 / 25,3 |
+| afín local σ = 120 (λ = 100) / σ = 240 (λ = 1000) | 1,803 / 1,731 | 22,55 / 25,00 |
+| afín local σ = 120 sin anclas a < 16 px del hueco | 1,737 | 22,90 |
+| recta global con Huber en vez de RANSAC | 1,795 | 26,86 |
+| curva global Huber de grado 2 | 1,755 | 24,87 |
+| oráculo: constante por celda de 64 px en los huecos (usa GT) | 0,81 | 7,4 |
+
+- **Hay señal predecible sin GT, moderada:** −12 a −16 % de EPE y 4–5 puntos de bad-2.
+- **Necesita contexto enorme:** aparece con σ ≥ 120 px (ventanas de 700–1400 px). Con σ ≤ 60
+  empeora, porque el estéreo pegado a los huecos es malo: EPE 2,47 px en anclas a 0–4 px de
+  un hueco contra 0,23 px a más de 64 px.
+- **Los huecos están lejos de las anclas:** 13 % de los píxeles (26 % del error) está a más de
+  128 px del ancla más cercana.
+- **Forma del error:** en las peores muestras el error del monocular alineado depende de la
+  profundidad (pendiente −0,29 a −0,37 contra la disparidad GT): la relación monocular →
+  disparidad no es una recta. En 000476 RANSAC eligió una pendiente anómala y corrió 36 px
+  toda la región izquierda; el ajuste Huber lo evita.
+- **Techo:** casi todo el error de los huecos es de baja frecuencia (oráculo 0,81 px), pero las
+  anclas capturan solo ~26 % de esa ganancia. Ni propagando GT desde las anclas se baja de
+  ~2,0 px de desajuste medio en los huecos.
+- La ganancia no es pareja: la afín σ = 120 mejora 67 muestras y empeora 31 (peor caso
+  000488: 4,6 → 9,0 px).
+
+**Interpretación (hipótesis, sin probar).** La U-Net tiene ~100 px de campo receptivo teórico
+y recortes de 320 px de alto: no ve las anclas útiles, y las que ve (el borde del hueco) son
+las menos confiables. Eso es coherente con que no aprenda nada, en train ni en val.
+
+**Límites.** Una semilla; val casi de una escena; nada de esto se probó en Middlebury ni ETH3D;
+el test sigue sin tocarse. La corrida larga no terminó.
+
+**Próximo paso.** Decisión de Bauty sobre el rediseño: (a) canales nuevos con la corrección
+local ya propagada y la distancia a anclas (familia F3 de TECNICO) y más contexto en la red;
+(b) además, un control fijo nuevo con ajuste robusto y realineación local, para no atribuirle
+a la red lo que logra una regla escrita a mano. Ver la entrada anterior para el estado del código.
+
+## 2026-11-16 — T12: Fusion implementada, M5 de software, piloto sin mejora y diagnóstico
+
+**Tarea:** T12. **Persona/agente:** Bauty / Claude Code (coordinador + subagentes).
+**Rama:** `a/T12-fusion`, local y sin commits al escribir esta entrada.
+
+**Objetivo.** Implementar SpatialDepth-Fusion completa (canales, red, pérdida, caché, datos,
+entrenamiento, paquete y estimador), pasar M5 y hacer el piloto antes de la corrida larga.
+
+**Hecho (implementado localmente, sin publicar).** Paquete `src/visionx/depth/fusion/`:
+- `channels.py`: `build_inputs`, el preprocesamiento único de entrenamiento y aplicación.
+  F0 (10 canales) y F1 (+ máscara del monocular). Sin torch.
+- `model.py`: U-Net residual, 1 738 914 parámetros, cabeza delta en cero y cabeza b positiva.
+- `loss.py`: NLL de Laplace en px de referencia, con máscara explícita (GT ∩ B4).
+- `cache.py`: ingredientes caros por muestra (B2, error L/R, monocular, alineación) con clave
+  sha256; B4 desde la caché es bit a bit igual al cálculo directo.
+- `data.py`, `train.py`: recortes reproducibles por (semilla, época, índice), validación en
+  frame completo, curvas, reanudación y `overfit`.
+- `package.py`, `estimator.py`: paquete con sha256 y model card; `FusionMatcher`,
+  `FusionEstimator` (`DepthResult` con b en px, `LAPLACE_B`) y `load_estimator(cfg, geometry)`.
+- CLI `python -m visionx.depth.fusion cache | overfit | entrenar | evaluar | empaquetar`.
+- `stereo.py`: `lr_error` y `StereoOutput.lr_error_px` (B1/B2); `build_result` acepta incertidumbre.
+- Config: sección `depth.fusion` y `configs/fusion-entrenamiento.yaml`.
+
+**Decisiones de diseño (se apartan de TECNICO o lo completan; quedan anotadas allí).**
+- Los canales de error (L/R y estéreo−mono) van en d/W con ganancia fija 32 y tope 1: sin
+  ganancia valen ~0,002 y la red casi no los ve. L/R no calculable = tope (sin evidencia).
+- El error fotométrico se calcula con la disparidad de la base B4, no solo la del estéreo.
+- La base B4 entra a la red como canal extra (12 en la primera capa con F1).
+- La salida es válida donde B4 es válida (y `d + doffs > 0`, `b > 0`): comparación a igual
+  cobertura. Fusion no rellena huecos donde fallan ambas fuentes.
+- Checkpoint por **EPE media por muestra en val**, no por escena: val tiene un tramo con 2
+  pares (mismo motivo que T05). La media por escena se informa.
+- Normalización: se empezó con GroupNorm y se pasó a **BatchNorm** (ver problemas).
+
+**Evidencia (M2 Max, MPS, torch 2.15; InStereo2K 1119 train / 102 val, ~1080×860).**
+- Suite completa en verde con `uv run --extra ml pytest -q`; sin torch los tests de red,
+  entrenamiento y paquete se saltean. `ruff check` y `ruff format --check` limpios.
+- **Caché completa:** 1221 muestras, 670 s (0,55 s/muestra), 4,2 GB, alineación aceptada 98 %.
+- **M5, residual inicial:** red recién creada reproduce B4 a ≤ 1e-5 px en px reales (W = 1080,
+  d ≤ 272), test automático. La primera versión pasaba la base por d/W y perdía hasta 3e-5 px;
+  se corrigió sumando el residual sobre la base en px.
+- **M5, overfit:** 12 recortes 320×448 de 4 imágenes de train, 400 pasos, Adam 1e-3:
+  EPE 2,159 → 0,350 px (**−83,8 %**, meta ≥ 80 %), 250 s. Receta inicial (GroupNorm, NLL).
+- **Reanudación:** proceso matado con SIGKILL tras la época 1; al reanudar, lr, pérdida y EPE
+  de val coinciden con la corrida sin cortar.
+- **Coherencia con T05:** B4 en val da EPE 2,056 px y acierto-2 71,96 % (T05: 2,06 y 72,0).
+- **Paridad paquete/aplicación:** `evaluar` desde el paquete y desde el `.pt` dan lo mismo;
+  `FusionMatcher` con el monocular en vivo en CPU contra la caché (MPS): máx. 1,8e-3 px, n = 2.
+
+**Piloto (2 épocas, todos los datos, GroupNorm + NLL, recortes 320×448, run `piloto-f1-s0`).**
+~4,3 min por época, pico MPS 12,7 GB. **Fusion no mejora a B4 en val:**
+
+| época | EPE val Fusion | EPE val B4 | NLL train |
+|---|---|---|---|
+| 1 | 2,064 px | 2,056 px | 1,51 |
+| 2 | 2,091 px | 2,056 px | 1,22 |
+
+**Revisión independiente (subagente, solo lectura).** Sin defectos críticos: no hay fuga de GT
+ni de test, y unidades, máscaras y warp fotométrico están bien. Importantes: (1) con GroupNorm
+la salida en un píxel depende de toda la imagen (recorte ≠ frame completo); (2) tests del
+paquete usaban MPS. Corregidos junto con los menores (validez de la app en `evaluate`, norma
+del gradiente finita antes de `step`, identidad completa del monocular en el paquete, versiones
+de librerías en la caché con aviso).
+
+**Diagnóstico (200 train, 102 val, 3 épocas = 150 pasos; época 3; B4 en val 2,056 px).**
+
+| receta | EPE train Fusion / B4 | EPE val Fusion | bad-2 val Fusion (B4 26,99) |
+|---|---|---|---|
+| group, nll | 1,125 / 1,124 | 2,078 | 27,39 |
+| batch, nll | 1,120 / 1,124 | 2,065 | 27,15 |
+| batch, l1 | 1,116 / 1,124 | 2,066 | 27,55 |
+| batch, nll + l1 | 1,118 / 1,124 | 2,070 | 27,27 |
+| batch, nll, recorte 320×1080 | 1,456 / 1,470 | 2,083 | 27,52 |
+
+- Ninguna receta le gana a B4 y las diferencias (~0,02 px) son ruido a 150 pasos, una semilla.
+- **La red casi no corrige ni en train:** en el piloto |delta| tiene mediana 0,10 px y P99
+  0,26 px. Aprendió b (la NLL baja) y se quedó en B4.
+- **Dónde está el error de B4 (val, por píxel):** los píxeles de monocular alineado son el 44 %
+  y cargan el 72 % del error; los errores > 3 px son el 18 % de los píxeles y el 69 % del error.
+- **Franja izquierda (x < 160):** 14 % de los píxeles y 27–34 % del error (el estéreo no puede
+  emparejar ahí). Un recorte al azar de 448 de ancho la ve 5–9 veces menos que el centro: por
+  eso B4 da ~1,1 px en recortes de train y ~2,0 px en frame completo.
+- El desajuste recorte/frame de GroupNorm existe (test), pero no explica el piloto: la
+  diferencia de residual fue 0,014 px de media.
+
+**Cambios de decisión.** BatchNorm en vez de GroupNorm (red local; lo medido en recortes vale
+en frame completo). Recorte de ancho completo 320×1080, 8 recortes por paso, para que el
+entrenamiento vea la franja izquierda. Pérdida NLL sin L1 (la L1 no aportó).
+
+**Límites.**
+- 150–560 pasos es muy poco entrenamiento: "sin señal" no está demostrado a 5600 pasos.
+- Una sola semilla; sin barras de error. Sin ablaciones ni F0 contra F1.
+- Val puede ser optimista: tramos vecinos de InStereo2K sin margen (viene de T04).
+- Latencia de Fusion en MPS a 1280×720 sin medir (en CPU la red tarda ~1,6 s por frame,
+  informal). Dominio ELP sin evidencia. Test público sin tocar.
+- La hipótesis puede fallar: si la corrida larga no baja la EPE, el residual local con estas
+  entradas no alcanza para los errores grandes del monocular alineado, y eso se informa.
+
+**Próximo paso.** Corrida de 20 épocas con la receta nueva (`f1-batch-nll-ancho-s0`), lanzada
+el 16/11; su resultado va en la entrada siguiente. Avisar a Tomás: `load_estimator` y la
+incertidumbre `LAPLACE_B` en `DepthResult` (nada en la app la consume todavía).
+
 ## 2026-11-14 — T05: ajuste en InStereo2K val, congelado, test público y latencia (PR 3 de 3)
 
 **Tarea:** T05. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T05-profundidad`.

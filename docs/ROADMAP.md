@@ -173,7 +173,7 @@ si hay código integrado pero falta recepción, escribir ambos hechos sin oculta
 | T09 | Buscar/guiar y medir distancia | B con espacial A | Pendiente | Ninguna |
 | T10 | Leer texto | B | Pendiente | Ninguna |
 | T11 | Describir escenas | B | Pendiente | Ninguna |
-| T12 | Canales, CNN, entrenamiento e integración Fusion | A con carga B | Pendiente | Ninguna |
+| T12 | Canales, CNN, entrenamiento e integración Fusion | A con carga B | En curso: implementación iniciada el 16/11 (BITACORA 2026-11-16) | Bauty / Claude Code, rama `a/T12-fusion`, `src/visionx/depth/fusion/`, `src/visionx/depth/stereo.py` (error L/R), `align.py`/`hybrid.py` (control B5, desde el 16/11), `tests/test_fusion_*.py`, sección `fusion` de `configs/default.yaml`, `configs/fusion-entrenamiento.yaml`; GPU/MPS de la Mac, `data/cache/fusion/` y `outputs/fusion/` |
 | T13 | Incertidumbre y política por objeto | A con uso B | Pendiente | Ninguna |
 | T14 | Cuatro comparadores preentrenados | A | Pendiente | Ninguna |
 | T15 | Evaluación final y reportes | A+B | Pendiente | Ninguna |

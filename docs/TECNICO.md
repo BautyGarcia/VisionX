@@ -322,6 +322,20 @@ No agregar profundidad anterior como otro canal sin compensar movimiento de cám
 - Invalidar caché si cambia par, pesos, configuración, transformación, versión de canales o
   alineación. **Caché** significa reutilizar un cálculo guardado, no una verdad permanente.
 
+**Implementado (`src/visionx/depth/fusion/channels.py`, `cache.py`).** `build_inputs` es la
+única función que arma canales, para entrenar y para aplicar (`CHANNELS_VERSION`).
+- **Ganancia de los canales de error:** el error L/R y la diferencia estéreo−mono van en d/W
+  por una ganancia fija de 32, con tope 1. Sin ganancia valen ~0,002 y casi no pesan.
+  Donde el error L/R no se puede calcular (SGBM inválido, fuera de imagen o relleno de WLS)
+  vale el tope: «sin evidencia de consistencia».
+- **Error fotométrico:** se calcula con la disparidad de la base B4 (estéreo o monocular
+  alineado), muestreando la derecha en x − d. Vale 0 sin base o fuera de imagen.
+- **W_ref:** es el ancho del frame completo; los canales se arman sobre el frame y después se recorta.
+- **Caché:** guarda los ingredientes caros (B2, error L/R, monocular, alineación), no los
+  canales. La clave incluye archivos, SGBM, alineación, monocular y `doffs`. El entrenamiento
+  lee en modo solo-lectura y falla si la clave no coincide. Las versiones de librerías van en
+  `meta` y solo avisan.
+
 ### Arquitectura y pérdida
 
 Una **U-Net** reduce la resolución para captar contexto y la recupera combinando información
@@ -355,6 +369,17 @@ Este enfoque es **fusión tardía de mapas**: no reconstruye un volumen completo
 correspondencias entre ojos. Si ambos mapas perdieron una superficie, una corrección local
 puede no recuperarla. Esa diferencia frente a comparadores forma parte de las limitaciones.
 
+**Implementado (`model.py`, `loss.py`).**
+- U-Net de 4 niveles (32/64/128/192), 1,74 M de parámetros. La base B4 entra además como canal
+  propio: 12 canales en la primera capa con F1.
+- Salidas en d/W_ref con `residual_scale` 1/128. La disparidad final se arma en px como
+  `d_B4_px + delta·W_ref`, sin pasar la base por d/W (así el residual inicial cumple 1e-5 px).
+- **Normalización:** BatchNorm. Con GroupNorm la salida de un píxel depende de toda la imagen
+  y un recorte no da lo mismo que el frame completo (test de localidad). `ModelConfig.norm`
+  conserva `group` y `none` para comparar.
+- **Validez:** Fusion responde donde B4 responde, con `d + doffs > 0` y `b > 0`. No rellena
+  huecos donde fallan ambas fuentes; la comparación con B4 es a igual cobertura.
+
 ### Entrenar y entregar
 
 Antes de una corrida larga: auditar canales y GT, fijar split/métrica/checkpoint/presupuesto;
@@ -370,6 +395,20 @@ Entregar checkpoint local inmutable, hash, arquitectura, orden de canales, norma
 versión de preprocesamiento, datos/split, backend/precisión y una **model card**, ficha que
 explica uso, entrenamiento, resultados y límites. Recibirlo desde un proceso limpio, sin notebook.
 El entrenamiento y la aplicación deben coincidir dentro de tolerancia declarada.
+
+**Implementado (`train.py`, `package.py`, `estimator.py`, `python -m visionx.depth.fusion`).**
+- **Comandos:** `cache`, `overfit`, `entrenar` (`--run`, `--reanudar`), `evaluar` (un `.pt` o un
+  paquete contra B4; test solo con `--test-congelado`) y `empaquetar`.
+- **Receta:** `configs/fusion-entrenamiento.yaml`. Recortes de ancho completo (320×1080): con
+  recortes angostos al azar, la franja izquierda, donde está un tercio del error de B4, casi no se ve.
+- **Selección:** EPE media **por muestra** en val, frames completos. Se aparta de «por escena»
+  porque val tiene dos tramos y uno con 2 pares (igual que T05). La media por escena se informa.
+- **Run:** `outputs/fusion/<run>/` con `config.yaml`, `meta.json`, `curvas.csv`, `ultimo.pt` y `mejor.pt`.
+- **Paquete:** `modelo.pt`, `paquete.yaml` (sha256, canales, base con la que se entrenó) y
+  `MODEL_CARD.md`. `load_package` rechaza hash, versión de canales o base distintos.
+- **Aplicación:** `load_estimator(cfg, geometry)` devuelve un `FusionEstimator`. El `DepthResult`
+  trae b en px como `LAPLACE_B`. Se activa con `depth.fusion.paquete`.
+- Resultados y estado del entrenamiento: BITACORA 2026-11-16.
 
 ## Incertidumbre y objetos
 

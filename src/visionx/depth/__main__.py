@@ -3,6 +3,7 @@
     uv run python -m visionx.depth evaluar B1 instereo2k --grupo val
     uv run python -m visionx.depth evaluar B2 instereo2k --grupo val --limite 20
     uv run python -m visionx.depth evaluar B4 instereo2k --grupo val      # necesita --extra ml
+    uv run python -m visionx.depth evaluar B5 instereo2k --grupo val      # T12: control fijo
     uv run python -m visionx.depth evaluar B1 middeval3 --grupo test --test-congelado
     uv run python -m visionx.depth bajar-mono   # una vez: pesos de DA V2 Small con hash
     uv run --extra ml python -m visionx.depth ajustar   # T05 PR 3: elige con InStereo2K val
@@ -36,7 +37,7 @@ from visionx.depth.align import AlignParams
 from visionx.depth.datasets import middlebury
 from visionx.depth.datasets.catalog import CATALOG
 from visionx.depth.datasets.sample import StereoSample
-from visionx.depth.hybrid import HYBRID_VARIANTS, HybridMatcher
+from visionx.depth.hybrid import HYBRID_VARIANTS, B5Params, HybridMatcher
 from visionx.depth.metrics import aggregate, disparity_metrics
 from visionx.depth.mono import DepthAnythingV2, MonoConfig, MonoModel
 from visionx.depth.mono import download as download_mono
@@ -91,7 +92,10 @@ def make_matcher(
         return SgbmMatcher(method, params)
     if mono is None:
         raise InvalidInput(f"{method} necesita el modelo monocular")
-    stereo_variant = depth_cfg["b4"]["estereo"]
+    stereo_variant = depth_cfg["b4"]["estereo"]  # B5 usa las mismas anclas que B4
+    if method == "B5":
+        b5 = B5Params.from_config(depth_cfg)
+        return HybridMatcher(method, stereo_variant, params, mono, b5.align, b5.local)
     align_params = AlignParams.from_config(depth_cfg["alineacion"])
     return HybridMatcher(method, stereo_variant, params, mono, align_params)
 
@@ -209,6 +213,7 @@ def _evaluate(args: argparse.Namespace) -> int:
             "monocular": mono.model_id,
             "estereo_anclas": depth_cfg["b4"]["estereo"],
             "alineacion": asdict(AlignParams.from_config(depth_cfg["alineacion"])),
+            "b5": B5Params.from_config(depth_cfg).to_dict() if args.metodo == "B5" else None,
         },
         "regiones": {
             region: _jsonable(aggregate(r for r in rows if r["region"] == region))
@@ -403,6 +408,7 @@ def _latency(args: argparse.Namespace) -> int:
         },  # fmt: skip
         "parametros": asdict(SgbmParams.from_config(depth_cfg["sgbm"])),
         "alineacion": depth_cfg["alineacion"] if mono else None,
+        "b5": depth_cfg.get("b5") if args.metodo == "B5" else None,
         "anclas": depth_cfg["b4"]["estereo"] if mono else None,
         "memoria_pico_mb": latency.peak_rss_mb(),
         "resoluciones": results,
