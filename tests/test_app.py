@@ -277,6 +277,60 @@ def test_new_command_invalidates_previous_and_sets_deadline():
     output.close()
 
 
+def test_controller_keeps_fact_and_command_validity_separate():
+    from types import SimpleNamespace
+
+    events = []
+
+    class Factual(UnavailableHandler):
+        def start(self, command, view, now_ns):
+            return [Say("Taza al frente.", valid_until_ns=2_000), Say("Perdí taza.")]
+
+    controller = Controller(
+        CommandParser(ClassCatalog(COCO_CLASSES)),
+        SimpleNamespace(submit=events.append),
+        handlers={Mode.SEARCH: Factual()},
+        deadlines_s={"search": 30},
+        clock=ManualClock(1_000),
+    )
+    command = controller.handle_text("buscá la taza")
+    assert command.ok
+    ack, guide, historical = events
+    assert [e.valid_until_ns for e in events] == [None, 2_000, None]
+    assert guide.deadline_ns == ack.deadline_ns == historical.deadline_ns == 30_000_001_000
+    assert Say("hola").valid_until_ns is None
+
+
+def test_repeat_preserves_fact_expiry_without_renewing_it():
+    clock = ManualClock(1_000)
+
+    class Guide(UnavailableHandler):
+        def start(self, command, view, now_ns):
+            return [Say("Taza al frente.", valid_until_ns=2_000)]
+
+    player = FakePlayer()
+    output = AudioOutput(TextSynth(), player, clock=clock)
+    controller = Controller(
+        CommandParser(ClassCatalog(COCO_CLASSES)),
+        output,
+        handlers={Mode.SEARCH: Guide()},
+        clock=clock,
+    )
+    try:
+        controller.handle_text("buscá la taza")
+        assert output.wait_idle(2)
+        assert output.records[-1].outcome is Outcome.PLAYED
+        clock.advance(2_000)
+        controller.handle_text("repetí")
+        assert output.wait_idle(2)
+        repeated = output.records[-1]
+        assert repeated.text_or_sound == "Taza al frente."
+        assert repeated.outcome is Outcome.FACT_EXPIRED and repeated.started_ns is None
+        assert len(player.played) == 2  # acuse y guía original; la repetición no sonó
+    finally:
+        output.close()
+
+
 def test_clarification_does_not_cancel_active_command():
     controller, output = make_controller()
     command = controller.handle(controller.parser.parse("buscá la taza"))

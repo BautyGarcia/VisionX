@@ -273,6 +273,79 @@ def test_event_expiring_during_synthesis_is_not_played():
     assert outcomes(output)["tarde"] is Outcome.EXPIRED
 
 
+@pytest.mark.parametrize(
+    "valid_until,expected",
+    [
+        (3_000, Outcome.PLAYED),
+        (2_000, Outcome.PLAYED),
+        (1_000, Outcome.FACT_EXPIRED),
+        (None, Outcome.PLAYED),
+    ],
+)
+def test_fact_validity_is_checked_after_synthesis(valid_until, expected):
+    clock = ManualClock(0)
+
+    class AdvancingSynth(FakeSynth):
+        def synthesize(self, text):
+            clock.advance(2_000)
+            return super().synthesize(text)
+
+    player = FakePlayer()
+    records = []
+    output = AudioOutput(AdvancingSynth(), player, clock=clock, on_record=records.append)
+    try:
+        output.submit(event(1, "guía", deadline=10_000, valid_until_ns=valid_until))
+        assert output.wait_idle(2)
+        assert records[0].outcome is expected
+        assert bool(player.played) == (expected is Outcome.PLAYED)
+        assert (records[0].started_ns is None) == (expected is Outcome.FACT_EXPIRED)
+    finally:
+        output.close()
+
+
+def test_fact_already_expired_is_recorded_without_synthesis():
+    clock = ManualClock(2_000)
+    synth, player = FakeSynth(), FakePlayer()
+    output = AudioOutput(synth, player, clock=clock)
+    try:
+        # El contrato admite recibir un hecho que venció antes de crearse el audio.
+        output.submit(event(1, "viejo", created=2_000, valid_until_ns=1_000))
+        assert output.wait_idle(2)
+        assert outcomes(output)["viejo"] is Outcome.FACT_EXPIRED
+        assert synth.calls == [] and player.played == []
+    finally:
+        output.close()
+
+
+def test_presence_sound_expiring_in_queue_is_not_played():
+    clock = ManualClock(0)
+    entered, release = threading.Event(), threading.Event()
+
+    class BlockingSynth(FakeSynth):
+        def synthesize(self, text):
+            entered.set()
+            assert release.wait(2)
+            return super().synthesize(text)
+
+    player = FakePlayer()
+    output = AudioOutput(BlockingSynth(), player, clock=clock)
+    try:
+        output.submit(event(1, "Busco taza."))
+        assert entered.wait(2)
+        output.submit(event(1, "sonido:bip", valid_until_ns=1_000))
+        clock.advance(2_000)
+        release.set()
+        assert output.wait_idle(2)
+        assert outcomes(output) == {
+            "Busco taza.": Outcome.PLAYED,
+            "sonido:bip": Outcome.FACT_EXPIRED,
+        }
+        assert len(player.played) == 1
+    finally:
+        release.set()
+        output.close()
+
+
 def test_cancel_during_synthesis_prevents_playback():
     started = threading.Event()
     release = threading.Event()
