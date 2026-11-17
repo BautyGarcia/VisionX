@@ -6,6 +6,14 @@ TODOS los bloques aceptados, en orden visual. Así las omisiones, texto de fondo
 y diferencias de orden se penalizan. No es CER solo de palabras reconocidas ni de una ROI
 anotada. Los envases curvos pueden tener leyendas de referencia invisibles en esta vista.
 Se guardan ambas cadenas y bloques para auditar esas limitaciones.
+
+Métricas complementarias independientes del orden: palabras Unicode sin números,
+casefold/sin acentos. Recall por ocurrencias con máximo emparejamiento uno a uno:
+exacto o Levenshtein <=1 para palabras de referencia de >=5 letras. Precisión estricta
+por intersección de multiconjuntos / palabras OCR; sin OCR vale 0. Recall sin palabras
+de referencia vale null. Números: intersección de multiconjuntos de tokens numéricos,
+coma/punto decimal equivalentes, dígitos y % exactos; sin referencia vale null.
+Se reportan conteos para poder calcular macro/micro sin promediar muestras inexistentes.
 """
 
 from __future__ import annotations
@@ -18,6 +26,7 @@ import re
 import subprocess
 import time
 import unicodedata
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -32,7 +41,7 @@ from visionx.reading.core import (
     normalize_text,
     reading_order,
     sharpness,
-    speech_chunks,
+    spoken_chunks,
 )
 from visionx.reading.rapid import MODELS, file_hash, weights_folder
 from visionx.shared.errors import SourceError
@@ -67,6 +76,16 @@ def text_metrics(reference: str, hypothesis: str) -> dict[str, Any]:
     # Tokens numéricos separados: "684", "36", "19", "24%"; no se confunde 120 con 12.
     number_pattern = r"\d+(?:[.,]\d+)?%?"
     rn, hn = re.findall(number_pattern, ref), re.findall(number_pattern, hyp)
+    words_ref = word_tokens(reference)
+    words_hyp = word_tokens(hypothesis)
+    hits = word_matches(words_ref, words_hyp)
+    exact = sum((Counter(words_ref) & Counter(words_hyp)).values())
+    # Coma/punto decimal equivalentes; % y dígitos deben coincidir sin tolerancia.
+    number_hits = sum(
+        (
+            Counter(n.replace(",", ".") for n in rn) & Counter(n.replace(",", ".") for n in hn)
+        ).values()
+    )
     return {
         "cer": edit_distance(ref, hyp) / len(ref),
         "cer_sin_acentos": edit_distance(folded_ref, folded_hyp) / len(folded_ref),
@@ -76,7 +95,54 @@ def text_metrics(reference: str, hypothesis: str) -> dict[str, Any]:
         "numeros_ocr": " | ".join(hn),
         "errores_numericos": edit_distance(rn, hn),
         "n_numeros_ref": len(rn),
+        "aciertos_numericos": number_hits,
+        "recall_numeros": number_hits / len(rn) if rn else None,
+        "n_palabras_ref": len(words_ref),
+        "n_palabras_ocr": len(words_hyp),
+        "aciertos_palabras": hits,
+        "aciertos_palabras_exactos": exact,
+        "recall_palabras": hits / len(words_ref) if words_ref else None,
+        "precision_palabras": exact / len(words_hyp) if words_hyp else 0.0,
     }
+
+
+def word_tokens(text: str) -> list[str]:
+    """Palabras = secuencias de letras Unicode, casefold y sin acentos; excluye números.
+
+    Se cuentan ocurrencias, no tipos únicos. Puntuación, guiones y espacios separan tokens.
+    CER conserva su normalización anterior y sigue incluyendo números y puntuación.
+    """
+    return re.findall(r"[^\W\d_]+", comparison_text(text, fold_accents=True))
+
+
+def word_matches(reference: list[str], hypothesis: list[str]) -> int:
+    """Máximo emparejamiento uno a uno, independiente del orden.
+
+    Coincidencia exacta o Levenshtein <=1 si la palabra de REFERENCIA tiene >=5 letras.
+    Caminos aumentantes evitan que un match aproximado consuma el único match de otra
+    palabra. Repetir una palabra OCR no cubre varias ocurrencias de referencia.
+    """
+    edges = [
+        [
+            j
+            for j, h in enumerate(hypothesis)
+            if r == h or (len(r) >= 5 and abs(len(r) - len(h)) <= 1 and edit_distance(r, h) <= 1)
+        ]
+        for r in reference
+    ]
+    owners: dict[int, int] = {}
+
+    def augment(i: int, visited: set[int]) -> bool:
+        for j in edges[i]:
+            if j in visited:
+                continue
+            visited.add(j)
+            if j not in owners or augment(owners[j], visited):
+                owners[j] = i
+                return True
+        return False
+
+    return sum(augment(i, set()) for i in range(len(reference)))
 
 
 def references(path: Path) -> dict[str, str]:
@@ -124,6 +190,7 @@ def evaluate(
     routes: tuple[str, ...] = ("original",),
     synth=None,
     allow_incomplete: bool = False,
+    warmup: bool = False,
 ) -> list[dict[str, Any]]:
     rows, details, input_hashes = [], [], {}
     skipped = []
@@ -195,13 +262,16 @@ def evaluate(
                     if score > best_score:
                         best_score, selected, best = score, entry, image
                 select_ms = (time.perf_counter() - t0) * 1000
+                if warmup and cold:
+                    reader.read(best)  # misma ruta/primer frame; fuera del tiempo medido
+                    cold = False
                 t0 = time.perf_counter()
                 raw = reader.read(best)
                 ocr_ms = (time.perf_counter() - t0) * 1000
                 t0 = time.perf_counter()
                 blocks = reading_order(raw, settings)
                 hypothesis = " ".join(b.text for b in blocks)
-                chunks = speech_chunks(blocks, settings.max_chars)
+                chunks = spoken_chunks(blocks, settings)
                 post_ms = (time.perf_counter() - t0) * 1000
                 # Latencia lógica: ventana en tiempo de video + OCR/post. La selección offline
                 # incluye JPEG/disco y se reporta separada: no fingir que mide captura en vivo.
@@ -220,6 +290,7 @@ def evaluate(
                     "objeto": segment["objeto"],
                     "distancia_m": float(segment["distancia_m"]),
                     "imagen": route,
+                    "crop": settings.crop,
                     "inicio_ns": start,
                     "fin_ventana_ns": end,
                     "n_frames": len(candidates),
@@ -246,10 +317,20 @@ def evaluate(
                 }
                 cold = False
                 rows.append(row)
-                details.append({**row, "bloques_crudos": [asdict(b) for b in raw]})
+                details.append(
+                    {
+                        **row,
+                        "bloques_crudos": [asdict(b) for b in raw],
+                        "recorte": getattr(reader, "last_crop", None),
+                        "hablado": chunks,
+                    }
+                )
                 print(
                     f"{folder.name} {segment['objeto']} {segment['distancia_m']}m {route}: "
-                    f"CER {row['cer']:.1%}, OCR {ocr_ms:.0f} ms",
+                    f"CER {row['cer']:.1%}, recall {row['recall_palabras']}, "
+                    f"precisión {row['precision_palabras']:.1%}, "
+                    f"números {row['aciertos_numericos']}/{row['n_numeros_ref']}, "
+                    f"OCR {ocr_ms:.0f} ms",
                     flush=True,
                 )
     if not rows:
@@ -280,6 +361,14 @@ def evaluate(
         "config": cfg,
         "modelos_sha256": hashes,
         "inputs_sha256": input_hashes,
+        "codigo_sha256": {
+            str(p): file_hash(p)
+            for p in [
+                *sorted(Path(__file__).parent.glob("*.py")),
+                Path(__file__).parents[1] / "modes" / "read.py",
+            ]
+        },
+        "calentamiento": warmup,
         "voz": getattr(synth, "voice_id", None),
         "resultados": details,
         "copias_incompletas": skipped,

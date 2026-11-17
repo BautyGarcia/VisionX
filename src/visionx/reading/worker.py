@@ -27,16 +27,16 @@ class ReadJob:
     selected_shape: tuple[int, ...] = ()
     sharpness: float = -1.0
 
-    def offer(self, key: object, image: np.ndarray) -> None:
+    def offer(self, key: object, image: np.ndarray, object_box=None) -> None:
         # Solo hay un productor (controlador). Si selección tarda, conservar lo más nuevo.
         try:
-            self.frames.put_nowait((key, image))
+            self.frames.put_nowait((key, image, object_box))
         except Full:
             try:
                 self.frames.get_nowait()
             except Empty:
                 pass
-            self.frames.put_nowait((key, image))
+            self.frames.put_nowait((key, image, object_box))
 
 
 class ReadingWorker:
@@ -79,9 +79,10 @@ class ReadingWorker:
 
     def _read(self, job: ReadJob) -> list[TextBlock]:
         best = None
+        best_box = None
         while not job.cancelled.is_set():
             try:
-                key, image = job.frames.get(timeout=0.02)
+                key, image, object_box = job.frames.get(timeout=0.02)
             except Empty:
                 if job.complete.is_set():
                     break
@@ -92,6 +93,8 @@ class ReadingWorker:
                 job.selected_key = key
                 job.selected_shape = image.shape
                 best = image
+                best_box = object_box
         if job.cancelled.is_set() or best is None:
             return []
-        return self.reader.read(best)
+        read_region = getattr(self.reader, "read_region", None)
+        return read_region(best, best_box) if read_region else self.reader.read(best)

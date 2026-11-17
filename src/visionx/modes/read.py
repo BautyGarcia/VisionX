@@ -9,7 +9,7 @@ from typing import Any
 from visionx.app.controller import Say
 from visionx.app.runtime import View
 from visionx.reading import RapidReader, ReadingSettings, TextReader, reading_order
-from visionx.reading.core import framing_hint, speech_chunks
+from visionx.reading.core import framing_hint, spoken_chunks
 from visionx.reading.worker import ReadingWorker, ReadJob
 from visionx.shared.contracts import Command, Priority, StereoFrame
 
@@ -89,7 +89,7 @@ class ReadHandler:
             if not ordered:
                 hint = framing_hint(raw, job.selected_shape, self.s) if job.selected_shape else ""
                 return [Say("No encuentro texto." + (f" {hint}" if hint else ""))], True
-            self._chunks.extend(speech_chunks(ordered, self.s.max_chars))
+            self._chunks.extend(spoken_chunks(ordered, self.s))
         if now_ns < self._next_say_ns:
             return [], False
         if not self._chunks:
@@ -124,4 +124,25 @@ class ReadHandler:
         if now_ns - frame.received_ns > self.s.max_age_s * 1e9 or frame.key == self._last_key:
             return
         self._last_key = frame.key
-        self._job.offer(frame.key, frame.left)
+        object_box = None
+        if self.s.crop == "object" and view.seen is not None:
+            detection = view.seen.detection
+            # Igual identidad no basta para aplicar cajas rectificadas sobre la original.
+            if (
+                detection.key == frame.key
+                and detection.geometry_id == frame.geometry_id
+                and detection.calibration_id == frame.calibration_id
+                and detection.image_size == (frame.left.shape[1], frame.left.shape[0])
+            ):
+                w, h = detection.image_size
+                valid = [b for b in detection.boxes if b[2] > b[0] and b[3] > b[1]]
+                if valid:
+                    box = min(
+                        valid,
+                        key=lambda b: (
+                            (((b[0] + b[2]) / 2 - w / 2) / w) ** 2
+                            + (((b[1] + b[3]) / 2 - h / 2) / h) ** 2
+                        ),
+                    )
+                    object_box = tuple(float(v) for v in box)
+        self._job.offer(frame.key, frame.left, object_box)

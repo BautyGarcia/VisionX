@@ -587,6 +587,37 @@ con su contexto explícito, sin atribuirle la geometría rectificada. Leer bloqu
 Evaluar números y etiquetas, no solo frases fáciles. **CER** es la tasa de caracteres editados
 para llegar a la transcripción correcta; su definición está en métricas.
 
+Implementación T10 (`visionx.reading`): seleccionar izquierda y ejecutar OCR en un worker
+persistente, con un solo pedido pendiente reemplazable. Cancelar invalida el resultado;
+una inferencia ONNX nativa termina en segundo plano. No cambia schema 3. `reading.crop`
+permite `none`, `center` (fracción configurable), `text` (detección a `text_probe_px`,
+envolvente con margen, segundo det+rec a `det_limit_px`) y `object` (caja más central de
+`View.seen`, solamente con identidad, geometría, calibración y tamaño compatibles con el
+frame seleccionado; sin caja compatible usa `text`). Si la primera detección no encuentra
+cajas, se procesa la imagen completa. Las cajas retornadas siempre vuelven a coordenadas
+de la izquierda de entrada. El recorte no añade detalle que la cámara no haya capturado.
+
+Métricas complementarias de etiqueta completa, sin reemplazar CER: separar palabras como
+secuencias de letras Unicode, ignorar mayúsculas y acentos, excluir números y separar por
+puntuación. Se cuentan **ocurrencias**. Recall = máximo número de pares referencia/OCR
+uno a uno / palabras de referencia, sin exigir orden. Un par admite coincidencia exacta
+o Levenshtein ≤1 si la palabra de referencia tiene al menos cinco letras. Precisión =
+intersección exacta de los multiconjuntos / palabras OCR, sin tolerancia de edición.
+Sin palabras OCR la precisión vale 0; sin palabras de referencia el recall es nulo.
+Aciertos numéricos = intersección exacta de multiconjuntos de tokens
+`\d+(?:[.,]\d+)?%?`, con coma/punto decimal equivalentes; conservar dígitos y `%`.
+Se informan aciertos/n de referencia y también las ediciones numéricas anteriores.
+Estas métricas aún penalizan leyendas no visibles: no equivalen a evaluar solo texto legible.
+
+El orden visual separa columnas/regiones por corredores vacíos, luego ordena renglones;
+evita intercalar sellos contiguos. La voz adelanta el bloque de mayor altura (desempate por
+área) y sigue con los demás en orden visual. `speech_max_blocks` y `speech_max_chars`
+limitan la lectura total; `max_chars` limita cada Say. Si se corta, agrega
+«…y más texto chico.» dentro del límite total, sin diálogo. La evaluación usa todos los
+bloques aceptados, independientemente del corte hablado. `evaluar --crop ... --calentar`
+permite comparar CPU con un OCR previo sobre el primer frame, fuera del tiempo medido;
+CSV/JSON conservan conteos, ms, recorte, transcripción completa, texto hablado y hashes.
+
 ### Describir — T11
 
 Primera salida: plantilla local con objetos/direcciones/medidas aceptadas. Después VLM a pedido

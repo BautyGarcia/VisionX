@@ -7,9 +7,11 @@ El import opcional y la carga viven en read(), que el modo llama desde su worker
 from __future__ import annotations
 
 import hashlib
+import math
 import urllib.request
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from visionx.reading.core import ReadingSettings, TextBlock
@@ -114,15 +116,76 @@ class RapidReader:
         self._engine = RapidOCR(params=params)
 
     def read(self, image: np.ndarray) -> list[TextBlock]:
+        return self.read_region(image)
+
+    def read_region(
+        self, image: np.ndarray, object_box: tuple[float, float, float, float] | None = None
+    ) -> list[TextBlock]:
+        """Recorta/escala solo en el worker; devuelve cajas en la imagen de entrada.
+
+        object_box debe pertenecer al mismo frame/geometría (lo valida el consumidor).
+        Sin caja válida, object usa text; sin cajas de texto, text usa imagen completa.
+        """
         if self._engine is None:
             self._load()
-        result = self._engine(image)
+        h, w = image.shape[:2]
+        roi = (0, 0, w, h)
+        mode = self.settings.crop
+        if mode == "center":
+            f = self.settings.center_fraction
+            roi = (
+                int(w * (1 - f) / 2),
+                int(h * (1 - f) / 2),
+                int(w * (1 + f) / 2),
+                int(h * (1 + f) / 2),
+            )
+        elif mode in ("text", "object"):
+            box = object_box if mode == "object" else None
+            if box is None:
+                scale = min(1.0, self.settings.text_probe_px / max(h, w))
+                probe = cv2.resize(image, (max(1, round(w * scale)), max(1, round(h * scale))))
+                # RapidOCR conserva use_rec/use_cls entre llamadas: fijarlos en AMBAS pasadas.
+                detected = self._engine(probe, use_det=True, use_cls=False, use_rec=False)
+                if detected.boxes is not None and len(detected.boxes):
+                    points = np.asarray(detected.boxes).reshape(-1, 2)
+                    low, high = points.min(axis=0), points.max(axis=0)
+                    box = (
+                        low[0] * w / probe.shape[1],
+                        low[1] * h / probe.shape[0],
+                        high[0] * w / probe.shape[1],
+                        high[1] * h / probe.shape[0],
+                    )
+            if box is not None and all(math.isfinite(v) for v in box):
+                x1, y1, x2, y2 = box
+                mx, my = (
+                    (x2 - x1) * self.settings.crop_margin,
+                    (y2 - y1) * self.settings.crop_margin,
+                )
+                proposed = (
+                    max(0, math.floor(x1 - mx)),
+                    max(0, math.floor(y1 - my)),
+                    min(w, math.ceil(x2 + mx)),
+                    min(h, math.ceil(y2 + my)),
+                )
+                if proposed[2] > proposed[0] and proposed[3] > proposed[1]:
+                    roi = proposed
+        x, y, right, bottom = roi
+        cropped = image[y:bottom, x:right]
+        if mode != "none":
+            scale = self.settings.det_limit_px / max(cropped.shape[:2])
+            cropped = cv2.resize(
+                cropped,
+                (max(1, round(cropped.shape[1] * scale)), max(1, round(cropped.shape[0] * scale))),
+                interpolation=cv2.INTER_CUBIC,
+            )
+        self.last_crop = {"mode": mode, "roi": roi, "ocr_size": cropped.shape[:2][::-1]}
+        result = self._engine(cropped, use_det=True, use_cls=True, use_rec=True)
         if result.boxes is None or result.txts is None:
             return []
-        h, w = image.shape[:2]
+        sx, sy = (right - x) / cropped.shape[1], (bottom - y) / cropped.shape[0]
         blocks = []
         for polygon, text, score in zip(result.boxes, result.txts, result.scores, strict=True):
-            xy = np.asarray(polygon)
+            xy = np.asarray(polygon) * (sx, sy) + (x, y)
             x1, y1 = np.maximum(xy.min(axis=0), (0, 0))
             x2, y2 = np.minimum(xy.max(axis=0), (w, h))
             if x2 > x1 and y2 > y1:

@@ -127,15 +127,27 @@ reading:
   image_source: rectified  # original | rectified; `evaluar --imagen ambas`, mismo tamaño por ojo
   min_score: 0.65           # [0,1], descartar reconocimiento inseguro; candidato de desarrollo
   line_height_ratio: 0.5   # centros de renglón a <= esta fracción de la menor altura se agrupan
+  region_gap_ratio: 0.15   # corredor vacío mínimo / altura mediana; sellos vecinos tienen poco margen
+  section_gap_ratio: 1.5   # separación vertical amplia / altura mediana: encabezado antes de columnas
   max_age_s: 1.0           # s; no seleccionar una captura que llegó vieja al modo
   border_px: 8.0          # px de la imagen OCR: sugerir reencuadre si una caja toca el borde
   small_text_px: 20.0     # px de altura mediana: sugerir acercar solo si hay cajas pequeñas
   max_chars: 160          # caracteres por Say; acota síntesis y permite cancelar entre bloques
+  speech_max_blocks: 6    # título (mayor altura) primero; después el resto en orden visual
+  speech_max_chars: 320   # total, incluido «…y más texto chico.» si hay corte; sin diálogo
   speech_base_s: 0.3      # estimación de duración para espaciar bloques, s...
   speech_s_per_char: 0.065 # ...más s/carácter, Piper es_AR (T09); falta audio real en Mac
   weights_dir: weights/rapidocr # modelos latinos PP-OCRv5; hashes fijados en reading/rapid.py
   threads: 4              # hilos ONNX CPU; dejar núcleos para captura y demás modelos
   det_limit_px: 1280       # lado mayor del detector OCR, px; conservar detalle en etiquetas
+  # Piloto CPU, 7 segmentos completos: recall macro center 10,39 %, none 9,34 %, text 9,95 %.
+  # Center prioriza cobertura con costo cercano a none; text baja ms pero pierde texto de Ashwa.
+  # Ganancia pequeña: mismo recall micro que none, sin aciertos numéricos. Validar otros envases/Mac.
+  crop: center            # none | center | text | object; candidato de desarrollo, central 60 %
+  center_fraction: 0.6     # fracción del ancho Y alto conservada, centrada; luego escala a det_limit_px
+  crop_margin: 0.15        # margen por lado / tamaño de envolvente de texto u objeto; limita al cuadro
+  text_probe_px: 640       # primera pasada solo detección a baja resolución; segunda det+rec a 1280
+  # object usa la detección más central del MISMO frame/geometría; sin ella aplica text.
 
 calibration:
   board: charuco

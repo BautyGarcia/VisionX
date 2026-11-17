@@ -24,6 +24,10 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("--csv", required=True, type=Path)
     ev.add_argument("--config")
     ev.add_argument("--imagen", choices=("original", "rectified", "ambas"))
+    ev.add_argument("--crop", choices=("none", "center", "text", "object"))
+    ev.add_argument(
+        "--calentar", action="store_true", help="OCR previo sin medir sobre primer frame"
+    )
     ev.add_argument("--ventana", type=float, help="s de selección desde inicio del segmento")
     ev.add_argument("--tts", action="store_true", help="sintetizar primer bloque SIN reproducir")
     ev.add_argument(
@@ -41,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.ventana is not None:
             settings = replace(settings, window_s=args.ventana)
+        if args.crop is not None:
+            settings = replace(settings, crop=args.crop)
         route = args.imagen or settings.image_source
         routes = ("original", "rectified") if route == "ambas" else (route,)
         synth = None
@@ -57,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
             routes=routes,
             synth=synth,
             allow_incomplete=args.permitir_incompletos,
+            warmup=args.calentar,
         )
         return 0
     except (OSError, ValueError, EstimatorError, SourceError) as exc:
