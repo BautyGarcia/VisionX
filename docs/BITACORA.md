@@ -40,6 +40,204 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-17 — Tiempos por componente en la PC de escritorio (Windows CPU, sin carga ajena)
+
+**Tarea:** T06, T05 (uso en T07), T08, T10. **Persona/agente:** Tomás / Claude Code.
+**Rama/commit:** `b/beta-integracion` (`8cd497c` + merges). **Equipo:** i7-10700K, 32 GB,
+Windows 11, Python 3.11.18, torch 2.15.0+cpu (8 hilos). Sin otros procesos pesados durante la
+medición. Datos: pares de `dev-1114-distancias` (1920×1080 por ojo, rectificados).
+
+| Componente | Comando | Resultado |
+|---|---|---|
+| yolo26s-seg @960 | `detection medir --max 60 --imgsz 960` | total P50 163 ms, P90 230 ms (red 153 ms) |
+| yolo26n-seg @960 | ídem | P50 70 ms, P90 75 ms |
+| yolo26s-seg @640 | `--imgsz 640` | P50 83 ms, P90 88 ms |
+| yolo26n-seg @640 | ídem | P50 39 ms, P90 42 ms |
+| SGBM B0 | `depth latencia --metodo B0 --calentamiento 10 --medidos 60 --pares 30` | 640×360: 12 ms · 960×540: 28 ms · 1280×720: 61 ms (P50) |
+| SGBM+WLS B2 | ídem `--metodo B2` | 640×360: 30 ms · 960×540: 68 ms · 1280×720: 134 ms |
+| B4 (DA V2 Small en CPU) | `--metodo B4 --calentamiento 5 --medidos 30 --pares 20` | 640×360: 263 ms · 1280×720: 1081 ms |
+| Piper es_AR-daniela-high | `voice bucle` | síntesis mediana 141 ms por frase (61 frases) |
+| faster-whisper base / small, int8 | `voice bucle --whisper base small` | STT mediana 443 / 1392 ms; P90 512 / 1449 ms |
+| RapidOCR (de la entrada T10) | `reading evaluar` | ~300 ms por frame (240–410 ms según recorte) |
+
+- La laptop daba ~500 ms por frame para yolo26s @960 (BITACORA 2026-11-15); acá son 163 ms.
+- Con lo que usa la beta en vivo (yolo26s @960 + B0 a 1280×720, en hilos separados), el
+  detector es el componente lento: ~6 detecciones/s como techo, antes de captura y rectificación.
+- B4 en CPU (~1,1 s a 1280×720) no sirve en vivo en esta PC; la app ya ofrece solo B0–B2.
+- `voice bucle` usa frases **sintetizadas con Piper**: 36/61 (small) y 29/61 (base) órdenes
+  interpretadas bien. Es un mal sustituto de una persona; decide la prueba de micrófono.
+- **OpenVINO descartado.** `yolo26s-seg` exportado a OpenVINO (instalado solo para la prueba con
+  `uv run --with openvino`, sin tocar el lock), 61 imágenes de distancias y escenas, imgsz 960:
+  P50 188 ms contra 149 ms de PyTorch en la misma corrida, y detecciones distintas (494 contra
+  557; 468 coinciden con misma clase e IoU > 0,9; |Δscore| mediana 0,027, máx. 0,28). No se
+  incorpora. Script: `outputs/bench/ov/cmp.py`.
+
+**Límites.** Una sola corrida por componente, sin las tres repeticiones de M9; tiempos de componente,
+no de punta a punta (M1). No representan la Mac de la demo.
+
+**Próximo paso.** Medir punta a punta en vivo con la ELP (orden → primera palabra) y elegir
+Whisper base o small con la prueba de micrófono de Tomás.
+
+## 2026-11-17 — Beta de los 4 modos: integración local y pruebas de humo sobre clips
+
+**Tarea:** T07, T09, T10, T11. **Persona/agente:** Tomás / Claude Code (coordinación, revisión e
+integración). **Rama:** `b/beta-integracion` (local, sin publicar), que une `b/T07-vivo`,
+`b/T10-leer` y `b/T11-describir` sobre `8e0a94a`.
+
+**Objetivo.** Dejar los cuatro modos (buscar/guiar, distancia, leer, describir) listos para la
+beta en vivo con la ELP, probados de punta a punta sobre clips.
+
+**Hecho.**
+- `b/T07-vivo` `c26cf1a`: con el botón de hablar apretado, `ejecutar` no llama a
+  `controller.tick()`. Antes la guía podía hablar durante la grabación y, con parlantes, el
+  micrófono grababa la voz de VisionX encima de la orden. La vigencia se revisa al soltar.
+- Integración: T10 y T11 corrigieron lo mismo en `Controller` (una orden nueva cancela el audio
+  de un modo que ya terminó). Se conservó la versión de T10, que además corta ese audio al
+  vencer la orden. `modes/__init__.py` y `configs/default.yaml`: unión de ambos.
+- Guiones de órdenes para cada clip y checklist de la sesión en vivo (fuera de Git:
+  `outputs/beta/ordenes-*.jsonl`, `outputs/beta/CHECKLIST.md`).
+
+**Evidencia.** Suite en `b/beta-integracion` (`8cd497c` + merges): **588 aprobados** con todos
+los extras; **585 aprobados y 3 omitidos** en un entorno solo-núcleo como CI. Ruff y formato OK.
+Pruebas de humo con el pipeline real (`python -m visionx.app ejecutar --fuente <clip> --detector
+yolo --profundidad B0 --sin-ventana --ordenes ... --traza ...`), yolo26s-seg @960, SGBM B0,
+Windows i7-10700K CPU, **con la CPU compartida con dos agentes**: tiempos solo indicativos.
+
+| Clip | Órdenes | Respuesta | Errores |
+|---|---|---|---|
+| distancias | distancia a taza y a botella; describí | «Veo 2 tazas: a la izquierda, a 1,1 metros; a la derecha, abajo, a 0,5 metros.» «Botella a la izquierda, a 1 metro.» (cinta 1,00 / 0,50 / 1,00 m). Orden → respuesta ~1,2 s | 0 |
+| buscar-a | buscá botella, distancia, otra búsqueda, repetí, cancelar | bip, guía, «Perdí botella: quedó a la derecha», «Llegaste… a 0,6 metros», «Veo 2 botellas. ¿Cuál?…», repetir y cancelar correctos | 0 |
+| lectura | leé ×4 y cancelar | ver entrada T10 | 0 |
+| escenas | describí ×5 | ver entrada T11 | 0 |
+
+Trazas JSONL y logs: `outputs/beta/humo-*.{jsonl,log}` (local; subir a Drive con la beta).
+
+**Problemas.**
+- El guion de `distancias` tenía órdenes después del final del clip (dura 20 s): se corrigió.
+- Clips incompletos **en el propio Drive**: `lectura-b` (118 de 1222 imágenes), `iguales`
+  (vacío) y `m2` (solo `frames.jsonl`). `verificar` lo detecta; hay que volver a subirlos.
+
+**Límites.** Sin ELP, micrófono ni parlantes reales; el reproductor fue el fake del modo sin voz.
+Sin anotación manual: no hay M7/M8/M10. Ver tiempos con la CPU libre en la entrada de mediciones.
+
+**Próximo paso.** Prueba de micrófono con Tomás (`outputs/voz/prueba_mic.py`); sesión en vivo con
+la ELP siguiendo el checklist; publicar los PR cuando Tomás lo decida.
+
+## 2026-11-17 — T11: describir con plantilla local, agrupado por zona y dos niveles de confianza
+
+**Tarea:** T11. **Persona/agente:** Tomás / Codex (implementación, 3 rondas), Claude Code
+(especificación, revisión, commits). **Rama:** `b/T11-describir`: `546d9e6`, `d066b8f`, `8cd497c`.
+
+**Hecho.**
+- `modes/describe.py::DescribeHandler`: congela una unión medida posterior a la orden (misma
+  regla de frescura que distancia); si no llega en `describe.wait_measure_s`, describe con lo
+  visto, sin metros. Interfaz `SceneNarrator` con `TemplateNarrator`; el futuro VLM se enchufa
+  ahí y no puede generar distancias. Metros solo desde `SpatialObject` con `SPEAK_METERS` y
+  dentro de `depth.range_m`.
+- Ronda 2: un enunciado por zona con lista natural («A la derecha, tres sillas, la más cercana a
+  0,6 metros, y una botella…»), score mínimo propio y persistencia (2 frames en 3 s), y
+  presupuesto de ~8 s hablados.
+- Ronda 3: dos niveles. Afirma con score ≥ 0,60 persistente; dice «parece haber…» con score
+  ≥ 0,27 persistente, nunca con metros. Pisos por clase para confusiones vistas en desarrollo
+  (cama/ropa, banco y portátil/estructura de jardín, banana/peluche, horno/lavarropas). «No
+  reconozco objetos…» solo si no queda ningún candidato persistente.
+
+**Evidencia** (clips de desarrollo `escenas` y `distancias`, simulador con yolo26s @960 + B0;
+revisión visual de un agente, no anotación humana independiente):
+
+| Métrica, 7 fases comparables | R1 | R2 | R3 |
+|---|---:|---:|---:|
+| Objetos reales mencionados | 29 | 15 | 27 |
+| Afirmaciones sin respaldo | 4 | 0 | 0 |
+| Reales de R1 que se pierden | — | 12 | 5 |
+
+- Calibración de R3: 39 frames, 247 candidatos revisados (197 con respaldo y 50 sin él). Con dos
+  frames a 0,60: 99 reales y 0 falsos; con pisos + 0,27: 163 reales y 8 falsos (4,7 %). Se eligió
+  0,27 como el máximo de reales con ≤ 5 % sin respaldo. Detalle: `outputs/t11/` del worktree.
+- Duración estimada (65 ms/carácter): 13/13 respuestas ≤ 8 s (R1: 9 de 13 superaban 8 s).
+- Suite: 514 aprobados en la rama (con extras).
+
+**Límites.** Umbrales y pisos ajustados sobre los mismos clips de desarrollo con los que se
+evalúan: **no es una tasa de test** y puede estar sobreajustado. Persisten nombres imprecisos del
+catálogo COCO (taza por vaso; «pantalla»/televisor por monitor). La heladera no siempre persiste.
+Falta M10: 30 escenas anotadas por personas, audio real y Mac.
+
+**Próximo paso.** Anotar escenas propias con la ELP en la beta; VLM a pedido después.
+
+## 2026-11-17 — T10: leer con RapidOCR, recortes, orden por regiones y habla filtrada
+
+**Tarea:** T10. **Persona/agente:** Tomás / Codex (implementación, 3 rondas), Claude Code
+(especificación, revisión, commits). **Rama:** `b/T10-leer`: `8d810d7`, `2d997c4`, `de17327`.
+
+**Hecho.**
+- `visionx.reading`: interfaz `TextReader`, backend RapidOCR 3.10.0 + ONNX Runtime CPU con
+  modelos PP-OCRv5 latin fijados por hash (`python -m visionx.reading descargar`), `FakeReader`
+  para tests. Extra `ocr` en `pyproject.toml`; se excluye `opencv-python-headless` como ya se
+  hacía con `opencv-python`, para no pisar el cv2 de contrib.
+- `modes/read.py::ReadHandler`: elige la izquierda más nítida (varianza del Laplaciano) dentro
+  de `reading.window_s` desde la orden; OCR en un worker persistente, fuera del hilo del
+  controlador; cancelable (una inferencia ONNX en curso termina en segundo plano y se descarta).
+- Ronda 2: recortes configurables (`reading.crop`: none, center, text, object; se eligió
+  `center` 60 %), orden visual por regiones (los sellos «EXCESO EN…» ya no se intercalan) y
+  lectura con el título primero, con tope de bloques y «…y más texto chico.».
+- Ronda 3: renglones de una región unidos en una frase; filtro **solo para hablar**
+  (`speech_min_score` 0,90 + heurística de palabra plausible). La evaluación usa todos los
+  bloques aceptados.
+- `python -m visionx.reading evaluar`: CER contra la etiqueta completa de `textos.txt`, más
+  recall/precisión de palabras y aciertos numéricos, por objeto × distancia.
+
+**Evidencia** (`lectura`, 7 segmentos completos de 3 envases a 0,25/0,5/1 m; n = 1 frame por
+segmento; Windows CPU):
+
+| | R1 | R2 (center 60 %) | R3 |
+|---|---:|---:|---:|
+| Recall de palabras de referencia (macro) | 9,3 % | 10,4 % | igual que R2 |
+| CER de etiqueta completa (macro) | 91,0 % | 88,4 % | igual que R2 |
+| Números acertados | 0/19 | 0/19 | 0/19 |
+| Precisión de lo **hablado** | — | 77,3 % | 95,8 % (23 correctas, 1 fuera de referencia) |
+
+- Lo hablado, prueba de humo antes → después de R3: Tita «TITA» «Terrabus» «EXCESO EN»
+  «AZÚCARES»… → «TITA» «Terrabus» «EXCESO EN AZÚCARES» «EXCESO EN GRASAS TOTALES»…; Ashwa
+  «ASHWA» «FORCE» «HEWLOOE» «AMAZING» → «FORCE AMAZING ASHWA»; Fusion «fusion» «haur skin &na»
+  → «fusion». R3 pierde una palabra correcta («hair»).
+- OCR caliente: P50 ~300 ms por frame (rango 240–410 ms según recorte), CPU, 4 hilos.
+- Suite: 502 aprobados en la rama (con extras); 499 + 3 omitidos sin extras.
+
+**Hallazgo.** La letra chica no se puede leer con la ELP a 1920×1080: ningún recorte la recupera,
+porque recortar no agrega detalle que el sensor no capturó. La beta lee títulos y leyendas
+grandes; a 1 m casi solo el título. Los CER altos también reflejan que la referencia incluye
+leyendas que no se ven desde ese ángulo.
+
+**Límites.** 3 envases, n = 1 por celda, sin repeticiones: muy lejos de los 30 textos de M10.
+`lectura-b` está incompleto en Drive (sus 2 segmentos quedaron como piloto parcial). Sin audio
+real; tiempos de Windows CPU, no de la Mac.
+
+**Próximo paso.** En la beta, probar lectura a 25–40 cm, que es donde funciona; grabar textos
+propios para M10.
+
+## 2026-11-16 — PC de escritorio de Tomás como equipo de pruebas Windows
+
+**Tarea:** T01/T02. **Persona/agente:** Tomás / Claude Code.
+
+**Hecho.**
+- Tomás pasa a probar en su PC de escritorio: i7-10700K (8 núcleos/16 hilos), 32 GB, AMD RX 5700
+  XT. **Sin CUDA:** la RX 5700 XT (RDNA1) tampoco tiene ROCm en Windows; todo corre en CPU. La
+  laptop deja de usarse para medir.
+- Clon en `D:\VisionX`; uv 0.13.8, Python 3.11.18, extras ml/deteccion/voz/ocr; `doctor` OK.
+- **Bloqueo resuelto:** el DNS de Movistar resolvía `files.pythonhosted.org` a 127.9.9.9
+  («walledgardenloopback.telefonica»), así que no se podía bajar ningún paquete de PyPI. Tomás
+  puso 1.1.1.1/8.8.8.8 en la placa de red. Si vuelve a fallar `uv sync`, revisar esto primero.
+- Pesos: yolo26s-seg (SHA-256 `3da1d83e…`, igual al de la BITACORA del 15/11), yolo26n-seg
+  (`361fbfab…`), Piper es_AR-daniela-high, faster-whisper small y base, DA V2 Small y RapidOCR.
+- Clips de Drive copiados a `recordings/` (18 868 archivos, 5,4 GB) y calibraciones a
+  `data/calibraciones/` (978). `camera verificar`: lectura 2035/2035 pares con hash correcto.
+  Incompletos en Drive: `lectura-b`, `iguales` y `m2` (ver entrada de la beta).
+- Audio: micrófono por defecto Yeti Nano, salida auriculares HyperX. `voice decir`: síntesis 2,7 s
+  para 5,5 s de audio y 0,8 s hasta que empieza a sonar (primera llamada).
+- Cámaras: solo está conectada la C922; la ELP no se probó en esta PC.
+
+**Límites.** Ninguna medición de esta PC representa la Mac de la demo.
+
 ## 2026-11-15 — T09 mejoras: vertical, distancia por capa, detector yolo26s @960, guía y demos
 
 **Tarea:** T09 (y default de T06). **Persona/agente:** Tomás / Claude Code. **Rama:**
