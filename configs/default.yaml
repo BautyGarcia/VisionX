@@ -121,7 +121,14 @@ modes:
 
 # Descripción local de una escena (T11). Sin VLM ni conexión a internet.
 describe:
-  max_objects: 8            # priorizar nombres sobre detalle métrico al ajustar el presupuesto
+  # Prioridad (recortar de 4 hacia 1, sin acelerar la voz):
+  # 1. Metros del afirmado más cercano de la escena; de cada zona mientras alcance.
+  # 2. Nombres afirmados por relevancia (cercanía, persona/área, índice estable).
+  # 3. Metros del resto de afirmados. 4. Los «parece haber».
+  # Los representantes de zona se retiran después de los otros nombres; el global nunca.
+  # Si se recortan nombres (también por max_objects), cerrar con «y N cosas más».
+  # Un override menor al hecho global mínimo con conteo conserva metros aunque se exceda.
+  max_objects: 8
   # R3: desarrollo, 39 frames / 247 candidatos revisados (197 con respaldo, 50 sin él).
   # Curva y etiquetas: outputs/t11/ronda3/. No probabilidades ni test independiente.
   min_score: 0.6            # afirmación: score actual Y previo >= este corte (y el de su clase)
