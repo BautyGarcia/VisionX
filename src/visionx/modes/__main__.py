@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from collections import Counter
 from pathlib import Path
@@ -292,8 +293,9 @@ def cmd_demo(args: argparse.Namespace) -> int:
         print(f"demo: {out} ({end:.1f} s, con audio)")
     else:
         silent = out.with_name(out.stem + "-sin-audio.mp4")
-        tmp.joinpath("video.mp4").replace(silent)
-        tmp.joinpath("audio.wav").replace(out.with_suffix(".wav"))
+        # move y no replace: el temporal puede estar en otro disco (C: contra D: en Windows).
+        shutil.move(tmp / "video.mp4", silent)
+        shutil.move(tmp / "audio.wav", out.with_suffix(".wav"))
         print(f"sin ffmpeg: video {silent} y audio {out.with_suffix('.wav')} por separado")
     for s in result.spoken:
         print(f"  {s.t_s:7.2f} s  [#{s.request_id}] {s.text}")
