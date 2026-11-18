@@ -908,6 +908,52 @@ reflejos y objetos de clases de la app. Sin personas.
   es GT: tiene baja resolución, error propio y hay que alinearlo con la ELP. No entra en las
   métricas principales.
 
+**Protocolo de grabación del banco ELP (17/11).** Una sesión lleva ~2 h (calentamiento
+aparte). Planilla por escena: `datasets/banco-elp-plantilla.yaml`.
+
+*Reparto, fijado antes de grabar:* sesiones `s1` y `s2` son de **desarrollo**; `s3`, `s4` y `s5`
+son de **test**. De las de test se puede mirar la imagen para ubicar los stickers, pero no se
+corre ningún método de profundidad sobre ellas hasta la evaluación final.
+
+*Qué llevar:* cámara y Mac, trípode o mesa firme, nivel (el del teléfono sirve), cinta métrica,
+cinta de papel para el piso, plomada o escuadra, stickers de ~1 cm numerados, damero A3,
+teléfono para fotos del armado.
+
+*Antes de la primera escena de cada sesión:*
+1. Cámara apoyada donde va a grabar y **transmitiendo al menos 40 minutos** (`camera ver`): la
+   disparidad deriva con la temperatura (~1 px en frío, ~8 % a 3 m; BITACORA 2026-11-11).
+2. Nivelar la cámara. Marcar en el piso, con cinta de papel, una línea bajo el **vidrio de las
+   lentes**, paralela a la línea que une los dos ojos. Todas las distancias salen de esa línea.
+3. Control del día: el damero de frente a ~1,5 m medido con cinta, 5 s de grabación
+   (`sN-control`). Sirve para ver si la corrección de disparidad del 13/11 sigue valiendo.
+
+*Cada escena (8 por sesión):*
+1. Armar la escena sin personas. Entre las 8 tiene que haber: al menos 2 con una pared o
+   superficie lisa grande, al menos 2 con reflejos o contraluz, al menos 4 con objetos de las
+   clases de la app (botella, taza, silla, mochila…), y 1–2 con el damero dentro de la escena.
+2. Pegar **6 a 8 stickers** repartidos entre 0,5 y 3 m: al menos uno cerca de 0,5 m, uno
+   cerca de 3 m, dos sobre superficies lisas y dos sobre objetos de la app. No pegarlos en
+   bordes de objetos: la ventana de evaluación tiene que caer sobre una sola superficie.
+3. Medir cada sticker: distancia **perpendicular** desde la línea del piso hasta la vertical del
+   sticker (bajar el punto al piso con plomada o escuadra). Es la profundidad axial, no la
+   distancia en diagonal. Anotar la lectura en metros con milímetros; no sumar los 13 mm (se
+   suman al evaluar). Un sticker por sesión se mide tres veces para estimar el error de la cinta.
+4. Foto del armado con el teléfono (que se vean los números de los stickers).
+5. Grabar 10 s con la cámara quieta:
+   `uv run python -m visionx.camera grabar recordings/banco-sN-eMM --segundos 10 --cada 4
+   --config configs/local.yaml --nota "sN eMM: lugar, luz, qué hay"`.
+6. Completar la planilla de la escena y guardarla como `recordings/banco-sN-eMM/escena.yaml`.
+7. No mover la cámara entre escenas si no hace falta; si se mueve, volver a nivelar y a marcar
+   la línea del piso.
+
+*Al cerrar la sesión:* `camera verificar` de cada carpeta, copiar a Drive
+(`VisionX-artefactos/banco-elp/sN/`), y registrar en BITACORA lugar, luz, minutos de
+calentamiento, cantidad de escenas y puntos, y cualquier desvío. Para las sesiones de test,
+anotar además el hash del manifiesto de cada escena.
+
+*Límites conocidos:* la cinta da ±1 cm con cuidado; los stickers agregan algo de textura (por
+eso son chicos); 40 escenas con 6–8 puntos son ~280 puntos, no un mapa denso.
+
 Una cinta mide puntos/superficies concretas; un tablero da plano donde está el tablero, no GT
 denso del fondo. Separar ROI manual, máscara predicha y superficie realmente referenciada.
 

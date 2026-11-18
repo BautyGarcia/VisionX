@@ -40,6 +40,26 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-17 — T04: protocolo de grabación del banco ELP; ablación de Fusion que faltaba
+
+**Tareas:** T04, T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T04-protocolo-banco`.
+
+**Hecho (documental, sin mediciones).** Protocolo de grabación del banco ELP en TECNICO («Datos
+y GT — T04») y planilla `datasets/banco-elp-plantilla.yaml`. Fija antes de grabar: `s1`–`s2`
+desarrollo y `s3`–`s5` test; 40 min de calentamiento (deriva térmica medida el 11/11); línea de
+referencia bajo el vidrio; 6–8 stickers por escena medidos como profundidad axial; control del
+día con el damero; 10 s por escena con `camera grabar`. Sin pruebas de software: revisión de
+coherencia con las decisiones del 13/11.
+
+**Fusion, ablación pendiente (`v2-f3-b4-sindil-s0`, F3 sobre B4 sin bloques dilatados, 4,21 M
+parámetros; 20 épocas).** InStereo2K val: EPE 1,693 px en las 102 muestras (B5 1,799) y 1,570
+en las 97 comparables (B5-EPE 1,676), mejor época la 2; última época 1,725. Queda en el rango
+de las dos semillas con dilataciones (1,678 y 1,681). No se evaluó en el dev fuera de dominio.
+No cambia la decisión del 17/11.
+
+**Próximo paso.** Grabar la sesión `s1` (Bauty, con la cámara); después, herramienta para marcar
+los stickers en la imagen izquierda rectificada y evaluador por puntos.
+
 ## 2026-11-17 — T09 (parte A): ubicación espacial en `depth/spatial/`
 
 **Tarea:** T09, parte de A. **Persona/agente:** Bauty / Claude Code (coordinador + subagente).
