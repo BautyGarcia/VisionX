@@ -153,17 +153,52 @@ class Painter:
         return cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR)
 
 
+# Escala del panel de profundidad: logarítmica entre estos metros. Con una escala lineal que
+# terminaba en el borde del rango anunciado (3 m), todo lo de más de 3 m (en el clip de
+# distancias, más de la mitad del centro: el pasillo a 3–6 m) salía de un mismo azul.
+PANEL_RANGE_M = (0.4, 8.0)
+PANEL_TICKS_M = (0.5, 1, 2, 3, 5, 8)
+LEGEND_H = 34
+
+
+def _depth_colors(z: np.ndarray) -> np.ndarray:
+    """Metros -> BGR (rojo cerca, azul lejos), escala logarítmica en PANEL_RANGE_M."""
+    near, far = PANEL_RANGE_M
+    z = np.clip(np.nan_to_num(z, nan=far), near, far)
+    norm = np.log(z / near) / np.log(far / near)
+    return cv2.applyColorMap((255 * (1 - norm)).astype(np.uint8), cv2.COLORMAP_TURBO)
+
+
+def depth_legend(width: int, range_m: tuple[float, float]) -> np.ndarray:
+    """Barra de colores con marcas en metros; la marca del límite anunciado va en blanco."""
+    legend = np.zeros((LEGEND_H, width, 3), np.uint8)
+    near, far = PANEL_RANGE_M
+    xs = np.linspace(0, 1, width)
+    bar = _depth_colors(near * (far / near) ** xs).reshape(1, width, 3)
+    legend[2:12] = np.repeat(bar, 10, axis=0)
+    for tick in PANEL_TICKS_M:
+        x = int(round((width - 1) * np.log(tick / near) / np.log(far / near)))
+        color = (255, 255, 255) if tick == range_m[1] else (170, 170, 170)
+        cv2.line(legend, (x, 12), (x, 16), color, 1)
+        label = f"{tick:g}".replace(".", ",") + (" m" if tick == PANEL_TICKS_M[-1] else "")
+        size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0][0]
+        x0 = min(max(0, x - size // 2), width - size)
+        cv2.putText(legend, label, (x0, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
+    return legend
+
+
 def depth_panel(view: View, range_m: tuple[float, float]) -> np.ndarray:
-    panel = np.zeros((SIDE_W * 9 // 16, SIDE_W, 3), np.uint8)
+    """Profundidad de la unión medida (negro: sin dato) y su escala debajo."""
+    map_h = SIDE_W * 9 // 16
+    panel = np.zeros((map_h + LEGEND_H, SIDE_W, 3), np.uint8)
+    panel[map_h:] = depth_legend(SIDE_W, range_m)
     joint = view.measured
     if joint is None or joint.depth is None or joint.depth.depth_m is None:
         return panel
-    near, far = range_m
-    z = np.nan_to_num(joint.depth.depth_m, nan=0.0)
-    norm = np.clip((z - near) / (far - near), 0, 1)
-    color = cv2.applyColorMap((255 * (1 - norm)).astype(np.uint8), cv2.COLORMAP_TURBO)
+    color = _depth_colors(joint.depth.depth_m)
     color[~joint.depth.valid_mask] = 0
-    return cv2.resize(color, (panel.shape[1], panel.shape[0]), interpolation=cv2.INTER_AREA)
+    panel[:map_h] = cv2.resize(color, (SIDE_W, map_h), interpolation=cv2.INTER_AREA)
+    return panel
 
 
 @dataclass(slots=True)

@@ -60,6 +60,11 @@ class ModeSettings:
     # Ritmo de la voz durante la guía.
     min_interval_s: float = 1.2  # entre dos frases de guía
     repeat_s: float = 4.0  # repetir la dirección aunque no cambie
+    # Metros nuevos durante la guía: se dicen solos («A 2 metros.») si cambiaron al menos esto
+    # (lo mayor de los dos). Evita repetir la frase entera por un redondeo o por el borde del
+    # rango (2,95 «a 3 metros» contra 3,05 «más de 3 metros»).
+    distance_change_m: float = 0.3
+    distance_change_frac: float = 0.15
     # Duración estimada de una frase hablada: base + por carácter. Piper es_AR (daniela, rate
     # 1,0) mide 50–70 ms por carácter. La guía no habla encima de su frase anterior: si lo
     # hiciera, las frases se encolarían y la dirección llegaría tarde.

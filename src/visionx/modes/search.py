@@ -90,6 +90,12 @@ class SearchHandler:
         self._stall_reported = False
         self._h_word: str | None = None  # últimas zonas dichas, para la histéresis
         self._v_word: str | None = None
+        # Lo último dicho en la guía: dónde y qué Z (para no repetir lo mismo con otras palabras).
+        self._said_where: str | None = None
+        self._said_z: float | None = None
+        # Lo que trae la frase que se está por decir (lo arma `_guide_fact`).
+        self._fact_where: str | None = None
+        self._fact_measure: Measure | None = None
 
     # -- interfaz ModeHandler --------------------------------------------------------------
 
@@ -298,6 +304,7 @@ class SearchHandler:
         self._selected = self.target
         self._choices = []
         self._h_word = self._v_word = None
+        self._said_where = self._said_z = None
         self.memory.remember(self.target)
         self._measure = None
         self._event("adquirido", {"angulo_h": round(c.angle_h_deg, 1), "track_id": c.track_id,
@@ -309,8 +316,9 @@ class SearchHandler:
                 valid_until_ns=c.received_ns + int(self.s.max_age_s * 1e9),
                 fact_received_ns=c.received_ns,
             ),
-            self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received),
-        ]
+            self._said(self._phrase(text, now_ns, valid_until_ns=valid_until,
+                                    fact_received_ns=received)),
+        ]  # fmt: skip
 
     def _guide(self, name: str, now_ns: int) -> list[Say]:
         text, valid_until, received = self._guide_fact(name, now_ns)
@@ -321,16 +329,39 @@ class SearchHandler:
                 else []
             )
         since = None if self._last_say_ns is None else (now_ns - self._last_say_ns) / 1e9
-        changed = text != self._last_phrase
         # Ni antes del mínimo ni mientras la frase anterior todavía suena (no encolar guía vieja).
         speaking = speech_s(self._last_phrase or "", self.s) + 0.2
         if since is not None and since < max(self.s.min_interval_s, speaking):
             return []
-        if changed or since is None or since >= self.s.repeat_s:
-            return [
-                self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received)
-            ]
+        m = self._fact_measure
+        if since is None or since >= self.s.repeat_s or self._fact_where != self._said_where:
+            say = self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received)
+            return [self._said(say)]
+        if m is not None and self._distance_news(m):
+            # Misma dirección y metros nuevos: solo los metros, no la frase entera otra vez.
+            short = measure_phrase(m, self.s)
+            say = self._phrase(short[0].upper() + short[1:] + ".", now_ns,
+                               valid_until_ns=valid_until, fact_received_ns=received)  # fmt: skip
+            return [self._said(say)]
         return []
+
+    def _distance_news(self, m: Measure) -> bool:
+        """¿Vale la pena decir esta medida? Sí si no se dijo ninguna o si cambió lo suficiente;
+        un cambio chico (redondeo, borde del rango) no es noticia."""
+        if m.z_m is None:
+            return False
+        if self._said_z is None:
+            return True
+        delta = abs(m.z_m - self._said_z)
+        return delta >= max(self.s.distance_change_m, self.s.distance_change_frac * self._said_z)
+
+    def _said(self, say: Say) -> Say:
+        """Registra qué quedó dicho de la guía (dirección y Z) si la frase sale."""
+        if say.text_or_sound:
+            self._said_where = self._fact_where
+            if self._fact_measure is not None and self._fact_measure.z_m is not None:
+                self._said_z = self._fact_measure.z_m
+        return say
 
     def _guide_fact(self, name: str, now_ns: int) -> tuple[str, int, int]:
         assert self.target is not None
@@ -340,6 +371,7 @@ class SearchHandler:
         v_word = vertical(self.target.angle_v_deg, self.s, self._v_word)
         self._h_word, self._v_word = h_word, v_word
         where = h_word + v_word
+        self._fact_where, self._fact_measure = where, None
         # Metros y llegada con el objeto al frente o "un poco" a un lado (|h| <= side_deg): en
         # la demo de la silla, caminando hacia ella quedaba a 9–20° y nunca "llegaba".
         ahead = abs(self.target.angle_h_deg) <= self.s.side_deg
@@ -354,6 +386,7 @@ class SearchHandler:
                 return (f"Llegaste: {name} {where}, {measure_phrase(m, self.s)}.",
                         min(valid_until, measured_until), received)  # fmt: skip
             if m.ok or m.reason in ("muy-cerca", "muy-lejos"):
+                self._fact_measure = m
                 return (f"{name.capitalize()} {where}, {measure_phrase(m, self.s)}.",
                         min(valid_until, measured_until), received)  # fmt: skip
         return f"{name.capitalize()} {where}.", valid_until, self.target.last_seen_ns

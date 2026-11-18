@@ -488,7 +488,8 @@ def test_meters_during_guidance_only_when_fresh_and_valid_and_arrival_ends():
     says, _ = h.tick(c, View(joint(11.2, 112, [("cup", 0, None)]), m2b), int(11.2 * SEC))
     assert texts(says) == []
     says, _ = h.tick(c, View(joint(11.5, 115, [("cup", 0, None)]), m2b), int(11.5 * SEC))
-    assert texts(says) == ["Taza al frente, a 1,4 metros."]
+    # misma dirección que la frase anterior: solo los metros nuevos, no la frase entera
+    assert texts(says) == ["A 1,4 metros."]
     m3 = joint(11.6, 116, [("cup", 0, None, 0.55, SPEAK)], measured=True)
     says, done = h.tick(c, View(joint(11.7, 117, [("cup", 0, None)]), m3), int(11.7 * SEC))
     assert done and texts(says) == ["Llegaste: taza al frente, a 0,6 metros."]
@@ -1649,3 +1650,26 @@ def test_describe_medium_match_cannot_leave_orphan_high_metrics():
     says, done = h.tick(c, View(m, m), int(1.3 * SEC))
     assert done and texts(says) == ["A la derecha, parece haber una taza."]
     assert len(h.facts.presence) == 1 and not h.facts.measured
+
+
+def test_guidance_does_not_repeat_small_distance_changes():
+    """Metros nuevos se dicen solos; un cambio chico (o el borde del rango) no se repite y
+    perder la medida no es noticia. Un cambio de dirección sí vuelve a la frase entera."""
+    h, c = search(), cmd(Mode.SEARCH, "cup", deadline_s=60)
+    h.start(c, View(), 0)
+    first, _ = run(h, c, [joint(0.1 * i, i, [("cup", 0, None)]) for i in range(1, 4)])
+    assert "Taza al frente." in [t for _, t in first]
+
+    def at(t, z=None, h_deg=0):
+        m = None
+        if z is not None:
+            m = joint(t - 0.1, int(t * 10) - 1, [("cup", h_deg, None, z, SPEAK)], measured=True)
+        live = joint(t, int(t * 10), [("cup", h_deg, None)])
+        return texts(h.tick(c, View(live, m), int(t * SEC))[0])
+
+    assert at(2.0, 2.9) == ["A 2,9 metros."]
+    assert at(3.4, 3.1) == []  # borde del rango (2,9 → 3,1 «más de 3»): no es noticia
+    assert at(4.8) == []  # sin medida nueva: nada
+    assert at(5.0, 2.2) == ["A 2,2 metros."]  # cambió 0,85 m
+    assert at(6.4, 2.1) == []  # 0,1 m: redondeo, no se repite
+    assert at(7.8, 2.1, h_deg=-30) == ["Taza a la izquierda."]  # otra dirección: frase entera
