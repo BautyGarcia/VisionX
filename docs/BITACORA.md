@@ -40,6 +40,34 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-17 — T08: prueba de micrófono (M10 voz) con Whisper base y small
+
+**Tarea:** T08. **Persona/agente:** Tomás (locutor) / Claude Code. **Rama:** `b/beta-integracion`.
+**Equipo:** PC de escritorio (i7-10700K, CPU), micrófono Yeti Nano (WASAPI, 48 kHz → 16 kHz),
+habitación con ruido bajo, ~30 cm de la boca. Una persona, una sesión.
+
+**Hecho.** `protocolos voz plantilla|grabar|evaluar` con las 61 frases de T08: 61/61 tomas
+aceptadas al primer intento; las mismas WAV pasaron por faster-whisper base y small (int8,
+`initial_prompt` de la config). Evidencia: `outputs/voz/tomas-1117/resultados/` (fuera de Git).
+
+| Modelo | intención | objeto (n = 24) | STT P50 / P95 |
+|---|---|---|---|
+| base | 78,7 % | 70,8 % | 421 / 457 ms |
+| small | **96,7 %** (59/61) | 95,8 % | 1347 / 1783 ms |
+
+- **Decisión: Whisper small** (ya era el default): supera el umbral de M10 (≥ 90 %); base no.
+- Los 2 fallos de small son la «ll» rioplatense: «Llevame a la silla» → «Chebame la silla»,
+  «Callate» → «Cachate» (este es un modo de cancelar). Base además falla en «Leé la etiqueta» →
+  «Leila etiqueta», «Stop» → «Esto», «Buscá el teclado» → «Buscal de clado».
+- Costo: ~1,35 s de STT por orden; en vivo, orden → primera palabra estimado en 2–2,5 s.
+
+**Límites.** Un solo locutor y una sesión; las frases las leyó Tomás (no espontáneas). No mide
+latencia audible ni el botón en vivo.
+
+**Próximo paso.** Agregar variantes «sh» de «ll» (llevame, callate) a las reglas o al
+`initial_prompt` y validarlas con otra grabación (Bauty), no con esta misma; sesión en vivo
+con la ELP.
+
 ## 2026-11-17 — Beta (tarde): profundidad a pedido, Fusion/B5 enchufables, M1, protocolos y revisión
 
 **Tarea:** T07, T08, T09, T10, T11 (y recepción de T12). **Persona/agente:** Tomás / Codex
