@@ -160,8 +160,11 @@ spatial:
   bottom_band_px: 2         # franja inferior (px de la grilla de profundidad) para esa regla
 
 # Modos buscar y distancia (T09, src/visionx/modes/). Candidatos sin medir: M1/M7/M8 los fijan.
-# El rango que se anuncia en metros sale de depth.range_m.
+# El rango que se anuncia en metros: modes.range_m (si falta, depth.range_m).
 modes:
+  range_m: [0.5, 5.0]       # metros que se dicen; 3–5 m aproximados (abajo). Candidato: 3–5 m sin cinta
+  approx_from_m: 3.0        # desde acá «a unos 4,5 metros» (error ~Z²; bolso a 3 m: 3,05 ± 0,08 con B0)
+  approx_round_m: 0.5       # redondeo del tramo aproximado
   center_deg: 8.0           # |ángulo| <= esto: "al frente" (grados; + a la derecha)
   side_deg: 25.0            # <= esto: "un poco a la izquierda/derecha"; más: "a la izquierda"
   vertical_deg: 15.0        # |ángulo vertical| > esto: se agrega "arriba"/"abajo" (respecto de la cámara)

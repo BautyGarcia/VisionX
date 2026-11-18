@@ -74,6 +74,10 @@ class ModeSettings:
     # Metros.
     range_m: tuple[float, float] = (0.5, 3.0)  # fuera de esto no se dice un número
     round_m: float = 0.1  # redondeo de lo que se dice
+    # Lejos el error crece con Z²: desde acá los metros son aproximados («a unos 4,5 metros»),
+    # redondeados a approx_round_m. Con approx_from_m >= range_m[1] no hay tramo aproximado.
+    approx_from_m: float = 3.0
+    approx_round_m: float = 0.5
     arrive_m: float = 0.6  # al frente y a esta distancia o menos: "llegaste"
     # Distancia: un frame medido vale si llegó a lo sumo esto ANTES de la orden.
     accept_before_s: float = 0.5
@@ -285,8 +289,12 @@ def direction(angle_h_deg: float, s: ModeSettings, angle_v_deg: float | None = N
     return horizontal(angle_h_deg, s) + vertical(angle_v_deg, s)
 
 
-def meters(z_m: float, s: ModeSettings) -> str:
-    """Metros redondeados para decir: 1,07 -> "1,1 metros"; 1,0 -> "1 metro"."""
+def meters(z_m: float, s: ModeSettings, *, approx: bool = True) -> str:
+    """Metros redondeados para decir: 1,07 -> "1,1 metros"; 1,0 -> "1 metro". Más allá de
+    `approx_from_m` (y con `approx`), aproximados: 4,3 -> "unos 4,5 metros"."""
+    if approx and z_m > s.approx_from_m:
+        r = round(round(z_m / s.approx_round_m) * s.approx_round_m, 2)
+        return f"unos {r:g} metros".replace(".", ",")
     r = round(round(z_m / s.round_m) * s.round_m, 2)
     text = f"{r:g}".replace(".", ",")
     return "1 metro" if r == 1 else f"{text} metros"
@@ -330,8 +338,8 @@ def measure_phrase(m: Measure, s: ModeSettings) -> str:
         return f"a {meters(m.z_m, s)}"  # type: ignore[arg-type]
     near, far = s.range_m
     return {
-        "muy-cerca": f"muy cerca, a menos de {meters(near, s)}",
-        "muy-lejos": f"lejos, a más de {meters(far, s)}",
+        "muy-cerca": f"muy cerca, a menos de {meters(near, s, approx=False)}",
+        "muy-lejos": f"lejos, a más de {meters(far, s, approx=False)}",
         "reencuadrar": "pero está cortado en el borde: girá un poco hacia ese lado",
         "sin-medida": "pero no puedo medir su distancia",
         "sin-profundidad": "pero todavía no pude medir su distancia",

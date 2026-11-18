@@ -7,6 +7,7 @@ El reloj es manual: los tiempos son exactos y no dependen de la máquina.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import replace
 from types import SimpleNamespace
@@ -1673,3 +1674,17 @@ def test_guidance_does_not_repeat_small_distance_changes():
     assert at(5.0, 2.2) == ["A 2,2 metros."]  # cambió 0,85 m
     assert at(6.4, 2.1) == []  # 0,1 m: redondeo, no se repite
     assert at(7.8, 2.1, h_deg=-30) == ["Taza a la izquierda."]  # otra dirección: frase entera
+
+
+def test_far_meters_are_approximate_up_to_the_range_end():
+    """Entre approx_from_m y range_m[1] los metros se dicen aproximados («unos 4,5 metros»);
+    más allá, «lejos, a más de 5 metros» (el límite no se aproxima)."""
+    from visionx.modes.common import Measure, measure_phrase, meters
+
+    far = dataclasses.replace(S, range_m=(0.5, 5.0), approx_from_m=3.0, approx_round_m=0.5)
+    assert meters(2.94, far) == "2,9 metros"
+    assert meters(3.0, far) == "3 metros"
+    assert meters(4.3, far) == "unos 4,5 metros"
+    assert meters(3.2, far) == "unos 3 metros"
+    assert measure_phrase(Measure(4.0, None), far) == "a unos 4 metros"
+    assert measure_phrase(Measure(6.2, "muy-lejos"), far) == "lejos, a más de 5 metros"
