@@ -40,6 +40,317 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 — T07/T08/T10/T11/T20: asistente con Claude, guía que corta, caché de voz y alerta de cercanía
+
+**Tareas:** T07, T08, T10, T11, T20 (y registro de T12). **Persona/agente:** Tomás (decisiones) /
+Claude Code (noche del 18 al 19/11, sin supervisión). **Rama:** `b/beta-integracion` (PR #27).
+
+**Pedido de Tomás (18/11).** Las demos de leer sonaban robóticas («TITA», «EXCESO EN AZÚCARES»
+sueltos); quiere algo interactivo («adelante tenés un envase médico que dice "Fusion"») y poder
+preguntarle cualquier cosa a la IA. En buscar, si el objeto cambia de lado, la frase vieja tiene
+que cortarse. Decisiones suyas: Claude por API (no local), en leer + describir + preguntas libres,
+citas verificadas contra el OCR, memoria corta, guía con corte y frases cortas; tope de gasto de
+la API de 2 USD para la noche.
+
+**Elección del modelo (medida).** 20 casos de los clips (6 leer, 5 describir, 9 preguntas) con
+Opus 5.5, Sonnet 5.5 y Haiku 5.5, effort low, imagen 1280×720, streaming
+(`outputs/vlm/comparar.py`, informe local `outputs/vlm/comparativa.html`, 0,33 USD):
+
+| | Opus 5.5 | Sonnet 5.5 | Haiku 5.5 |
+|---|---|---|---|
+| Primera palabra, mediana / P90 | 1,79 / 3,36 s | 0,91 / 1,31 s | 0,55 / 0,90 s |
+| Respuesta completa, mediana | 3,14 s | 2,31 s | 1,23 s |
+| USD por consulta | 0,011 | 0,0047 | 0,00025 |
+| Citas confirmadas por el OCR | 17/18 | 17/23 | 16/21 |
+
+Haiku dijo que las Tita «parecen saladas» (con el sello de exceso de azúcar) y contó 2 notebooks
+donde hay 3. Tomás eligió **Sonnet 5.5**.
+
+**Hecho.**
+- `visionx.assistant`: imagen + OCR + objetos medidos a Claude por streaming; entrega de a
+  frases; `verify_quotes` pasa a «parece decir X» lo citado que el OCR no confirma; memoria de
+  2 min; gasto por consulta en `outputs/vlm/gasto.jsonl` con tope (`assistant.budget_usd`, 5 USD
+  por defecto). En replay, cada frase llega al modo cuando su reloj avanzó lo que tardó la API
+  (`Delivery`): las demos no adelantan respuestas.
+- Leer: «Adelante tenés … que dice …» con el OCR de la imagen elegida; «leé todo» y cualquier
+  falla vuelven a la lectura por bloques. Describir: frases naturales con los metros del estéreo,
+  sin esperar la confirmación en varios cuadros (Claude ve la imagen). Preguntas libres: con el
+  asistente, lo que no es una orden va como pregunta (acuse `sonido:ok`); «¿para qué sirve…?»
+  ya no es «pará». Sin red o sin key: todo como antes.
+- Guía de buscar: `Say.replace` corta lo que suena si la dirección cambió (después de
+  `preempt_min_s` 0,6 s) y las frases siguientes no repiten el nombre («Un poco a la izquierda.»).
+- Voz: `voice precalentar` generó 866 frases frecuentes en `data/cache/voz` (220 s, 0 errores,
+  150 MB; copia en Drive `VisionX-artefactos/voz/cache-mateo/`). La síntesis de Edge se adelanta
+  apenas la frase entra a la cola: sin eso quedaba ~1 s de silencio entre frases de una respuesta.
+- T20 alerta de cercanía (`app/proximity.py`): zona central, piso y techo excluidos por altura
+  con la cámara nivelada, persistencia, profundidad fresca, prioridad ALERT, pausa, callada en
+  leer/buscar/distancia y 5 s después de una orden. **Apagada por defecto** (ver evidencia).
+- «Calibrar distancia» (`app/calibrate.py`): «calibrá, está a 2 metros» llama a
+  `calibrar_distancia(frame, mask, z_m)` del estimador si existe (acuerdo con Bauty).
+- `crestereo` / `crestereo-preciso` en el registro; `latencias --traza` (tabla por orden desde
+  que se suelta el botón); `docs/PRUEBA-EN-VIVO.md` para la Mac.
+
+**Evidencia.**
+- Tests: 1108 OK (unos 40 nuevos), ruff OK. Ningún test llama a la API ni ve la key (`tests/conftest.py`).
+- CREStereo desde el registro, CPU de la PC (`outputs/recepcion/1119-crestereo/`): P50 1738 ms
+  (B0 287 ms); vaso / taza / botella 0,530 / 1,053 / 1,053 m contra cinta 0,50 / 1,00 / 1,00 (B0
+  0,525 / 1,069 / 1,035). En la Mac Bauty midió 120 ms el continuo (BITACORA 2026-11-18).
+- Demos con asistente (Drive `VisionX-artefactos/demos/beta-1119/`): leer y preguntas sobre
+  `lectura` (TITA, Ashwa, Fusion, «¿es dulce o salado?», «¿para qué sirve?», «¿cuántas
+  cápsulas trae?» → «parece decir 120 cápsulas, no lo puedo asegurar»; la etiqueta dice 120);
+  describir y preguntas sobre `escenas` (con la cámara al techo responde que no puede ver y usa
+  lo dicho antes). Primera frase de Claude 1,2–2,3 s después de la orden en las demos.
+- Problemas que mostraron y se corrigieron: «alfajores Tita» (son galletitas), «alguien tiene la
+  caja» (son las manos de la persona), «la cámara detectó como horno», descripciones de 4–5
+  frases, y la guía que cortaba cada 0,4 s al barrer (pasó a 0,6 s).
+- Alerta de cercanía con B0 en clips (`outputs/beta/evaluar_cercania.py`): avisa a 0,64 m de una
+  puerta y a 0,74 m de una pared (`acercarse-2/3`), no avisa al acercarse a la silla; en la
+  recorrida por la casa (211 s) 6 avisos: escalera a la altura de la cabeza y mesa (razonables),
+  pared lisa, contraluz y techo (falsos), y uno justo después de «Llegaste» en `buscar-a`.
+- Gasto de VisionX en la API en la noche: 19 consultas, 0,10 USD (`outputs/vlm/gasto.jsonl`).
+
+**Incidente con la key (19/11, corregido).** Se había guardado la key de VisionX como variable de
+usuario `ANTHROPIC_API_KEY`. Al reiniciarse la sesión de Claude Code, la CLI la tomó sola y cobró
+la conversación a esa key hasta agotar sus 5 USD (el tope de 2 USD solo controlaba a VisionX).
+Corrección: la variable se borró; la key vive en `~/.visionx/anthropic_api_key` (solo el usuario
+puede leerla), el asistente la lee de ahí y se la pasa explícita al SDK, ignora
+`ANTHROPIC_API_KEY`, y los tests no pueden encontrarla. Regla: **nunca** guardar la key de
+VisionX como `ANTHROPIC_API_KEY` (tampoco en la Mac) y usar un workspace con tope de gasto.
+
+**Límites.** Todo sobre clips grabados en la PC de escritorio: falta la prueba en vivo en la Mac
+(latencia real de punta a punta, micrófono, red del lugar). El asistente necesita internet; la
+voz también (lo frecuente está en caché). Las respuestas de Claude no tienen un test cuantitativo
+(solo 20 casos de comparación y las demos). La alerta no se probó con CREStereo ni caminando.
+`scripts/profundidad/descargar_crestereo.py` falla en Windows al borrar `.git` (solo lectura).
+
+**Próximo paso.** Prueba en vivo en la Mac con `docs/PRUEBA-EN-VIVO.md` (Tomás y Bauty);
+`latencias --traza` para la tabla; probar la alerta con `proximity.enabled: true` y CREStereo.
+
+## 2026-11-19 — T12/T04: distancia conocida en cámaras hermanas y evaluador del banco
+
+**Tareas:** T12, T04, T15. **Persona/agente:** Bauty (indicó seguir sin supervisión durante la
+noche) / Claude Code. **Rama:** `a/T12-distancia-conocida-y-banco`, apilada sobre el PR #35.
+
+**Hecho (código).**
+- `hermanas` emula el paso de distancia conocida: saca del primer par el corrimiento constante
+  de disparidad y lo aplica a los demás; ese primer par no se evalúa.
+- `src/visionx/depth/bench.py`: lectura de `escena.yaml` y `puntos.yaml`, medición por punto,
+  resumen por rango, intervalo de 90 % en metros y factor de recalibración de b; comandos
+  `marcar` y `evaluar`; rechazo de las sesiones de test sin `--test-congelado`.
+- Tests: `tests/test_depth_bench.py` (7).
+
+**Evidencia.** `uv run pytest tests/test_depth_bench.py`: 7 aprobados. Artefacto
+`outputs/profundidad/20261119-041404-hermanas-*`. Tablas en
+[TECNICO](TECNICO.md#corrección-clásica-más-distancia-conocida-1911).
+- **Cámaras hermanas con distancia conocida** (7 pares, 3 cámaras por nivel): con la mitad de
+  los rangos, sin corregir 14,5 / 33,3 / 28,1 %; regla de cuatro más distancia 4,5 / 3,1 /
+  10,9 %; lente más distancia 3,9 / 2,8 / 2,7 %; campo exacto 0,35 / 0,29 / 0,24 %.
+- **Evaluador** sobre `dev-1114-distancias` (5 objetos con distancia anotada, puntos a ojo, un
+  cuadro, CREStereo en CPU para no competir con el entrenamiento): corre de punta a punta. Los
+  tres métodos dan errores parecidos entre sí (entre +1 y +6 %, y +12 a +15 % en la caja), lo
+  que apunta a los puntos o a la referencia y no a los métodos: no es una medida de precisión.
+
+**Problemas.**
+- **Dos corridas a la vez en MPS se rompen.** Se lanzó `hermanas` mientras entrenaba la segunda
+  semilla: `hermanas` terminó con «MPS command buffer execution failed» y el entrenamiento quedó
+  colgado sin avanzar. Se detuvo, se borró su carpeta incompleta (`v2-s1`) y se relanzó todo en
+  serie. Regla práctica: una sola corrida con GPU por vez en la Mac.
+- `marcar` necesita pantalla y un clic por sticker: no se probó.
+
+**Límites.** La emulación de distancia conocida usa la referencia de un cuadro entero, no una
+medición de cinta sobre un objeto: es optimista. Rangos de las cámaras hermanas supuestos.
+
+**Agregado al cerrar la noche (entrenamientos que habían quedado corriendo).**
+- **Segunda semilla de la U-Net de incertidumbre** (`v2-s1`): AUSE 0,291 limpio y 0,369
+  desalineado en InStereo2K val (semilla 0: 0,276 y 0,361; izquierda-derecha: 0,276 y 0,341).
+  **Corrige la entrada de abajo:** el «empate» con izquierda-derecha era la mejor de dos
+  semillas. Queda cerca, sin superarlo. Cobertura del intervalo de 90 %: 0,96 y 0,85.
+- **Ablación con corrección de disparidad** (`v2-delta-s0`): el error de CREStereo no cambia
+  (0,625 → 0,624 px limpio; 3,657 → 3,662 px desalineado) y el AUSE tampoco (0,300 y 0,365).
+  Era lo esperado: el aporte de esta red es b, no d.
+- Cada corrida, ~77 min en la Mac.
+
+**Bloqueo físico.** Todo lo que sigue necesita a Bauty con la cámara: grabar `s1` del banco
+(calibrar b en la ELP y medir precisión real por objeto), pares con la cámara apretada y
+distancia medida, y la segunda unidad ELP.
+
+**Próximo paso.** Bauty: `s1` y decidir el papel de la red de alineación. Con `s1` grabada:
+`bench marcar`, `bench evaluar` y recalibrar b.
+
+## 2026-11-19 — T12: U-Net de incertidumbre entrenada y estimador con términos de lente
+
+**Tareas:** T12 y T13. **Persona/agente:** Bauty (indicó seguir sin supervisión durante la
+noche) / Claude Code. **Rama:** `a/T12-incertidumbre`, apilada sobre el PR #34.
+
+**Objetivo.** Tener la segunda red propia funcionando y medida contra el comparador simple que
+pedía el diseño: el chequeo izquierda-derecha.
+
+**Hecho (código).**
+- `uncertainty.py`: canales de entrada y `UncertaintyHead` (carga y predicción de b en px).
+- `uncertainty_data.py`: caché de la disparidad de CREStereo por muestra y variante, variantes
+  desalineadas reproducibles y el conjunto de datos de recortes.
+- `uncertainty_train.py`: caché, entrenamiento y evaluación. Reutiliza `FusionNet` y
+  `laplace_nll` de Fusion, no su bucle (está atado a los canales y al caché de Fusion).
+- `uncertainty_metrics.py`: curva de sparsification, AUSE, cobertura de intervalos y NLL.
+- `matcher.py` expone dos subproductos de cada corrida: la pasada a media resolución y el canal
+  vertical. `estimator.py` devuelve b con `UncertaintyKind.LAPLACE_B` si se configura un
+  checkpoint (`depth.crestereo.incertidumbre`, vacío por defecto).
+- `lens.py`: ajuste clásico con resto radial (r², r⁴) y su regla. `classic.py`: el solucionador
+  robusto quedó como función aparte (`robust_fit`) para compartirlo.
+- CLI: `inc-cache`, `inc-entrenar`, `inc-evaluar`; `cinta --incertidumbre`; `hermanas` y
+  `descalibracion` suman la variante con lente.
+- Tests: `tests/test_crestereo_uncertainty.py` (11) y más en los otros dos archivos.
+
+**Evidencia.** Mac M2 Max, MPS, PyTorch 2.15. Corridas en `outputs/crestereo_inc/` (`v1-s0`,
+`v2-s0`), caché en `data/cache/crestereo_inc/` (1,5 GB), artefactos en
+`outputs/profundidad/20261119-*`. Tablas en
+[TECNICO](TECNICO.md#incertidumbre-lo-medido-el-1911).
+- **Caché:** 2238 corridas de entrenamiento y 408 de validación de CREStereo en 26,5 + ~5 min.
+- **Entrenamiento:** 12 épocas, ~77 min cada versión. NLL de validación 2,000 (v1) y 1,911 (v2).
+- **AUSE en InStereo2K val (limpio / desalineado):** v1 0,330 / 0,388; v2 0,276 / 0,361;
+  izquierda-derecha 0,276 / 0,341; fotométrico 1,023 / 0,647.
+- **AUSE en Middlebury 2014 extra (13 pares, limpio / desalineado):** v2 0,139 / 0,307;
+  izquierda-derecha 0,175 / 0,320.
+- **Cobertura del intervalo de 90 % (v2):** 0,95 limpio y 0,82 desalineado en InStereo2K; 0,98 y
+  0,88 en Middlebury.
+- **Latencia con b:** preciso 713 ms de mediana (619 sin b); continuo 144 ms (119 sin b).
+- **ELP, esquinas del damero de `cinta-s7`:** error real 0,05–0,10 px; b predicha 1,0–3,3 px.
+- **Lente en casos reales:** en sesiones sanas el ajuste da r² +0,0007 a +0,0012 y r⁴ −0,0001 a
+  −0,0004; con el precinto la escala queda en −4,7 % y −3,4 % (la regla de cuatro: −2,3 % y
+  −1,2 %).
+- **Lente en cámaras hermanas** (mismos pares y cámaras que la entrada de abajo): ×0,5 →
+  4,1 / 21,3 / 9,7 % (regla de cuatro: 4,0 / 30,5 / 18,5 %); ×1 → 9,4 / 48,7 / 13,2 %
+  (9,6 / 54,7 / 17,2 %). Campo exacto: 0,4–0,9 %.
+
+**Qué pasó en el camino.**
+- **La primera versión perdía contra izquierda-derecha.** Antes de reentrenar se midió cada
+  señal barata sola (24 cuadros de val): el desacuerdo entre las dos pasadas de CREStereo daba
+  AUSE 0,35 sin ninguna red, casi lo mismo que la red v1. Se agregó como canal junto con el
+  canal vertical del flujo, y la v2 alcanzó a izquierda-derecha.
+- **Más parámetros en el clásico no ayudaron con los datos reales.** Los términos radiales le
+  sacan señal al yaw y la escala deja de corregirse.
+
+**Límites.**
+- **b no está calibrada para la ELP.** Sobre el damero sobreestima entre 10 y 30 veces. Sin
+  referencia densa en la cámara real no se puede ajustar ni medir en escenas naturales.
+- Una semilla informada (la segunda y la ablación con corrección quedaron entrenando al
+  escribir esto). La época se eligió con la misma validación que se informa. No hay test limpio:
+  CREStereo probablemente vio InStereo2K y Middlebury.
+- La red está pensada para dos pasadas (modo preciso); en el continuo no está validada.
+- No está conectada la confianza global de la alineación, ni el paso de b a metros ni a un
+  objeto, ni el condicionamiento por calibración. El checkpoint no está empaquetado ni subido.
+
+**Bloqueo físico.** Calibrar y validar b en la ELP necesita el banco con stickers medidos (T04,
+sesiones `s1`–`s2` de desarrollo). Es lo primero que destraba esta línea.
+
+**Próximo paso.** Bauty: grabar `s1`. Claude Code: evaluador por puntos para el banco, y probar
+cuánto recupera «clásico + distancia conocida» en cámaras hermanas.
+
+## 2026-11-19 — T12: regla de decisión, generador de etapa 2 y cámaras hermanas
+
+**Tarea:** T12. **Persona/agente:** Bauty (indicó seguir sin supervisión durante la noche) /
+Claude Code. **Rama:** `a/T12-alineacion-clasica-y-generador`.
+
+**Objetivo.** Saber cuánto margen real le queda a la red de alineación: ajustar el comparador
+clásico, y medir qué pasa con una desalineación más parecida a «otra unidad del mismo modelo».
+
+**Hecho (código).**
+- `classic.py`: `fit_correction` acepta qué parámetros ajustar; `DecisionParams`,
+  `significant_parameters` y `fit_significant` (la regla); semilla fija en el RANSAC.
+- `perturb.py`, etapa 2: `CameraModel`, `mismatch_field`, `mismatch_maps`, `parametric_error`,
+  `perturb_right_camera`, `CameraRanges` y `sample_sibling`. Solo el ojo derecho.
+- CLI: `hermanas`; `robustez` y `descalibracion` suman la variante con la regla.
+- Se corrigió el comentario de `Correction.log_focal`, que tenía el signo al revés.
+
+**Evidencia.** Misma Mac y calibración. `uv run --extra ml pytest`: 692 aprobados;
+`ruff` correcto. Artefactos en `outputs/profundidad/20261118-235523-robustez-*`,
+`20261119-000014-hermanas-*` y `*-descalibracion-real`. Tablas en
+[TECNICO](TECNICO.md#compuerta-lo-medido-el-1811).
+- **Sesgo del clásico en sesiones sanas** (respuesta correcta: cero): yaw +0,009° en s6-val,
+  +0,002° en s7 y −0,036° en s3; al aplicarlo, la escala del damero se corre hasta −1 %.
+- **Con la regla, en simulación** (8 pares, `dev-1114-escenas`): roll 0,25° → 0,52 % (sin
+  corregir 7,1 %, techo 0,34 %); focal 0,5 % → 0,29 % (techo 0,28 %); yaw 0,05–0,5° → 2,1–2,6 %.
+- **Con la regla, en pares reales:** precinto −4,8 % → −2,3 % de escala; precinto suelto −3,6 %
+  → −1,2 %; tres sesiones sanas sin cambios (no aplica nada).
+- **Cámaras hermanas** (6 pares, 3 cámaras por nivel): con un décimo de los rangos, sin
+  corregir 3,4–5,8 %, giro y focal exactos 2,1–4,7 %, campo exacto 0,35–0,55 %. Con los rangos
+  completos: 30–69 %, 14–49 % y 0,6–0,9 %.
+
+**Qué cambia.**
+- **El clásico con la regla ya resuelve roll, pitch y focal.** Ahí a una red de alineación le
+  queda muy poco por ganar. Se probaron dos formas de la regla: reajustar solo con los
+  parámetros elegidos descartaba el yaw real del precinto suelto; anular los que no pasan y
+  conservar los demás funcionó en los cinco casos.
+- **El yaw tiene un límite propio** (~0,03°, unos 2 % de profundidad) que no depende del método
+  mientras solo se miren filas. El corrimiento del día siguiente (s7) directamente no se ve.
+- **Para otra unidad, cuatro números no alcanzan.** Hace falta incluir centro óptico y
+  distorsión; con el campo exacto se recupera casi todo.
+- Se intentó estimar cuánto difieren dos cámaras comparando las calibraciones del 04/11 y del
+  11/11 parámetro por parámetro. No sirve: dos juegos de parámetros muy distintos pueden
+  describir casi la misma cámara. Queda sin medir.
+
+**Decisión pendiente (Bauty).** Qué papel tiene la red de alineación con estos resultados.
+Opciones a la vista: (a) que estime la corrección densa o los parámetros de centro y distorsión
+que el clásico de cuatro números no cubre; (b) extender el clásico con esos parámetros y que la
+contribución propia quede en la incertidumbre; (c) las dos, comparadas. No se empezó ninguna.
+
+**Límites.** Los pisos de la regla se eligieron mirando los mismos cinco casos reales. Los
+rangos de las cámaras hermanas son supuestos. La etapa 2 perturba solo el ojo derecho. Un clip,
+pocos pares, referencia = la propia red.
+
+**Bloqueo físico.** Cuánto difieren dos unidades reales solo se sabe con la segunda cámara.
+
+**Próximo paso (Claude Code, sin esperar la decisión).** U-Net de incertidumbre: salidas de
+CREStereo sobre InStereo2K, entrenamiento y evaluación contra el chequeo izquierda-derecha.
+
+## 2026-11-18 — T12: modo continuo, clásico acumulado y descalibración real
+
+**Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-continuo-y-descalibracion`
+(PR #33, integrado). Sigue a la entrada de abajo, integrada en el PR #32.
+
+**Objetivo.** Cerrar tres pendientes de la compuerta: cuánto erra el modo continuo, si el
+clásico mejora juntando puntos de varios pares y qué pasa con una descalibración real.
+
+**Hecho (código).** En `crestereo_adapt`: comandos `coherencia` (continuo contra preciso por
+rango de distancia) y `descalibracion` (clásico sobre pares reales, con el damero como control);
+`robustez` suma el clásico acumulado y lee pares repartidos sin cargar el clip entero; la
+homografía de corrección gira alrededor del centro del ojo derecho (`cx + doffs`). Un test nuevo.
+
+**Evidencia.** Misma Mac y calibración que la entrada de abajo. `uv run --extra ml pytest`: 680
+aprobados; `ruff` correcto. Artefactos en `outputs/profundidad/20261118-23*`. Tablas en
+[TECNICO](TECNICO.md#compuerta-lo-medido-el-1811).
+- **Continuo contra preciso** (`dev-1114-escenas`, 72 pares en 6 tramos): mediana por píxel de
+  6,2 / 6,3 / 2,8 / 3,7 % en 0,5–1 / 1–2 / 2–3 / 3–6 m; 960×540 en frío, 2,8 / 2,2 / 1,7 / 2,2 %.
+- **Robustez con escenas variadas** (8 pares del mismo clip): roll 0,25° → sin corregir 7,2 %,
+  clásico de un par 4,2 %, clásico acumulado 2,5 %, corrección exacta 0,35 %. El acumulado queda
+  entre 2 y 4 % en casi todos los niveles; el techo, entre 0,25 y 0,43 %.
+- **Descalibración real** (pares del 09/11 con la calibración del 04/11, tablero de 28 mm):
+  con el precinto, filas del damero de 1,7–3,0 px a menos de 1 px; escala de −2,2/−5,4 % a
+  −2,0/−5,2 % sin estimar yaw y a −3,2/+1,0 % estimándolo. Con el precinto suelto, escala de
+  −3,0/−4,4 % a −0,5/−1,0 % con yaw (+0,11° estimado). Control en la sesión sana s3 (38 pares):
+  la escala mediana pasa de −0,03 % a −0,96 % al estimar yaw.
+
+**Qué cambia.**
+- **El continuo sirve para guiar, no para anunciar metros.** Los metros salen del preciso.
+- **El arranque en caliente no es gratis** con la cámara en movimiento: en 1–2 m da 6,3 % contra
+  3,5 % en frío. Queda por decidir si se usa siempre o solo con la cámara quieta.
+- **Corrige la entrada del 09/11.** Ahí se dio la cámara por recuperada al soltar el precinto
+  porque el desvío vertical volvió a ~0,2 px. La escala seguía en −3 a −4 %: las filas no
+  alcanzan para saber si los metros están bien.
+- **El yaw sí se puede estimar en esta lente**, al revés de lo que suponía la nota, pero con un
+  sesgo de ~0,04° que no aparece en su incertidumbre calculada.
+- **El clásico, aun acumulado, queda diez veces por encima del techo** y con errores chicos
+  empeora lo que había. Ese es el margen que tiene que ganar la red de alineación.
+
+**Límites.** Un clip y un día. La comparación del continuo es por píxel y contra el preciso, no
+contra metros reales ni por objeto. Descalibración real: 3 y 5 pares, y el control usa las fotos
+con las que se hizo esa calibración. El clásico no está ajustado (media resolución, parámetros
+por defecto). Sigue sin existir la regla que decide cuándo aplicar una corrección.
+
+**Próximo paso (Bauty / Claude Code).** Regla de cuándo corregir y clásico ajustado como
+comparador final; generador de etapa 2; red de alineación (22–26/11). Bauty: sesión `s1` del
+banco y pares con distancia medida y la cámara apretada a propósito.
+
 ## 2026-11-18 — T07: la app dice el estado de la cámara que mande CREStereo adaptable
 
 **Tareas:** T07 (para T12). **Persona/agente:** Tomás / Claude Code. **Rama:** `b/beta-integracion`.
@@ -85,7 +396,7 @@ probar la voz en el bucle con micrófono (Tomás).
 ## 2026-11-18 — T12: compuerta de CREStereo (wrapper, latencia, cinta y robustez)
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-compuerta-crestereo`
-(local, sin commit ni PR al escribir esto).
+(PR #32, integrado).
 
 **Objetivo.** Decidir si CREStereo congelado queda como estéreo de base: que corra en la Mac,
 cuánto tarda, cuánto erra en metros y cuánto lo daña una desalineación.

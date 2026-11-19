@@ -227,9 +227,16 @@ def _tape(args: argparse.Namespace) -> int:
     zero_m = zero_mm / 1000.0
 
     model, device = load_model(PortConfig.from_config(depth_cfg["crestereo"]))
+    head = None
+    if args.incertidumbre:
+        from visionx.depth.crestereo_adapt.uncertainty import UncertaintyHead
+
+        head = UncertaintyHead.load(args.incertidumbre, device)
     estimators: dict[str, Any] = {}
     for mode in args.modos:
-        estimators[f"crestereo-{mode}"] = load_estimator(cfg, g, mode, model=model, device=device)
+        estimators[f"crestereo-{mode}"] = load_estimator(
+            cfg, g, mode, model=model, device=device, uncertainty=head
+        )
     for text in args.variantes:  # p. ej. 640x360:i10p1 -> resolución, iteraciones y pasadas
         size_text, _, run_text = text.partition(":")
         try:
@@ -261,6 +268,9 @@ def _tape(args: argparse.Namespace) -> int:
     for tape_m, pairs in measurements:
         per_method: dict[str, list[float]] = {"esquinas": []}
         used: dict[str, list[int]] = {}
+        # Solo si el estimador trae incertidumbre: error y b en las esquinas, en px de cómputo.
+        corner_err: dict[str, list[np.ndarray]] = {}
+        corner_b: dict[str, list[np.ndarray]] = {}
         for n in pairs:
             left = cv2.imread(str(folder / f"left_{n}.jpg"))
             right = cv2.imread(str(folder / f"right_{n}.jpg"))
@@ -299,6 +309,15 @@ def _tape(args: argparse.Namespace) -> int:
                 used.setdefault(name, []).append(int(ok.sum()))
                 if ok.sum() >= 0.5 * len(z):
                     per_method.setdefault(name, []).append(_distance(u[ok], v[ok], z[ok], g))
+                if result.uncertainty is not None:
+                    # La disparidad de las esquinas detectadas en los dos ojos es la
+                    # referencia; se lleva a la resolución de cómputo para comparar en px.
+                    predicted = _sample(result.disparity_px, u * sx, v * sy)
+                    b_here = _sample(result.uncertainty, u * sx, v * sy)
+                    fine = np.isfinite(predicted) & np.isfinite(b_here)
+                    reference = (u - ur[:, 0]) * sx
+                    corner_err.setdefault(name, []).append((predicted - reference)[fine])
+                    corner_b.setdefault(name, []).append(b_here[fine])
         for name, dists in per_method.items():
             if not dists:
                 continue
@@ -314,6 +333,16 @@ def _tape(args: argparse.Namespace) -> int:
                     "esquinas_usadas": used.get(name),
                 }
             )
+            if name in corner_err:
+                err = np.abs(np.concatenate(corner_err[name]))
+                b_all = np.concatenate(corner_b[name])
+                lines[-1]["incertidumbre"] = {
+                    "error_px_mediana": round(float(np.median(err)), 3),
+                    "b_px_mediana": round(float(np.median(b_all)), 3),
+                    # Laplace: el 90 % de los errores debería caer dentro de b * ln(10).
+                    "cobertura_90": round(float(np.mean(err <= b_all * np.log(10.0))), 3),
+                    "cobertura_50": round(float(np.mean(err <= b_all * np.log(2.0))), 3),
+                }
 
     names = ["esquinas", *estimators]
     print(f"\ncero de cinta c = {zero_mm:.1f} mm; error = distancia - c - cinta")
@@ -326,6 +355,18 @@ def _tape(args: argparse.Namespace) -> int:
                 f"{hit[0]['error_mm']:+8.1f} mm {hit[0]['error_pct']:+6.2f} %" if hit else "—"
             )
         print(f"{tape_m:6.2f} " + " ".join(f"{c:>20}" for c in cells))
+
+    with_b = [x for x in lines if "incertidumbre" in x]
+    if with_b:
+        print("\nincertidumbre en las esquinas del damero (px a la resolución de cada método):")
+        for x in with_b:
+            i = x["incertidumbre"]
+            print(
+                f"  {x['cinta_m']:4.2f} m {x['metodo'][-20:]:>20}: "
+                f"error {i['error_px_mediana']:.3f} px, b {i['b_px_mediana']:.3f} px, "
+                f"cobertura 50 % -> {i['cobertura_50']:.2f}, "
+                f"90 % -> {i['cobertura_90']:.2f}"
+            )
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = Path(args.salida) / f"{stamp}-cinta-crestereo-{folder.name}"
@@ -350,15 +391,62 @@ def _tape(args: argparse.Namespace) -> int:
     return 0
 
 
+def _spread_rectified(
+    clip: str, cal: Any, count: int, run_length: int = 1
+) -> tuple[list[StereoFrame], Any]:
+    """Pares rectificados repartidos a lo largo del clip (escenas distintas).
+
+    Con `run_length` = 1 son `count` pares sueltos. Con más, son `count` tramos de esa cantidad
+    de cuadros seguidos, para medir cosas que dependen del cuadro anterior. Recorre el clip
+    sin guardarlo: un clip largo no entra en memoria a 1920x1080.
+    """
+    from visionx.camera.replay import ReplaySource
+
+    source = ReplaySource(clip, verify_hashes=False)
+    total = len(source)
+    if total == 0:
+        raise SourceError(f"{clip} no tiene pares")
+    last_start = max(total - run_length, 0)
+    starts = np.linspace(0, last_start, min(count, last_start + 1)).astype(int).tolist()
+    picks = {s + k for s in starts for k in range(run_length) if s + k < total}
+    geometry = cal.geometry()
+    maps = cal.rectify_maps()
+    frames: list[StereoFrame] = []
+    for index in range(total):
+        raw = source.read()
+        if raw is None:
+            break
+        if index not in picks:
+            continue
+        left, right = cal.rectify(raw.left, raw.right, maps)
+        frames.append(
+            StereoFrame(
+                session_id=raw.session_id,
+                frame_id=raw.frame_id,
+                left=left,
+                right=right,
+                received_ns=raw.received_ns,
+                rectified=True,
+                calibration_id=cal.calibration_id,
+                geometry_id=geometry.geometry_id,
+            )
+        )
+    source.close()
+    return frames, geometry
+
+
 # --- robustez -----------------------------------------------------------------------------
 
 
 def _robustness(args: argparse.Namespace) -> int:
     from visionx.calibration import StereoCalibration
-    from visionx.camera.rectified import RectifiedSource
-    from visionx.camera.replay import ReplaySource
     from visionx.depth.crestereo_adapt import robustness
-    from visionx.depth.crestereo_adapt.classic import ClassicParams, estimate_alignment
+    from visionx.depth.crestereo_adapt.classic import (
+        ClassicParams,
+        fit_correction,
+        fit_significant,
+        match_points,
+    )
     from visionx.depth.crestereo_adapt.correction import (
         displacement_field,
         homography,
@@ -367,18 +455,8 @@ def _robustness(args: argparse.Namespace) -> int:
 
     cfg = load_config(args.config)
     depth_cfg = cfg["depth"]
-    calib_path = ROOT / cfg["camera"]["calibration"]
-    source = RectifiedSource(ReplaySource(args.clip), StereoCalibration.load(calib_path))
-    everything = []
-    while (frame := source.read()) is not None:
-        everything.append(frame)
-    source.close()
-    if not everything:
-        raise SourceError(f"{args.clip} no tiene pares")
-    # Pares repartidos a lo largo del clip: escenas distintas, no cuadros casi iguales.
-    picks = np.linspace(0, len(everything) - 1, min(args.pares, len(everything))).astype(int)
-    frames = [everything[i] for i in picks]
-    capture = source.geometry
+    cal = StereoCalibration.load(ROOT / cfg["camera"]["calibration"])
+    frames, capture = _spread_rectified(args.clip, cal, args.pares)
     range_m = (float(depth_cfg["range_m"][0]), float(depth_cfg["range_m"][1]))
 
     model, device = load_model(PortConfig.from_config(depth_cfg["crestereo"]))
@@ -417,42 +495,70 @@ def _robustness(args: argparse.Namespace) -> int:
             per_system: dict[str, list[dict[str, float]]] = {
                 "sin_corregir": [],
                 "clasico": [],
+                "clasico_acumulado": [],
+                "clasico_regla": [],
                 "oraculo": [],
             }
+            small = (align_geom.width, align_geom.height)
+            perturbed_all, matches_all = [], []
+            for frame in frames:
+                perturbed = warp_image(frame.right, do)
+                perturbed_all.append(perturbed)
+                matches_all.append(
+                    match_points(
+                        cv2.resize(frame.left, small, interpolation=cv2.INTER_AREA),
+                        cv2.resize(perturbed, small, interpolation=cv2.INTER_AREA),
+                        classic,
+                    )
+                )
+            # Acumulado: el error es de la cámara, no de la escena. Juntar los puntos de todos
+            # los pares y ajustar una sola vez es lo que haría el sistema a lo largo del tiempo.
+            pooled = fit_correction(
+                np.vstack([m[0] for m in matches_all]),
+                np.vstack([m[1] for m in matches_all]),
+                align_geom,
+                classic,
+            )
+            pooled_fix = homography(pooled.correction, capture) if pooled.ok else None
+            # Con la regla: los mismos puntos acumulados, pero solo se aplica cada parámetro
+            # si supera su umbral. Si ninguno lo supera, no se toca la imagen.
+            ruled, applied = fit_significant(
+                np.vstack([m[0] for m in matches_all]),
+                np.vstack([m[1] for m in matches_all]),
+                align_geom,
+                classic,
+            )
+            ruled_fix = homography(ruled.correction, capture) if ruled.ok and applied else None
             recovered: list[float] = []
             accepted = 0
-            for frame, (ref, ref_ok) in zip(frames, references, strict=True):
-                perturbed = warp_image(frame.right, do)
-                depth, ok = run(frame, perturbed)
-                per_system["sin_corregir"].append(
-                    robustness.depth_change(depth, ok, ref, ref_ok, range_m)
-                )
-                # Oráculo: deshacer y volver a hacer, en una sola interpolación extra, para
-                # que pague el mismo borde perdido que cualquier corrección real.
-                restored = warp_image(perturbed, undo)
-                depth, ok = run(frame, restored)
-                per_system["oraculo"].append(
-                    robustness.depth_change(depth, ok, ref, ref_ok, range_m)
-                )
-                small = (align_geom.width, align_geom.height)
-                guess = estimate_alignment(
-                    cv2.resize(frame.left, small, interpolation=cv2.INTER_AREA),
-                    cv2.resize(perturbed, small, interpolation=cv2.INTER_AREA),
-                    align_geom,
-                    classic,
-                )
+            for frame, perturbed, (pts_l, pts_r), (ref, ref_ok) in zip(
+                frames, perturbed_all, matches_all, references, strict=True
+            ):
+
+                def change(right: np.ndarray, frame=frame, ref=ref, ref_ok=ref_ok) -> dict:
+                    depth, ok = run(frame, right)
+                    return robustness.depth_change(depth, ok, ref, ref_ok, range_m)
+
+                per_system["sin_corregir"].append(change(perturbed))
+                # Oráculo: la corrección exacta, con la misma interpolación extra y el mismo
+                # borde perdido que paga cualquier corrección real.
+                per_system["oraculo"].append(change(warp_image(perturbed, undo)))
+                guess = fit_correction(pts_l, pts_r, align_geom, classic)
+                fixed = perturbed  # sin corrección confiable, se deja como está
                 if guess.ok:
                     accepted += 1
                     fixed = warp_image(perturbed, homography(guess.correction, capture))
                     recovered.append(
                         abs(getattr(guess.correction, parameter) - level) / level * 100.0
                     )
+                per_system["clasico"].append(change(fixed))
+                fixed = perturbed if pooled_fix is None else warp_image(perturbed, pooled_fix)
+                per_system["clasico_acumulado"].append(change(fixed))
+                if ruled_fix is None:
+                    # No se movió la imagen: es la misma corrida que "sin corregir".
+                    per_system["clasico_regla"].append(per_system["sin_corregir"][-1])
                 else:
-                    fixed = perturbed  # sin corrección confiable, se deja como está
-                depth, ok = run(frame, fixed)
-                per_system["clasico"].append(
-                    robustness.depth_change(depth, ok, ref, ref_ok, range_m)
-                )
+                    per_system["clasico_regla"].append(change(warp_image(perturbed, ruled_fix)))
             row: dict[str, Any] = {
                 "parametro": parameter,
                 "nivel": level,
@@ -462,6 +568,16 @@ def _robustness(args: argparse.Namespace) -> int:
                 "clasico_error_parametro_pct": (
                     round(float(np.median(recovered)), 1) if recovered else None
                 ),
+                "regla_aplica": list(applied),
+                "acumulado": {
+                    "ok": pooled.ok,
+                    "pares_de_puntos": pooled.inliers,
+                    "roll_deg": round(pooled.correction.roll_deg, 4),
+                    "pitch_deg": round(pooled.correction.pitch_deg, 4),
+                    "yaw_deg": round(pooled.correction.yaw_deg, 4),
+                    "log_focal": round(pooled.correction.log_focal, 5),
+                    "sigma": {k: round(float(x), 5) for k, x in pooled.sigma.items()},
+                },
             }
             for name, values in per_system.items():
                 row[name] = {k: round(x, 3) for k, x in robustness.summarize(values).items()}
@@ -492,6 +608,670 @@ def _robustness(args: argparse.Namespace) -> int:
             "comando": " ".join(sys.argv),
             "equipo": _equipment(device),
             "filas": rows,
+        },
+    )
+    print(f"resultados en {out_dir}")
+    return 0
+
+
+# --- descalibración real ------------------------------------------------------------------
+
+
+def _real(args: argparse.Namespace) -> int:
+    """Pares reales tomados con una calibración que ya no describe a la cámara.
+
+    No usa la red: mide si el estimador clásico encuentra la corrección y cuánto arregla. Si el
+    par tiene un damero, sus esquinas dan dos controles independientes de los puntos SIFT: la
+    diferencia de filas y la escala del tablero triangulado contra su tamaño real.
+    """
+    from visionx.calibration import StereoCalibration
+    from visionx.calibration.board import Checkerboard
+    from visionx.calibration.calibrate import similarity_scale
+    from visionx.calibration.detection import detect_corners, match_order
+    from visionx.calibration.models import undistort_points
+    from visionx.depth.crestereo_adapt.classic import (
+        ClassicParams,
+        fit_correction,
+        fit_significant,
+        match_points,
+    )
+    from visionx.depth.crestereo_adapt.correction import apply_homography, homography
+    from visionx.depth.crestereo_adapt.lens import correct_points, fit_lens
+
+    cal = StereoCalibration.load(args.calibracion)
+    g = cal.geometry()
+    maps = cal.rectify_maps()
+    p1, p2 = cal.rect.P1, cal.rect.P2
+    cols, rows_ = (int(x) for x in args.tablero.split("x"))
+    board = Checkerboard(cols, rows_, args.cuadrado_mm / 1000)
+    align_geom = g.resized(g.width // 2, g.height // 2)
+    small = (align_geom.width, align_geom.height)
+    variants = {
+        "con_yaw": ClassicParams(),
+        "sin_yaw": ClassicParams(estimate_yaw=False),
+        "solo_giros": ClassicParams(estimate_yaw=False, estimate_focal=False),
+        "con_regla": ClassicParams(),  # todo libre, pero solo se aplica lo que supera su umbral
+    }
+
+    def board_check(ul: np.ndarray, ur: np.ndarray) -> tuple[float, float]:
+        """(mediana de |diferencia de filas| en px, error de escala del tablero en %)."""
+        points = cv2.triangulatePoints(p1, p2, ul.T, ur.T)
+        points = (points[:3] / points[3]).T
+        scale = (similarity_scale(board.object_points().astype(np.float64), points) - 1) * 100
+        return float(np.median(np.abs(ul[:, 1] - ur[:, 1]))), float(scale)
+
+    report: list[dict[str, Any]] = []
+    for folder_text in args.carpetas:
+        folder = Path(folder_text)
+        numbers = sorted(int(f.stem.split("_")[1]) for f in folder.glob("left_*.jpg"))
+        pairs = []
+        for n in numbers:
+            left = cv2.imread(str(folder / f"left_{n}.jpg"))
+            right = cv2.imread(str(folder / f"right_{n}.jpg"))
+            if left is None or right is None:
+                continue
+            rect_l, rect_r = cal.rectify(left, right, maps)
+            matches = match_points(
+                cv2.resize(rect_l, small, interpolation=cv2.INTER_AREA),
+                cv2.resize(rect_r, small, interpolation=cv2.INTER_AREA),
+            )
+            corners = None
+            cl, cr = detect_corners(left, board), detect_corners(right, board)
+            if cl is not None and cr is not None:
+                pr, _ = match_order(cl.points, cr.points)
+                corners = (
+                    undistort_points(cal.model, cl.points, cal.left, cal.rect.R1, p1),
+                    undistort_points(cal.model, pr, cal.right, cal.rect.R2, p2),
+                )
+            pairs.append((n, matches, corners))
+        if not pairs:
+            raise SourceError(f"{folder} no tiene pares left_N/right_N.jpg")
+        name = f"{folder.parent.name}/{folder.name}"
+        print(f"\n== {name}: {len(pairs)} pares, calibración {cal.calibration_id}")
+        for n, _, corners in pairs:
+            if corners is not None:
+                dy, scale = board_check(*corners)
+                print(f"  par {n}: damero sin corregir: filas {dy:.2f} px, escala {scale:+.2f} %")
+        all_l = np.vstack([m[0] for _, m, _ in pairs])
+        all_r = np.vstack([m[1] for _, m, _ in pairs])
+        for label, params in variants.items():
+            applied: tuple[str, ...] | None = None
+            if label == "con_regla":
+                pooled, applied = fit_significant(all_l, all_r, align_geom, params)
+            else:
+                pooled = fit_correction(all_l, all_r, align_geom, params)
+            c = pooled.correction
+            entry: dict[str, Any] = {
+                "carpeta": name,
+                "variante": label,
+                "parametros_aplicados": list(applied) if applied is not None else None,
+                "ok": pooled.ok,
+                "motivo": pooled.reason,
+                "pares_de_puntos": pooled.inliers,
+                "roll_deg": round(c.roll_deg, 4),
+                "pitch_deg": round(c.pitch_deg, 4),
+                "yaw_deg": round(c.yaw_deg, 4),
+                "log_focal": round(c.log_focal, 5),
+                "sigma": {k: round(float(x), 5) for k, x in pooled.sigma.items()},
+                "filas_sift_antes_px": round(pooled.residual_before_px * 2, 3),
+                "filas_sift_despues_px": round(pooled.residual_after_px * 2, 3),
+                "damero": [],
+            }
+            print(
+                f"  {label:>10}: roll {c.roll_deg:+.3f}° pitch {c.pitch_deg:+.3f}° "
+                f"yaw {c.yaw_deg:+.3f}° (±{pooled.sigma['yaw']:.3f}) focal "
+                f"{c.log_focal * 100:+.3f} % | filas SIFT {entry['filas_sift_antes_px']:.2f} -> "
+                f"{entry['filas_sift_despues_px']:.2f} px, {pooled.inliers} puntos"
+                + ("" if applied is None else f" | aplica: {', '.join(applied) or 'nada'}")
+                + ("" if pooled.ok else f" | NO CONFIABLE: {pooled.reason}")
+            )
+            fix = homography(c, g)
+            for n, _, corners in pairs:
+                if corners is None:
+                    continue
+                ul, ur = corners
+                dy, scale = board_check(ul, apply_homography(fix, ur))
+                entry["damero"].append(
+                    {"par": n, "filas_px": round(dy, 3), "escala_pct": round(scale, 3)}
+                )
+                print(f"      par {n}: damero corregido: filas {dy:.2f} px, escala {scale:+.2f} %")
+            report.append(entry)
+        # Con términos de lente: giro, aumento y resto radial, con su propia regla.
+        lens_est = fit_lens(all_l, all_r, align_geom)
+        fitted = lens_est.fitted
+        entry = {
+            "carpeta": name,
+            "variante": "con_lente",
+            "parametros_aplicados": list(lens_est.applied),
+            "ok": lens_est.ok,
+            "motivo": lens_est.reason,
+            "ajuste_completo": {
+                n: round(fitted.value(n), 6)
+                for n in ("pitch", "yaw", "roll", "log_focal", "radial2", "radial4")
+            },
+            "sigma": {k: round(float(x), 6) for k, x in lens_est.sigma.items()},
+            "filas_sift_antes_px": round(lens_est.residual_before_px * 2, 3),
+            "filas_sift_despues_px": round(lens_est.residual_after_px * 2, 3),
+            "damero": [],
+        }
+        print(
+            f"   con_lente: ajuste completo radial2 {fitted.radial2:+.5f} "
+            f"(±{lens_est.sigma['radial2']:.5f}) radial4 {fitted.radial4:+.5f} "
+            f"(±{lens_est.sigma['radial4']:.5f}) yaw {fitted.value('yaw'):+.3f}° focal "
+            f"{fitted.value('log_focal') * 100:+.3f} % | aplica: "
+            f"{', '.join(lens_est.applied) or 'nada'}"
+        )
+        for n, _, corners in pairs:
+            if corners is None:
+                continue
+            ul, ur = corners
+            dy, scale = board_check(ul, correct_points(lens_est.lens, g, ur))
+            entry["damero"].append(
+                {"par": n, "filas_px": round(dy, 3), "escala_pct": round(scale, 3)}
+            )
+            print(f"      par {n}: damero corregido: filas {dy:.2f} px, escala {scale:+.2f} %")
+        report.append(entry)
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = Path(args.salida) / f"{stamp}-descalibracion-real"
+    _write_report(
+        out_dir,
+        "descalibracion.yaml",
+        {
+            "calibracion": str(args.calibracion),
+            "calibration_id": cal.calibration_id,
+            "commit": _git_commit(),
+            "comando": " ".join(sys.argv),
+            "nota": "filas SIFT a resolución de captura (medidas a la mitad y escaladas)",
+            "filas": report,
+        },
+    )
+    print(f"resultados en {out_dir}")
+    return 0
+
+
+# --- coherencia del modo continuo ---------------------------------------------------------
+
+
+def _coherence(args: argparse.Namespace) -> int:
+    """Cuánto se aparta el modo continuo del preciso, en escenas reales y por distancia.
+
+    No hay profundidad de referencia en los clips, así que se compara contra el modo preciso,
+    que es el que se midió con cinta. Dice cuánto se pierde por correr rápido; no dice si el
+    preciso acierta. Los cuadros van en tramos seguidos para que el arranque en caliente
+    trabaje como en la app.
+    """
+    from visionx.calibration import StereoCalibration
+    from visionx.depth.crestereo_adapt import robustness
+
+    cfg = load_config(args.config)
+    depth_cfg = cfg["depth"]
+    cal = StereoCalibration.load(ROOT / cfg["camera"]["calibration"])
+    frames, capture = _spread_rectified(args.clip, cal, args.tramos, args.largo)
+    model, device = load_model(PortConfig.from_config(depth_cfg["crestereo"]))
+    reference = load_estimator(cfg, capture, "preciso", model=model, device=device)
+    systems: dict[str, CreStereoEstimator] = {
+        "continuo": load_estimator(cfg, capture, "continuo", model=model, device=device)
+    }
+    for text in args.variantes:
+        size_text, _, run_text = text.partition(":")
+        try:
+            iters, passes = (int(x) for x in run_text.lower().lstrip("i").split("p"))
+        except ValueError as exc:
+            raise InvalidInput(f"variante {text!r}: se esperaba ANCHOxALTO:iNpM") from exc
+        systems[text] = load_estimator(
+            cfg,
+            capture,
+            model=model,
+            device=device,
+            compute_size=_parse_size(size_text),
+            params=CreStereoParams(iters=iters, passes=passes),
+        )
+    bins = [(0.5, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 6.0)]
+    print(
+        f"{len(frames)} pares en {args.tramos} tramos de {args.largo}; referencia "
+        f"{reference.model_id}"
+    )
+    samples: dict[tuple[str, str], list[dict[str, float]]] = {}
+    for index, frame in enumerate(frames):
+        ref = reference.predict(frame)
+        if index % args.largo == 0:
+            for est in systems.values():
+                est.close()  # tramo nuevo: otra escena, se arranca en frío
+        for name, est in systems.items():
+            result = est.predict(frame)
+            warm = est.matcher.last_stats["caliente"] > 0
+            # La referencia se lleva al tamaño del sistema tomando el píxel más cercano:
+            # promediar profundidades mezclaría el objeto con el fondo en los bordes.
+            size = result.size
+            ref_depth = cv2.resize(ref.depth_m, size, interpolation=cv2.INTER_NEAREST)
+            ref_ok = cv2.resize(
+                ref.valid_mask.astype(np.uint8), size, interpolation=cv2.INTER_NEAREST
+            ).astype(bool)
+            for low, high in bins:
+                label = f"{low:g}-{high:g} m"
+                stats = robustness.depth_change(
+                    result.depth_m, result.valid_mask, ref_depth, ref_ok, (low, high)
+                )
+                if stats["cobertura"] > 0:
+                    samples.setdefault((name, label), []).append(stats)
+                    if name == "continuo":
+                        key = (
+                            "continuo, cuadros en frío"
+                            if not warm
+                            else "continuo, cuadros en caliente",
+                            label,
+                        )
+                        samples.setdefault(key, []).append(stats)
+
+    rows = []
+    for (name, label), values in sorted(samples.items()):
+        summary = robustness.summarize(values)
+        rows.append(
+            {
+                "sistema": name,
+                "rango": label,
+                "pares": len(values),
+                **{k: round(x, 3) for k, x in summary.items()},
+            }
+        )
+    current = None
+    for row in rows:
+        if row["sistema"] != current:
+            current = row["sistema"]
+            print(f"\n{current}")
+        print(
+            f"  {row['rango']:>8}: mediana {row['mediana_pct']:5.2f} %, "
+            f"P90 {row['p90_pct']:6.2f} %, "
+            f"más de 5 %: {row['mas_de_5_pct']:5.1f} % de los píxeles ({row['pares']} pares)"
+        )
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = Path(args.salida) / f"{stamp}-coherencia-crestereo-{Path(args.clip).name}"
+    _write_report(
+        out_dir,
+        "coherencia.yaml",
+        {
+            "clip": str(args.clip),
+            "tramos": args.tramos,
+            "largo": args.largo,
+            "referencia": reference.model_id,
+            "sistemas": {name: est.model_id for name, est in systems.items()},
+            "nota": "diferencia relativa de profundidad contra el modo preciso; no es GT",
+            "calibracion": cfg["camera"]["calibration"],
+            "commit": _git_commit(),
+            "comando": " ".join(sys.argv),
+            "equipo": _equipment(device),
+            "filas": rows,
+        },
+    )
+    print(f"resultados en {out_dir}")
+    return 0
+
+
+def _with_known_distance(
+    values: list[tuple[np.ndarray, np.ndarray]],
+    reference: tuple[np.ndarray, np.ndarray],
+    geom: Any,
+    range_m: tuple[float, float],
+) -> tuple[list[tuple[np.ndarray, np.ndarray]], float]:
+    """Emula el paso de distancia conocida sobre el primer par de una lista de profundidades.
+
+    Una medición con cinta da el corrimiento constante de disparidad que quedó. Acá se saca de
+    la referencia del primer par (mediana de la diferencia de disparidad) y se resta en todos.
+    Devuelve las profundidades corregidas y el corrimiento, en px de cómputo.
+    """
+    fb = geom.fx * geom.baseline_m
+
+    def to_disparity(depth: np.ndarray) -> np.ndarray:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return fb / depth - geom.doffs
+
+    depth0, ok0 = values[0]
+    ref0, ref_ok0 = reference
+    with np.errstate(invalid="ignore"):
+        both = ok0 & ref_ok0 & (ref0 >= range_m[0]) & (ref0 <= range_m[1])
+    if not both.any():
+        return values, 0.0
+    delta = float(np.median(to_disparity(depth0)[both] - to_disparity(ref0)[both]))
+    fixed = []
+    for depth, ok in values:
+        disparity = to_disparity(depth) - delta
+        with np.errstate(divide="ignore", invalid="ignore"):
+            good = ok & np.isfinite(disparity) & ((disparity + geom.doffs) > 0)
+            fixed.append((fb / (disparity + geom.doffs), good))
+    return fixed, delta
+
+
+# --- hermanas: cámara real contra nominal (etapa 2) ----------------------------------------
+
+
+def _siblings(args: argparse.Namespace) -> int:
+    """Desalineación de «otra unidad del mismo modelo»: giro, focal, centro y distorsión juntos.
+
+    Separa cuánto del daño se arregla con cuatro números (giro y aumento) y cuánto necesita un
+    arreglo distinto en cada zona de la imagen. Sistemas:
+
+        sin corregir          el par tal como queda al rectificar con la calibración nominal
+        clásico con regla     puntos emparejados de todos los pares + regla de decisión
+        oráculo paramétrico   el giro y el aumento exactos (techo de una corrección de 4 números)
+        oráculo denso         el campo exacto (techo de cualquier corrección)
+    """
+    from visionx.calibration import StereoCalibration
+    from visionx.depth.crestereo_adapt import robustness
+    from visionx.depth.crestereo_adapt.classic import ClassicParams, fit_significant, match_points
+    from visionx.depth.crestereo_adapt.correction import homography, warp_image
+    from visionx.depth.crestereo_adapt.lens import fit_lens, pull_maps
+    from visionx.depth.crestereo_adapt.perturb import (
+        CameraModel,
+        CameraRanges,
+        mismatch_field,
+        mismatch_maps,
+        parametric_error,
+        sample_sibling,
+    )
+
+    cfg = load_config(args.config)
+    depth_cfg = cfg["depth"]
+    cal = StereoCalibration.load(ROOT / cfg["camera"]["calibration"])
+    frames, capture = _spread_rectified(args.clip, cal, args.pares)
+    range_m = (float(depth_cfg["range_m"][0]), float(depth_cfg["range_m"][1]))
+    model, device = load_model(PortConfig.from_config(depth_cfg["crestereo"]))
+    est = load_estimator(cfg, capture, args.modo, model=model, device=device)
+    align_geom = capture.resized(capture.width // 2, capture.height // 2)
+    small = (align_geom.width, align_geom.height)
+    classic = ClassicParams()
+    nominal = CameraModel(cal.right.K, cal.right.D, cal.rect.R2)
+    base = CameraRanges()
+    u, v = np.meshgrid(
+        np.arange(capture.width, dtype=np.float32), np.arange(capture.height, dtype=np.float32)
+    )
+    print(f"{len(frames)} pares de {args.clip}; red: {est.model_id}; rango {range_m} m")
+
+    def run(frame: StereoFrame, right: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        probe = StereoFrame(
+            session_id=frame.session_id,
+            frame_id=frame.frame_id,
+            left=frame.left,
+            right=right,
+            received_ns=frame.received_ns,
+            rectified=True,
+            calibration_id=frame.calibration_id,
+            geometry_id=frame.geometry_id,
+        )
+        result = est.predict(probe)
+        est.close()
+        return result.depth_m, result.valid_mask
+
+    references = [run(f, f.right) for f in frames]
+    rows: list[dict[str, Any]] = []
+    for fraction in args.fracciones:
+        ranges = CameraRanges(
+            roll_deg=base.roll_deg * fraction,
+            pitch_deg=base.pitch_deg * fraction,
+            yaw_deg=base.yaw_deg * fraction,
+            focal=base.focal * fraction,
+            center_px=base.center_px * fraction,
+            distortion=base.distortion * fraction,
+        )
+        for seed in range(args.hermanas):
+            true = sample_sibling(np.random.default_rng(seed), nominal, ranges)
+            field = mismatch_field(true, nominal, capture)
+            map_x, map_y = mismatch_maps(true, nominal, capture)
+            exact = parametric_error(true, nominal)
+            # Lo que queda después de aplicar el giro y el aumento exactos: la parte que no son
+            # cuatro números (centro óptico y distorsión).
+            undo = homography(exact, capture)
+            grid = np.dstack([u, v]).reshape(-1, 2).astype(np.float64)
+            moved = grid + field.reshape(-1, 2)
+            hom = np.column_stack([moved, np.ones(len(moved))]) @ undo.T
+            rest = (hom[:, :2] / hom[:, 2:3] - grid).reshape(capture.height, capture.width, 2)
+
+            perturbed_all, matches_all = [], []
+            for frame in frames:
+                perturbed = cv2.remap(frame.right, map_x, map_y, cv2.INTER_LINEAR)
+                perturbed_all.append(perturbed)
+                matches_all.append(
+                    match_points(
+                        cv2.resize(frame.left, small, interpolation=cv2.INTER_AREA),
+                        cv2.resize(perturbed, small, interpolation=cv2.INTER_AREA),
+                        classic,
+                    )
+                )
+            ruled, applied = fit_significant(
+                np.vstack([m[0] for m in matches_all]),
+                np.vstack([m[1] for m in matches_all]),
+                align_geom,
+                classic,
+            )
+            ruled_fix = homography(ruled.correction, capture) if ruled.ok and applied else None
+            # El mismo ajuste con términos de lente (giro, aumento y resto radial).
+            lens_est = fit_lens(
+                np.vstack([m[0] for m in matches_all]),
+                np.vstack([m[1] for m in matches_all]),
+                align_geom,
+                classic,
+            )
+            lens_maps = None
+            if lens_est.ok and lens_est.applied:
+                lens_maps = pull_maps(lens_est.lens, capture)
+            # Profundidad de cada sistema en cada par: (metros, máscara).
+            outputs: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {
+                name: []
+                for name in (
+                    "sin_corregir",
+                    "clasico_regla",
+                    "clasico_lente",
+                    "oraculo_parametrico",
+                    "oraculo_denso",
+                )
+            }
+            for frame, perturbed in zip(frames, perturbed_all, strict=True):
+                plain = run(frame, perturbed)
+                outputs["sin_corregir"].append(plain)
+                outputs["clasico_regla"].append(
+                    plain if ruled_fix is None else run(frame, warp_image(perturbed, ruled_fix))
+                )
+                if lens_maps is None:
+                    outputs["clasico_lente"].append(plain)
+                else:
+                    fixed = cv2.remap(perturbed, lens_maps[0], lens_maps[1], cv2.INTER_LINEAR)
+                    outputs["clasico_lente"].append(run(frame, fixed))
+                outputs["oraculo_parametrico"].append(run(frame, warp_image(perturbed, undo)))
+                dense = cv2.remap(
+                    perturbed, u + field[:, :, 0], v + field[:, :, 1], cv2.INTER_LINEAR
+                )
+                outputs["oraculo_denso"].append(run(frame, dense))
+
+            # Distancia conocida: una medición sobre el primer par da el corrimiento constante de
+            # disparidad que quedó (centro óptico y yaw no se ven en las filas). Se emula con la
+            # referencia de ese par y se aplica a los demás, que son los que se evalúan.
+            offsets: dict[str, float] = {}
+            for name in ("sin_corregir", "clasico_regla", "clasico_lente"):
+                outputs[f"{name}+distancia"], offsets[name] = _with_known_distance(
+                    outputs[name], references[0], est.geometry, range_m
+                )
+
+            per_system: dict[str, list[dict[str, float]]] = {}
+            for name, values in outputs.items():
+                # El primer par se usó para la distancia conocida: no se evalúa en ningún sistema.
+                per_system[name] = [
+                    robustness.depth_change(depth, ok, ref, ref_ok, range_m)
+                    for (depth, ok), (ref, ref_ok) in zip(values[1:], references[1:], strict=True)
+                ]
+            row: dict[str, Any] = {
+                "fraccion": fraction,
+                "semilla": seed,
+                "error_exacto": {
+                    "roll_deg": round(exact.roll_deg, 4),
+                    "pitch_deg": round(exact.pitch_deg, 4),
+                    "yaw_deg": round(exact.yaw_deg, 4),
+                    "log_focal": round(exact.log_focal, 5),
+                },
+                "clasico": {
+                    "aplica": list(applied),
+                    "roll_deg": round(ruled.correction.roll_deg, 4),
+                    "pitch_deg": round(ruled.correction.pitch_deg, 4),
+                    "yaw_deg": round(ruled.correction.yaw_deg, 4),
+                    "log_focal": round(ruled.correction.log_focal, 5),
+                },
+                "lente": {
+                    "aplica": list(lens_est.applied),
+                    "radial2": round(lens_est.lens.radial2, 6),
+                    "radial4": round(lens_est.lens.radial4, 6),
+                },
+                "corrimiento_distancia_conocida_px": {k: round(x, 3) for k, x in offsets.items()},
+                "filas_px_mediana": round(float(np.median(np.abs(field[:, :, 1]))), 2),
+                "resto_filas_px_mediana": round(float(np.median(np.abs(rest[:, :, 1]))), 2),
+                "resto_columnas_px_mediana": round(float(np.median(np.abs(rest[:, :, 0]))), 2),
+            }
+            for name, values in per_system.items():
+                row[name] = {k: round(x, 3) for k, x in robustness.summarize(values).items()}
+            rows.append(row)
+            print(
+                f"x{fraction:<4g} semilla {seed}: filas {row['filas_px_mediana']:5.2f} px, "
+                f"resto {row['resto_filas_px_mediana']:4.2f}/"
+                f"{row['resto_columnas_px_mediana']:4.2f} px | "
+                + " | ".join(f"{n} {row[n]['mediana_pct']:5.2f} %" for n in per_system)
+                + f" | aplica {','.join(applied) or 'nada'}"
+            )
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = Path(args.salida) / f"{stamp}-hermanas-crestereo-{Path(args.clip).name}"
+    _write_report(
+        out_dir,
+        "hermanas.yaml",
+        {
+            "clip": str(args.clip),
+            "pares": [int(f.frame_id) for f in frames],
+            "calibracion": cfg["camera"]["calibration"],
+            "metodo": est.model_id,
+            "rangos_base": {k: getattr(base, k) for k in base.__dataclass_fields__},
+            "rango_m": list(range_m),
+            "referencia": "la misma red sobre el par bien rectificado (no es GT)",
+            "commit": _git_commit(),
+            "comando": " ".join(sys.argv),
+            "equipo": _equipment(device),
+            "filas": rows,
+        },
+    )
+    print(f"resultados en {out_dir}")
+    return 0
+
+
+# --- U-Net de incertidumbre ----------------------------------------------------------------
+
+
+def _unc_setup(args: argparse.Namespace) -> tuple[dict[str, Any], Any, Any, Path]:
+    """Config, catálogo del dataset, especificación del caché y carpeta de datos."""
+    from visionx.depth.crestereo_adapt.uncertainty_data import CacheSpec
+    from visionx.depth.datasets.catalog import CATALOG
+
+    cfg = load_config(args.config)
+    section = cfg["depth"]["crestereo"]
+    if args.dataset not in CATALOG:
+        raise InvalidInput(f"dataset {args.dataset!r}: opciones {sorted(CATALOG)}")
+    params = CreStereoParams(iters=args.iters, passes=args.pasadas)
+    spec = CacheSpec(
+        root=ROOT / "data" / "cache" / "crestereo_inc",
+        weights_id=section["weights_sha256"][:8],
+        run_tag=params.tag,
+        seed=args.semilla_cache,
+    )
+    return cfg, CATALOG[args.dataset], spec, Path(args.datos)
+
+
+def _unc_refs(info: Any, data_root: Path, group: str, limit: int) -> list[Any]:
+    from visionx.depth.__main__ import select_refs
+
+    return select_refs(info, data_root, group, limit)
+
+
+def _unc_cache(args: argparse.Namespace) -> int:
+    from visionx.depth.crestereo_adapt.matcher import CreStereoMatcher
+    from visionx.depth.crestereo_adapt.uncertainty_train import build_cache
+
+    cfg, info, spec, data_root = _unc_setup(args)
+    model, device = load_model(PortConfig.from_config(cfg["depth"]["crestereo"]))
+    matcher = CreStereoMatcher(
+        model, device, CreStereoParams(iters=args.iters, passes=args.pasadas)
+    )
+    for group in args.grupos:
+        refs = _unc_refs(info, data_root, group, args.limite)
+        # La disparidad del ojo derecho solo hace falta para evaluar (chequeo izq.-der.).
+        with_right = group != "train"
+        print(
+            f"{info.name}/{group}: {len(refs)} muestras x {args.variantes} variantes"
+            + (" (con disparidad del ojo derecho)" if with_right else "")
+        )
+        counts = build_cache(refs, info.name, spec, matcher, args.variantes, with_right)
+        print(f"  {counts}")
+    print(f"caché en {spec.root / info.name}")
+    return 0
+
+
+def _unc_train(args: argparse.Namespace) -> int:
+    from visionx.depth.crestereo_adapt.uncertainty_train import TrainParams, train
+
+    cfg, info, spec, data_root = _unc_setup(args)
+    params = TrainParams(
+        epochs=args.epocas,
+        seed=args.semilla,
+        variants=args.variantes,
+        train_delta=args.con_delta,
+    )
+    train_refs = _unc_refs(info, data_root, "train", args.limite_train)
+    val_refs = _unc_refs(info, data_root, "val", args.limite_val)
+    run_dir = Path(args.salida)
+    if (run_dir / "meta.json").exists():
+        raise InvalidInput(f"{run_dir} ya tiene una corrida: elegí otra carpeta")
+    extra = {"commit": _git_commit(), "comando": " ".join(sys.argv)}
+    meta = train(params, train_refs, val_refs, info.name, spec, run_dir, extra_meta=extra)
+    print(f"mejor NLL de validación {meta['mejor_nll_val']:.4f}; corrida en {run_dir}")
+    return 0
+
+
+def _unc_eval(args: argparse.Namespace) -> int:
+    from visionx.depth.crestereo_adapt.uncertainty import UncertaintyHead
+    from visionx.depth.crestereo_adapt.uncertainty_data import UncertaintyDataset
+    from visionx.depth.crestereo_adapt.uncertainty_train import evaluate
+
+    _, info, spec, data_root = _unc_setup(args)
+    head = UncertaintyHead.load(args.checkpoint)
+    refs = _unc_refs(info, data_root, args.grupo, args.limite)
+    dataset = UncertaintyDataset(refs, info.name, spec, args.variantes, crop=None)
+    summary = evaluate(head.model, dataset, head.device, bool(head.meta.get("train_delta")))
+    for group, stats in summary.items():
+        print(f"\n{info.name}/{args.grupo}, {group} ({int(stats['cuadros'])} cuadros)")
+        print(
+            f"  error de CREStereo {stats['epe_base_px']:.3f} px; b mediana "
+            f"{stats['b_mediana_px']:.3f} px; NLL {stats['nll']:.3f}"
+        )
+        print(
+            f"  AUSE (menos es mejor): b {stats['ause_b']:.4f} | fotométrico "
+            f"{stats['ause_fotometrico']:.4f} | izq.-der. "
+            f"{stats.get('ause_izq_der', float('nan')):.4f}"
+        )
+        print(
+            f"  cobertura de los intervalos: 50 % -> {stats['cobertura_50']:.3f}, "
+            f"90 % -> {stats['cobertura_90']:.3f}"
+        )
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = Path(args.salida) / f"{stamp}-incertidumbre-{info.name}-{args.grupo}"
+    _write_report(
+        out_dir,
+        "incertidumbre.yaml",
+        {
+            "checkpoint": str(args.checkpoint),
+            "dataset": info.name,
+            "grupo": args.grupo,
+            "cuadros": len(dataset),
+            "entrenada_con": {k: v for k, v in head.meta.items() if k != "model"},
+            "commit": _git_commit(),
+            "comando": " ".join(sys.argv),
+            "resumen": {
+                g: {k: round(float(x), 5) for k, x in st.items()} for g, st in summary.items()
+            },
         },
     )
     print(f"resultados en {out_dir}")
@@ -535,6 +1315,11 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="otras formas de correr la red, como 640x360:i10p1",
     )
+    ci.add_argument(
+        "--incertidumbre",
+        default=None,
+        help="checkpoint de la U-Net de incertidumbre (pisa el de la config)",
+    )
     ci.add_argument("--tablero", default="9x6")
     ci.add_argument("--cuadrado-mm", type=float, default=38.0)
     ci.add_argument(
@@ -553,12 +1338,81 @@ def main(argv: list[str] | None = None) -> int:
     ro.add_argument("--sin-yaw", action="store_true", help="el clásico no estima el yaw")
     ro.add_argument("--config", default=None, help="override YAML explícito")
     ro.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
+    re = sub.add_parser(
+        "descalibracion", help="estimador clásico sobre pares reales mal calibrados"
+    )
+    re.add_argument("calibracion", help="la calibración que ya no describe a la cámara")
+    re.add_argument("carpetas", nargs="+", help="carpetas con left_N.jpg y right_N.jpg crudos")
+    re.add_argument("--tablero", default="9x6")
+    re.add_argument("--cuadrado-mm", type=float, default=38.0)
+    re.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
+    co = sub.add_parser("coherencia", help="modo continuo contra el preciso, por distancia")
+    co.add_argument("clip", help="carpeta de una grabación sin rectificar (T02)")
+    co.add_argument("--tramos", type=int, default=6, help="tramos repartidos en el clip")
+    co.add_argument("--largo", type=int, default=12, help="cuadros seguidos por tramo")
+    co.add_argument("--variantes", nargs="*", default=[], help="como 960x540:i4p2 (en frío)")
+    co.add_argument("--config", default=None, help="override YAML explícito")
+    co.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
+    he = sub.add_parser("hermanas", help="otra unidad del mismo modelo: lente y giro distintos")
+    he.add_argument("clip", help="carpeta de una grabación sin rectificar (T02)")
+    he.add_argument("--modo", default="preciso", choices=["preciso", "continuo"])
+    he.add_argument("--pares", type=int, default=6)
+    he.add_argument("--hermanas", type=int, default=3, help="cámaras sorteadas por nivel")
+    he.add_argument(
+        "--fracciones",
+        nargs="+",
+        type=float,
+        default=[0.1, 0.25, 0.5, 1.0],
+        help="fracción de los rangos de CameraRanges",
+    )
+    he.add_argument("--config", default=None, help="override YAML explícito")
+    he.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
+    for name, text in (
+        ("inc-cache", "guardar la disparidad de CREStereo de cada muestra y variante"),
+        ("inc-entrenar", "entrenar la U-Net de incertidumbre con el caché"),
+        ("inc-evaluar", "medir una U-Net de incertidumbre entrenada"),
+    ):
+        un = sub.add_parser(name, help=text)
+        un.add_argument("--dataset", default="instereo2k")
+        un.add_argument("--variantes", type=int, default=2, help="0 limpia + desalineadas")
+        un.add_argument("--iters", type=int, default=4)
+        un.add_argument("--pasadas", type=int, default=2, choices=[1, 2])
+        un.add_argument("--semilla-cache", type=int, default=0)
+        un.add_argument("--datos", default=str(ROOT / "data" / "raw"))
+        un.add_argument("--config", default=None, help="override YAML explícito")
+        if name == "inc-cache":
+            un.add_argument("--grupos", nargs="+", default=["val", "train"])
+            un.add_argument("--limite", type=int, default=0, help="solo N muestras por grupo")
+        elif name == "inc-entrenar":
+            un.add_argument("--salida", required=True, help="carpeta nueva de la corrida")
+            un.add_argument("--epocas", type=int, default=12)
+            un.add_argument("--semilla", type=int, default=0)
+            un.add_argument("--con-delta", action="store_true", help="ablación: corregir d")
+            un.add_argument("--limite-train", type=int, default=0)
+            un.add_argument("--limite-val", type=int, default=0)
+        else:
+            un.add_argument("checkpoint")
+            un.add_argument("--grupo", default="val")
+            un.add_argument("--limite", type=int, default=0)
+            un.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
     args = parser.parse_args(argv)
     try:
         if args.comando == "latencia":
             return _latency(args)
         if args.comando == "robustez":
             return _robustness(args)
+        if args.comando == "descalibracion":
+            return _real(args)
+        if args.comando == "coherencia":
+            return _coherence(args)
+        if args.comando == "hermanas":
+            return _siblings(args)
+        if args.comando == "inc-cache":
+            return _unc_cache(args)
+        if args.comando == "inc-entrenar":
+            return _unc_train(args)
+        if args.comando == "inc-evaluar":
+            return _unc_eval(args)
         return _tape(args)
     except (InvalidInput, EstimatorError, SourceError) as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -319,8 +319,7 @@ aceptada, B4 queda solo estéreo (PARTIAL) y B3 no responde. Umbrales provisorio
 
 ## CREStereo adaptable
 
-**Estado al 18/11.** Implementado y medido en la rama `a/T12-compuerta-crestereo` (sin
-integrar): CREStereo congelado con el contrato `DepthEstimator`, el estimador clásico de
+**Estado al 18/11.** Implementado y medido (PR #32 y rama `a/T12-continuo-y-descalibracion`): CREStereo congelado con el contrato `DepthEstimator`, el estimador clásico de
 alineación, el generador de perturbaciones de etapa 1 y las mediciones de la compuerta
 ([Compuerta: lo medido](#compuerta-lo-medido-el-1811)). **No existen todavía** la red de
 alineación, la U-Net de incertidumbre, el flujo al conectar una cámara ni la integración en la
@@ -515,11 +514,17 @@ en Kaggle.
 
 ### U-Net de incertidumbre
 
-Es la segunda red propia, el paso [5]. Corre en cada cuadro, a media resolución, condicionada
-igual que la red de alineación.
+Es la segunda red propia, el paso [5]. Corre en cada cuadro. **Primera versión implementada el
+19/11** ([Incertidumbre: lo medido](#incertidumbre-lo-medido-el-1911)); difiere del diseño en
+tres cosas: corre a la resolución de cómputo y no a la mitad, todavía no está condicionada por
+la calibración y no recibe el mapa de estiramiento.
 
-- **Entradas:** la disparidad de CREStereo, la imagen izquierda, el error fotométrico (la
-  izquierda contra la derecha deformada según esa disparidad) y el mapa de estiramiento.
+- **Entradas implementadas** (8 canales, `uncertainty.py`): la imagen izquierda (3); el error
+  fotométrico, es decir la izquierda contra la derecha traída con esa disparidad; dónde ese
+  punto cae dentro de la derecha; cuánto cambia la disparidad entre vecinos; y dos subproductos
+  gratis de CREStereo: el **desacuerdo entre sus dos pasadas** y su **canal vertical**. La
+  disparidad entra aparte, como base.
+- **Entradas previstas y todavía no implementadas:** el mapa de estiramiento.
 - **Salida:** b de Laplace por píxel, la misma escala de error que explica
   [Incertidumbre y objetos](#incertidumbre-y-objetos).
 - **Pérdida:** verosimilitud negativa de Laplace, la NLL que ya usa Fusion.
@@ -671,6 +676,9 @@ uv run python scripts/profundidad/descargar_crestereo.py          # una vez: có
 uv run --extra ml python -m visionx.depth.crestereo_adapt latencia recordings/CLIP
 uv run --extra ml python -m visionx.depth.crestereo_adapt cinta RUTA/cinta-s7
 uv run --extra ml python -m visionx.depth.crestereo_adapt robustez recordings/CLIP
+uv run --extra ml python -m visionx.depth.crestereo_adapt coherencia recordings/CLIP
+uv run python -m visionx.depth.crestereo_adapt descalibracion CALIBRACION.yaml CARPETA
+uv run --extra ml python -m visionx.depth.crestereo_adapt hermanas recordings/CLIP
 ```
 
 **Latencia** (clip `dev-1114-distancias`, 100 pares en ciclo). La red corre en MPS sin recurrir
@@ -735,8 +743,272 @@ cuánto cambia la profundidad entre 0,5 y 3 m (mediana del cambio relativo).
   margen entre ese piso y el techo es el que tiene que ganar la red de alineación, o el mismo
   clásico promediado en el tiempo, que no se probó.
 
+**Robustez con escenas variadas y puntos acumulados** (clip `dev-1114-escenas`, 8 pares
+repartidos en 218 s con la cámara en mano). Se agrega el clásico **acumulado**: como el error es
+de la cámara y no de la escena, se juntan los puntos de los 8 pares y se ajusta una sola vez.
+
+| Error | Sin corregir | Clásico, un par | Clásico acumulado | Corrección exacta |
+|---|---|---|---|---|
+| roll 0,05° | 1,5 % | 4,6 % | 2,8 % | 0,29 % |
+| roll 0,25° | 7,2 % | 4,2 % | 2,5 % | 0,35 % |
+| roll 1,0° | 39,2 % | 5,9 % | 3,3 % | 0,42 % |
+| pitch 0,25° | 4,5 % | 4,2 % | 3,0 % | 0,35 % |
+| yaw 0,1° | 6,7 % | 4,4 % | 2,2 % | 0,32 % |
+| focal 1 % | 14,3 % | 5,5 % | 3,9 % | 0,29 % |
+
+- Acumular baja el error del clásico a la mitad, pero queda en 2–4 %, unas diez veces el techo.
+- Ese piso casi no depende de cuánto error había: es ruido y sesgo del propio estimador. Con
+  errores de hasta ~0,1° conviene no corregir. De ahí sale la regla de decisión de abajo.
+- El clásico no está ajustado: busca puntos a media resolución, con parámetros por defecto.
+
+**Descalibración real** (`descalibracion`, sin red). Pares del 09/11 con la calibración del
+04/11, que ya no describía a la cámara; tablero de 28 mm. El damero da dos controles
+independientes de los puntos SIFT: diferencia de filas y escala del tablero triangulado.
+
+| Caso | Sin corregir | Clásico sin yaw | Clásico con yaw |
+|---|---|---|---|
+| Con el precinto (3 pares): filas | 1,7 a 3,0 px | 0,2 a 0,8 px | 0,3 a 0,9 px |
+| Con el precinto: escala | −2,2 a −5,4 % | −2,0 a −5,2 % | −3,2 a +1,0 % |
+| Precinto suelto (5 pares): filas | 0,15 a 0,31 px | 0,09 a 0,11 px | 0,09 a 0,17 px |
+| Precinto suelto: escala | −3,0 a −4,4 % | −2,4 a −3,6 % | −0,5 a −1,0 % |
+| Control, sesión sana s3 (38 pares): escala, mediana | −0,03 % | −0,09 % | −0,96 % |
+
+- **Arreglar las filas no arregla los metros.** Con el precinto, el clásico sin yaw deja las
+  filas en menos de 1 px y la escala igual de mal.
+- **Al soltar el precinto las filas volvieron, pero la escala no** (−3 a −4 %). El 09/11 se
+  había mirado solo el desvío vertical y se dio la cámara por recuperada.
+- **El yaw se puede estimar en esta lente**, lo bastante para pasar de −3,6 % a −0,7 % de
+  escala (yaw estimado +0,11°). Pero en la sesión sana introduce −1 % que no estaba: tiene un
+  sesgo del orden de 0,04° que su incertidumbre calculada (±0,003°) no refleja.
+- Son 3 y 5 pares; el control usa las mismas fotos con las que se hizo esa calibración.
+
+**Modo continuo contra el preciso** (`coherencia`, `dev-1114-escenas`, 6 tramos de 12 cuadros
+seguidos). Diferencia relativa de profundidad por píxel contra el modo preciso, que es el que se
+midió con cinta. Mediana, y entre paréntesis el percentil 90.
+
+| Sistema | 0,5–1 m | 1–2 m | 2–3 m | 3–6 m |
+|---|---|---|---|---|
+| Continuo (640×360, arranque en caliente) | 6,2 % (19,6) | 6,3 % (16,2) | 2,8 % (13,8) | 3,7 % (11,4) |
+| 640×360, dos pasadas, siempre en frío | 6,3 % (20,3) | 3,5 % (13,9) | 2,6 % (10,1) | 3,6 % (9,6) |
+| 960×540, dos pasadas, siempre en frío | 2,8 % (11,7) | 2,2 % (8,7) | 1,7 % (6,8) | 2,2 % (7,3) |
+
+- El continuo se aparta 3 a 6 % del preciso en mediana, y un tercio de los píxeles más de 5 %.
+  Alcanza para guiar (más cerca, más lejos, dirección); **no para anunciar metros**: esos salen
+  del modo preciso, a pedido.
+- Con la cámara en movimiento, el arranque en caliente empeora el tramo de 1 a 2 m (6,3 % contra
+  3,5 % en frío): cuatro iteraciones no alcanzan a mover del todo la disparidad heredada.
+- Es por píxel y sobre toda la imagen. Por objeto, con la mediana dentro de la máscara, debería
+  ser menor; no se midió.
+
+**Regla de decisión** (19/11, `fit_significant`). Se ajusta todo junto y cada parámetro se
+aplica solo si su valor supera dos veces su incertidumbre. La incertidumbre que calcula el ajuste
+es optimista (no ve errores sistemáticos), así que lleva un piso por parámetro, medido corriendo
+el estimador sobre tres sesiones sanas de la ELP, donde la respuesta correcta es cero: roll
+0,02°, pitch 0,01°, yaw 0,04°, focal 0,05 %. Los parámetros que no pasan quedan en cero y los
+que pasan conservan el valor del ajuste completo.
+
+Misma curva que arriba (`dev-1114-escenas`, 8 pares, puntos acumulados), con la regla:
+
+| Error | Sin corregir | Clásico acumulado | Con la regla | Corrección exacta |
+|---|---|---|---|---|
+| roll 0,05° | 1,5 % | 2,0 % | 0,45 % | 0,29 % |
+| roll 0,25° | 7,1 % | 2,4 % | 0,52 % | 0,34 % |
+| roll 1,0° | 39,0 % | 3,0 % | 0,60 % | 0,42 % |
+| pitch 0,25° | 4,5 % | 2,7 % | 0,55 % | 0,35 % |
+| yaw 0,05° | 3,6 % | 2,3 % | 2,4 % | 0,31 % |
+| yaw 0,25° | 15,1 % | 2,0 % | 2,1 % | 0,33 % |
+| focal 0,5 % | 8,2 % | 1,5 % | 0,29 % | 0,28 % |
+| focal 2 % | 25,5 % | 2,6 % | 0,27 % | 0,26 % |
+
+- **Para roll, pitch y focal, el clásico con la regla queda casi en el techo.** El piso de 2–4 %
+  del clásico sin regla venía de aplicar valores falsos de yaw y focal.
+- **El yaw es lo que queda:** ~2 % en todos los niveles, es decir, un error propio del orden de
+  0,03° que la regla no puede sacar. Es el límite de mirar solo filas.
+- Los errores van de a uno por vez, que es el mejor caso para la regla.
+
+Sobre los pares reales del 09/11 y las sesiones sanas:
+
+| Caso | Sin corregir | Con la regla | Qué aplica |
+|---|---|---|---|
+| Con el precinto (3 pares): escala, mediana | −4,8 % | −2,3 % | pitch y yaw |
+| Precinto suelto (5 pares): escala, mediana | −3,6 % | −1,2 % | yaw |
+| Sesión sana s3 (38 pares) | −0,03 % | −0,03 % | nada |
+| Sesión sana s6-val (20 pares, otra calibración) | +0,35 % | +0,35 % | nada |
+| Sesión sana s7 (13 pares, día siguiente) | +1,33 % | +1,33 % | nada |
+
+- La regla corrige los dos casos malos y no toca los tres sanos. **Los pisos se eligieron
+  mirando estos mismos casos:** falta confirmarla con datos que no haya visto.
+- **El corrimiento del día siguiente (s7, +1,33 %) no deja huella en las filas:** el yaw
+  estimado ahí es +0,002°. Ese tipo de corrimiento solo lo arregla la distancia conocida.
+
+**Cámaras hermanas** (19/11, `hermanas`, generador de etapa 2). Simula otra unidad del mismo
+modelo: además de giro y focal, cambian el centro óptico y la distorsión del ojo derecho. Los
+rangos completos (×1) son ±1° de roll y pitch, ±0,5° de yaw, ±2 % de focal, ±8 px de centro y
+±5 % por coeficiente de distorsión; **son supuestos, la variación real entre unidades no se
+conoce.** Tres cámaras sorteadas por nivel, 6 pares; mediana del cambio de profundidad.
+
+| Nivel | Sin corregir | Clásico con regla | Giro y focal exactos | Campo exacto |
+|---|---|---|---|---|
+| ×0,1 | 3,4 / 5,0 / 5,8 % | 3,5 / 5,2 / 3,1 % | 2,1 / 3,9 / 4,7 % | 0,55 / 0,49 / 0,35 % |
+| ×0,25 | 6,5 / 13,5 / 13,9 % | 2,5 / 13,6 / 6,2 % | 4,5 / 9,3 / 10,5 % | 0,63 / 0,60 / 0,37 % |
+| ×0,5 | 12,9 / 27,8 / 25,5 % | 4,0 / 30,5 / 18,5 % | 8,0 / 20,6 / 18,8 % | 0,66 / 0,56 / 0,42 % |
+| ×1 | 31,3 / 69,3 / 30,5 % | 9,6 / 54,7 / 17,2 % | 13,9 / 48,8 / 29,3 % | 0,94 / 0,58 / 0,58 % |
+
+- **Cuatro números no alcanzan para otra unidad.** Aun con el giro y la focal exactos queda la
+  mayor parte del daño; el campo exacto, que cambia de una zona a otra, lo recupera casi todo.
+- Lo que sobra después de giro y focal es el centro óptico (un corrimiento de columnas, igual
+  que el yaw: no se ve en las filas) y la distorsión (que mueve filas y columnas a la vez).
+- **Consecuencia para el diseño:** la corrección para «otra unidad del mismo modelo» tiene que
+  incluir centro y distorsión, no solo roll, pitch, yaw y focal. Y el corrimiento de columnas
+  sigue pidiendo la distancia conocida. Qué forma toma (más parámetros en el ajuste clásico, o
+  la red de alineación con salida densa) es una decisión abierta.
+- Cuánto de esto es real depende de cuánto difieren dos unidades, y eso solo se sabe con la
+  segunda cámara.
+
 **Decisión de la compuerta:** CREStereo queda como estéreo de base. El modo continuo no necesita
-el respaldo de B0 por latencia; su precisión todavía hay que medirla.
+el respaldo de B0 por latencia y sirve para guiar; los metros se anuncian con el modo preciso.
+
+### Incertidumbre: lo medido el 19/11
+
+```text
+uv run --extra ml python -m visionx.depth.crestereo_adapt inc-cache      # una vez, ~30 min
+uv run --extra ml python -m visionx.depth.crestereo_adapt inc-entrenar --salida CARPETA
+uv run --extra ml python -m visionx.depth.crestereo_adapt inc-evaluar CARPETA/mejor.pt
+```
+
+**Cómo se entrenó.** La U-Net de Fusion (`FusionNet`, 0,98 M de parámetros) con los 8 canales
+de arriba y la disparidad de CREStereo como base. La corrección de disparidad queda congelada
+en cero: solo se aprende b, con la NLL de Laplace. Datos: InStereo2K, 1119 pares de
+entrenamiento y 102 de validación (la partición por tramos de T04). CREStereo se corrió una vez
+por par, a resolución nativa (1080×860), 4 iteraciones y dos pasadas, y su salida se guardó.
+Cada par tiene dos variantes: limpia y con el ojo derecho desalineado por un error sorteado
+(dos de cada tres, chico: hasta 0,15° y 0,3 % de focal; una de cada tres, grande: hasta 1° y
+2 %). La referencia es siempre la disparidad real del par limpio. 12 épocas en la Mac, ~77 min.
+
+**Cómo se juzga** (`uncertainty_metrics.py`). Dos cosas distintas:
+- **Ordenar:** que los píxeles con más b sean los que más erran. Se mide con el **AUSE**: se van
+  descartando los píxeles menos confiables y se compara cuánto baja el error contra el mejor
+  orden posible. 0 es perfecto; menos es mejor.
+- **Calibrar:** que el tamaño de b sea creíble. Se mide la **cobertura**: qué parte de los
+  errores cae dentro del intervalo que debería contener el 50 % y el 90 %.
+
+**Ordenar: AUSE.** Comparadores sin entrenar: el error fotométrico y el chequeo
+izquierda-derecha, que necesita una segunda pasada completa de CREStereo.
+
+| Datos | b, primera versión (6 canales) | b, segunda versión (8 canales), semillas 0 y 1 | Izquierda-derecha | Fotométrico |
+|---|---|---|---|---|
+| InStereo2K val, limpio (102) | 0,330 | 0,276 y 0,291 | **0,276** | 1,023 |
+| InStereo2K val, desalineado (102) | 0,388 | 0,361 y 0,369 | **0,341** | 0,647 |
+| Middlebury 2014 extra, limpio (13) | — | **0,139** (semilla 0) | 0,175 | 0,789 |
+| Middlebury 2014 extra, desalineado (13) | — | **0,307** (semilla 0) | 0,320 | 0,696 |
+
+- La primera versión ordenaba **peor** que el chequeo izquierda-derecha. Lo que la mejoró fueron
+  los dos canales que salen de CREStereo. El desacuerdo entre pasadas, solo y sin red, ya da
+  0,35 en InStereo2K.
+- La segunda versión queda **cerca de izquierda-derecha sin superarlo** en InStereo2K: entre
+  igual y 5 % peor en pares limpios según la semilla, y 6 a 8 % peor en los desalineados. En
+  Middlebury gana, con una sola semilla y 13 pares. No es una victoria: es un orden parecido a
+  mucho menos costo. La hipótesis de ordenar mejor que izquierda-derecha **no se cumple** hoy.
+- **Ablación con corrección de disparidad** (misma red, dejando que también corrija d): el
+  error no cambia (0,625 → 0,624 px en limpio; 3,657 → 3,662 px en desalineado) y el AUSE queda
+  igual (0,300 y 0,365). Una red chica no mejora la disparidad de CREStereo; se confirma que el
+  aporte está en b.
+- **Costo en la Mac** (M2 Max, MPS): la U-Net suma 94 ms al modo preciso (de 619 a 713 ms de
+  mediana) y 25 ms al continuo (de 119 a 144 ms). El chequeo izquierda-derecha sumaría una
+  pasada entera, unos 600 ms en preciso.
+
+**Calibrar: cobertura** de la segunda versión.
+
+| Datos | Intervalo de 50 % | Intervalo de 90 % | b mediana | Error medio de CREStereo |
+|---|---|---|---|---|
+| InStereo2K val, limpio | 0,75 | 0,95 | 0,76 px | 0,63 px |
+| InStereo2K val, desalineado | 0,39 | 0,82 | 2,29 px | 3,66 px |
+| Middlebury 2014 extra, limpio | 0,87 | 0,98 | 1,01 px | 1,18 px |
+| Middlebury 2014 extra, desalineado | 0,36 | 0,88 | 2,98 px | 5,17 px |
+
+- En pares limpios b es **prudente de más** (los intervalos cubren más de lo que prometen). En
+  pares desalineados se queda **corta**, sobre todo en el de 50 %.
+- Era esperable: un corrimiento de columnas por mala alineación no deja huella en ninguna
+  entrada de la red. Esa parte la tiene que aportar la confianza global de la alineación, que
+  todavía no está conectada.
+
+**En la ELP, b está descalibrada.** Única comprobación posible sin referencia densa: las esquinas
+del damero de `cinta-s7`, con el modo preciso. El error real en las esquinas es de 0,05 a 0,10 px
+y la red predice b de 1,0 a 3,3 px: entre 10 y 30 veces más. Con ese b la app diría «no estoy
+seguro» sobre un objeto bien medido. Causa probable, sin confirmar: sobre ese patrón repetitivo
+la pasada a media resolución falla (ya se vio en la prueba de cinta) y el canal de desacuerdo
+entre pasadas se dispara. No hay cómo medirlo en escenas naturales de la ELP sin referencia:
+**hace falta el banco con stickers** para calibrar b en la cámara real.
+
+**Límites.**
+- Dos semillas en InStereo2K y una en Middlebury. La época se eligió con la misma validación
+  que se informa.
+- No hay un test limpio: CREStereo probablemente vio InStereo2K y Middlebury, así que sus
+  errores ahí son más chicos que en datos nuevos. El número de Middlebury son 13 pares.
+- La focal de InStereo2K se supuso igual al ancho de la imagen para armar las desalineaciones.
+- Pensada para dos pasadas (modo preciso). En el continuo, los cuadros en caliente no tienen
+  pasada a media resolución y ese canal va en cero: ahí no está validada.
+- b por píxel no es todavía la incertidumbre de un objeto ni está pasada a metros en la app.
+
+### Estimador clásico con términos de lente (19/11)
+
+`lens.py` extiende el ajuste clásico con un resto radial de dos coeficientes (r² y r⁴), para
+cubrir una diferencia de distorsión entre la cámara real y la nominal. El movimiento radial
+tiene una parte en filas, que se ve, y una en columnas, que queda determinada por la otra.
+
+- **En sesiones sanas** (respuesta correcta: cero) el ajuste devuelve r² entre +0,0007 y +0,0012
+  y r⁴ entre −0,0001 y −0,0004. De ahí salen sus pisos en la regla.
+- **En los pares reales del precinto empeora** respecto de la regla de cuatro parámetros: la
+  escala queda en −4,7 % (con el precinto) y −3,4 % (suelto), contra −2,3 % y −1,2 %. Los
+  términos nuevos le quitan señal al yaw, que deja de superar su umbral. Más parámetros, con los
+  mismos puntos, se estiman peor.
+- **En cámaras hermanas simuladas ayuda a veces y poco:** con la mitad de los rangos baja de
+  30,5 a 21,3 % y de 18,5 a 9,7 % en dos de las tres cámaras, y en la otra queda igual; con un
+  cuarto, mejora una y empeora otra. Sigue muy lejos del campo exacto (0,4–0,9 %). Lo que
+  falta es, sobre todo, el corrimiento de columnas del centro óptico, que no se ve en las filas.
+
+### Corrección clásica más distancia conocida (19/11)
+
+Lo que la alineación no puede ver en las filas (el corrimiento de columnas del centro óptico y
+del yaw) es, a primer orden, un corrimiento constante de disparidad: justo lo que mide el paso
+de distancia conocida. Se emuló en el experimento de cámaras hermanas: el corrimiento se saca
+del primer par (como si se hubiera medido ahí una distancia con cinta) y se aplica a los otros
+seis, que son los que se evalúan. Mediana del cambio de profundidad, tres cámaras por nivel.
+
+| Nivel | Sin corregir | Regla de 4 + distancia | Lente + distancia | Campo exacto |
+|---|---|---|---|---|
+| ×0,1 | 3,4 / 5,4 / 6,1 % | 1,3 / 1,3 / 2,1 % | 2,0 / 1,3 / 1,8 % | 0,33 / 0,26 / 0,23 % |
+| ×0,25 | 7,1 / 14,5 / 15,0 % | 2,7 / 2,1 / 4,9 % | 2,8 / 2,6 / 2,0 % | 0,32 / 0,29 / 0,22 % |
+| ×0,5 | 14,5 / 33,3 / 28,1 % | 4,5 / 3,1 / 10,9 % | 3,9 / 2,8 / 2,7 % | 0,35 / 0,29 / 0,24 % |
+| ×1 | 31,6 / 85,4 / 33,0 % | 7,7 / 5,6 / 42,5 % | 6,1 / 5,4 / 4,5 % | 0,41 / 0,31 / 0,25 % |
+
+- **La distancia conocida recupera la mayor parte de lo que faltaba.** Sin ella, el clásico
+  dejaba entre 2,5 y 49 %; con ella y los términos de lente queda entre 1,3 y 6 %.
+- **Los términos de lente sí sirven acá:** con la regla de cuatro hay casos que no se arreglan
+  (10,9 % y 42,5 %); con lente no aparecen. En los pares reales del precinto pasó lo contrario,
+  así que cuál conviene sigue abierto.
+- **Lo que queda hasta el campo exacto (de ~2 % a ~0,3 %)** es el margen real para una corrección
+  densa aprendida.
+- Es una emulación optimista: el corrimiento sale de la referencia de todo un cuadro, no de un
+  objeto medido con cinta. Rangos supuestos, tres cámaras por nivel, un clip.
+
+### Evaluador del banco ELP (19/11)
+
+`python -m visionx.depth.bench` mide métodos de profundidad contra los stickers del banco
+([Datos y comparación](#datos-y-comparacion)). Dos comandos: `marcar` abre una ventana para
+ubicar a mano cada sticker en la izquierda rectificada y escribe `puntos.yaml`; `evaluar` corre
+los métodos y compara, en una ventana chica alrededor de cada punto, la mediana de la
+profundidad contra la cinta más el cero de la cinta.
+
+- **Qué informa:** puntos medidos, % dentro de 5 % (contando los no medidos como no acertados),
+  error mediano y P90, por rango de distancia. Si el método trae b: el intervalo de 90 % en
+  metros, cuántas veces contiene a la referencia y el factor por el que habría que multiplicar
+  b para que quede calibrada en esos puntos.
+- **Sesiones de test:** rechaza `s3`, `s4` y `s5` salvo con `--test-congelado`.
+- **Probado** con el clip `dev-1114-distancias` (cinco objetos con distancia anotada), con los
+  puntos ubicados a ojo y sin stickers: sirve para ver que la herramienta corre, no como medida
+  de precisión. Los tres métodos coinciden entre sí dentro de 1–3 %, y el modo continuo queda a
+  menos de 1 % del preciso por objeto. `marcar` no se pudo probar: necesita pantalla.
 
 ### Orden de trabajo, orden de caída y ablaciones
 

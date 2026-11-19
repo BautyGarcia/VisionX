@@ -7,7 +7,7 @@ imágenes. Esa diferencia se describe con cuatro números:
     roll   giro sobre el eje óptico (la imagen rota como un volante)
     pitch  giro hacia arriba o abajo
     yaw    giro hacia los costados
-    focal  cuánto más (o menos) agranda el ojo derecho, como logaritmo del cociente
+    focal  cuánto hay que agrandar o achicar la derecha, como logaritmo del factor
 
 Para una cámara ideal (sin distorsión, ya rectificada), girarla o cambiarle el aumento mueve
 los píxeles con una **homografía**: una matriz 3x3 G que se arma con la matriz K de la cámara.
@@ -52,7 +52,10 @@ class Correction:
     roll_deg: float = 0.0
     pitch_deg: float = 0.0
     yaw_deg: float = 0.0
-    log_focal: float = 0.0  # ln(aumento real / aumento que supone la calibración)
+    # ln del factor con que hay que reescalar la derecha para arreglarla. Si la lente real
+    # agranda más de lo que supone la calibración, la imagen quedó grande y este valor es
+    # negativo: log_focal = ln(focal supuesta / focal real).
+    log_focal: float = 0.0
 
     def as_vector(self) -> np.ndarray:
         """[pitch, yaw, roll] en radianes y log_focal: el orden de `PARAMETERS`."""
@@ -82,9 +85,18 @@ class Correction:
 
 
 def camera_matrix(geometry: StereoGeometry) -> np.ndarray:
-    """K del ojo derecho rectificado. Ignora doffs: el corrimiento del centro no cambia giros."""
+    """K del ojo derecho rectificado.
+
+    Los dos ojos rectificados comparten focal y fila del centro. La columna del centro del
+    derecho es `cx + doffs` (así define `doffs` la geometría). En la ELP `doffs` vale menos de
+    un píxel y casi no cambia nada; en cámaras con los centros muy corridos sí importa.
+    """
     return np.array(
-        [[geometry.fx, 0.0, geometry.cx], [0.0, geometry.fy, geometry.cy], [0.0, 0.0, 1.0]],
+        [
+            [geometry.fx, 0.0, geometry.cx + geometry.doffs],
+            [0.0, geometry.fy, geometry.cy],
+            [0.0, 0.0, 1.0],
+        ],
         dtype=np.float64,
     )
 

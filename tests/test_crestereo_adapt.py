@@ -110,6 +110,14 @@ def test_dos_pasadas_media_resolucion_y_despues_completa() -> None:
     net = FakeNet()
     matcher = CreStereoMatcher(net, "cpu", CreStereoParams(iters=10, passes=2))
     matcher.compute(*pair())
+    # Subproductos: la pasada chica llevada al tamaño final (su disparidad se duplica) y el
+    # canal vertical. Con una sola pasada no hay pasada chica.
+    assert matcher.last_extras["half"].shape == (120, 200)
+    assert np.allclose(matcher.last_extras["half"], 2 * DISPARITY)
+    assert np.allclose(matcher.last_extras["vertical"], 0.0)
+    single = CreStereoMatcher(FakeNet(), "cpu", CreStereoParams(iters=4, passes=1))
+    single.compute(*pair())
+    assert single.last_extras["half"] is None
     assert [c["shape"] for c in net.calls] == [(1, 3, 64, 112), (1, 3, 128, 224)]
     assert [c["init"] for c in net.calls] == [False, True]
 
@@ -223,3 +231,29 @@ def test_check_files_explica_que_falta(tmp_path) -> None:
         check_files(cfg)
     ok = PortConfig(cfg.port_dir, cfg.port_commit, weights, sha256_file(weights))
     check_files(ok)
+
+
+class FakeHead:
+    """Imita la U-Net de incertidumbre: b constante, con un hueco donde "no sabe"."""
+
+    def predict(self, left, right, disparity, half=None, vertical=None):
+        assert vertical is not None and vertical.shape == disparity.shape
+        b = np.full(disparity.shape, 0.4, dtype=np.float32)
+        b[0, 0] = np.nan
+        return b
+
+
+def test_estimador_con_incertidumbre_devuelve_b_de_laplace() -> None:
+    from visionx.shared.contracts import UncertaintyKind
+
+    geom = geometry()
+    est = CreStereoEstimator(
+        CreStereoMatcher(FakeNet(), "cpu", CreStereoParams()), geom, uncertainty=FakeHead()
+    )
+    result = est.predict(frame(geom))
+    assert result.uncertainty_kind is UncertaintyKind.LAPLACE_B
+    assert not result.valid_mask[0, 0] and result.valid_mask[1:].all()  # sin b no es válido
+    assert np.allclose(result.uncertainty[result.valid_mask], 0.4)
+    check_depth_geometry(result, geom)
+    sin_b = CreStereoEstimator(CreStereoMatcher(FakeNet(), "cpu", CreStereoParams()), geom)
+    assert sin_b.predict(frame(geom)).uncertainty is None

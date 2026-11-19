@@ -111,6 +111,7 @@ depth:
     weights_sha256: 2271ab615015a73edd4759b0f7b25a4d82ffb654270b92d3811237da3d63aa6d
     device: auto              # auto | mps | cuda | cpu
     max_disp: 256             # el que usa el script de prueba del port; no cambia los pesos
+    incertidumbre: ""         # checkpoint de la U-Net de incertidumbre (mejor.pt); vacío = sin b
     # Dos modos. Valores PROVISORIOS hasta cerrar la tabla de latencia M9 (compuerta de T12).
     continuo:                 # cuadro a cuadro: buscar y guiar
       compute: [640, 360]     # por ojo; adentro se rellena a múltiplos de 16 y se recorta

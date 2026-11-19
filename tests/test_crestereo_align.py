@@ -11,8 +11,11 @@ import pytest
 
 from visionx.depth.crestereo_adapt.classic import (
     ClassicParams,
+    DecisionParams,
     estimate_alignment,
     fit_correction,
+    fit_significant,
+    significant_parameters,
 )
 from visionx.depth.crestereo_adapt.correction import (
     Correction,
@@ -23,10 +26,17 @@ from visionx.depth.crestereo_adapt.correction import (
     warp_image,
 )
 from visionx.depth.crestereo_adapt.perturb import (
+    CameraModel,
+    CameraRanges,
     PerturbationRanges,
+    mismatch_field,
+    mismatch_maps,
+    parametric_error,
     perturb_right,
+    perturb_right_camera,
     restore_right,
     sample_error,
+    sample_sibling,
 )
 from visionx.shared.errors import InvalidInput
 from visionx.shared.geometry import StereoGeometry
@@ -226,6 +236,49 @@ def test_pocos_pares_no_se_confia() -> None:
         fit_correction(left, right[:-1], GEOM)
 
 
+def test_se_puede_elegir_que_parametros_ajustar() -> None:
+    left, right = synthetic_matches(Correction(roll_deg=0.5))
+    only_roll = fit_correction(left, right, GEOM, parameters=("roll",))
+    assert only_roll.correction.pitch_deg == 0.0 and only_roll.correction.yaw_deg == 0.0
+    assert only_roll.correction.roll_deg == pytest.approx(0.5, abs=0.03)
+    nothing = fit_correction(left, right, GEOM, parameters=())
+    assert nothing.ok and nothing.correction.is_identity
+    assert nothing.residual_after_px == nothing.residual_before_px
+    with pytest.raises(InvalidInput):
+        fit_correction(left, right, GEOM, parameters=("zoom",))
+
+
+def test_la_regla_no_corrige_un_par_alineado() -> None:
+    """Con el par alineado, el ajuste libre da valores chicos y ruidosos: no se aplican."""
+    left, right = synthetic_matches(Correction(), seed=4)
+    free = fit_correction(left, right, GEOM)
+    assert not free.correction.is_identity  # el ajuste libre siempre encuentra "algo"
+    ruled, applied = fit_significant(left, right, GEOM)
+    assert applied == () and ruled.correction.is_identity and ruled.ok
+    assert ruled.residual_after_px == pytest.approx(free.residual_before_px, abs=0.05)
+
+
+def test_la_regla_aplica_solo_lo_que_supera_el_umbral() -> None:
+    error = Correction(roll_deg=0.6, pitch_deg=-0.4)
+    left, right = synthetic_matches(error, seed=5)
+    ruled, applied = fit_significant(left, right, GEOM)
+    assert set(applied) == {"roll", "pitch"}
+    assert ruled.correction.yaw_deg == 0.0 and ruled.correction.log_focal == 0.0
+    assert ruled.correction.roll_deg == pytest.approx(0.6, abs=0.03)
+    assert ruled.correction.pitch_deg == pytest.approx(-0.4, abs=0.03)
+    assert ruled.residual_after_px < 0.5
+
+
+def test_el_umbral_usa_el_piso_cuando_la_incertidumbre_calculada_es_optimista() -> None:
+    left, right = synthetic_matches(Correction(yaw_deg=0.06), n=4000, noise_px=0.05, seed=6)
+    estimate = fit_correction(left, right, GEOM)
+    assert estimate.sigma["yaw"] < 0.02  # el ajuste se cree muy preciso
+    # 0,06° no llega a dos veces el piso de 0,04° medido en sesiones sanas: no se aplica...
+    assert "yaw" not in significant_parameters(estimate)
+    # ...y sí se aplicaría si alguien confiara en la incertidumbre calculada.
+    assert "yaw" in significant_parameters(estimate, DecisionParams(floor_yaw_deg=0.0))
+
+
 def test_de_punta_a_punta_con_imagenes() -> None:
     """Plano de frente con textura: la derecha es la izquierda corrida y después desalineada."""
     left = texture(5)
@@ -272,3 +325,184 @@ def test_barridos_de_a_un_parametro() -> None:
     rows = [{"a": 1.0, "b": float("nan")}, {"a": 3.0, "b": float("nan")}]
     out = robustness.summarize(rows)
     assert out["a"] == 2.0 and math.isnan(out["b"])
+
+
+def test_la_homografia_gira_alrededor_del_centro_del_ojo_derecho() -> None:
+    """Con los centros corridos (doffs), el punto que no se mueve en filas es cx + doffs."""
+    import dataclasses
+
+    shifted = dataclasses.replace(GEOM, doffs=30.0)
+    g = homography(Correction(roll_deg=0.5), shifted)
+    center = np.array([[shifted.cx + 30.0, shifted.cy]])
+    assert np.allclose(apply_homography(g, center), center, atol=1e-9)
+    assert not np.allclose(apply_homography(g, [[shifted.cx, shifted.cy]]), [[GEOM.cx, GEOM.cy]])
+
+
+# --- generador, etapa 2: cámara real contra nominal ---------------------------------------
+
+
+def elp_like() -> CameraModel:
+    """Lente con distorsión fuerte, de forma parecida a la ELP, para la geometría de prueba."""
+    k = np.array([[205.0, 0.0, 318.0], [0.0, 205.0, 182.0], [0.0, 0.0, 1.0]])
+    d = np.array([0.03, 1.7, 0.0003, 0.0, 0.09, 0.08, 1.6, 0.2])  # modelo racional de 8
+    return CameraModel(k, d, np.eye(3))
+
+
+def test_camaras_iguales_no_mueven_nada() -> None:
+    camera = elp_like()
+    assert np.abs(mismatch_field(camera, camera, GEOM)).max() < 1e-3
+    right = texture(6)
+    out = perturb_right_camera(right, camera, camera, GEOM)
+    rows, cols = interior()
+    diff = np.abs(out.right[rows, cols].astype(np.int16) - right[rows, cols].astype(np.int16))
+    assert diff.max() <= 1  # la única diferencia es el redondeo de interpolar en el mismo lugar
+    assert out.error.is_identity
+
+
+@pytest.mark.parametrize(
+    "error",
+    [Correction(roll_deg=0.7), Correction(pitch_deg=-0.5), Correction(yaw_deg=0.3)],
+)
+def test_sin_lente_un_giro_da_lo_mismo_que_la_etapa_1(error) -> None:
+    nominal = CameraModel.ideal(GEOM)
+    rotation, _ = cv2.Rodrigues(error.as_vector()[:3])  # pitch, yaw, roll = x, y, z
+    true = CameraModel(nominal.K, nominal.D, rotation)
+    stage_2 = mismatch_field(true, nominal, GEOM)
+    stage_1 = perturb_right(texture(7), error, GEOM).field
+    assert np.abs(stage_2 - stage_1).max() < 1e-2
+    back = parametric_error(true, nominal)
+    assert np.allclose(back.as_vector(), error.as_vector(), atol=1e-9)
+
+
+def test_sin_lente_otra_focal_da_lo_mismo_que_la_etapa_1() -> None:
+    nominal = CameraModel.ideal(GEOM)
+    k = nominal.K.copy()
+    k[0, 0] *= 1.01
+    k[1, 1] *= 1.01  # la lente real agranda 1 % más de lo que cree la calibración
+    true = CameraModel(k, nominal.D, nominal.R)
+    error = parametric_error(true, nominal)
+    assert error.log_focal == pytest.approx(-math.log(1.01))  # arreglar es achicar
+    stage_1 = perturb_right(texture(7), error, GEOM).field
+    assert np.abs(mismatch_field(true, nominal, GEOM) - stage_1).max() < 1e-2
+
+
+def test_campo_y_mapas_de_la_etapa_2_son_inversos() -> None:
+    nominal = elp_like()
+    true = sample_sibling(np.random.default_rng(3), nominal, CameraRanges())
+    field = mismatch_field(true, nominal, GEOM)
+    map_x, map_y = mismatch_maps(true, nominal, GEOM)
+    # Un píxel limpio q termina en q + campo(q); el mapa, evaluado ahí, tiene que devolver q.
+    u, v = np.meshgrid(np.arange(GEOM.width, dtype=np.float32),
+                       np.arange(GEOM.height, dtype=np.float32))  # fmt: skip
+    back_x = cv2.remap(map_x, u + field[:, :, 0], v + field[:, :, 1], cv2.INTER_LINEAR)
+    back_y = cv2.remap(map_y, u + field[:, :, 0], v + field[:, :, 1], cv2.INTER_LINEAR)
+    rows, cols = interior(60)
+    assert np.abs(back_x - u)[rows, cols].max() < 0.1  # px
+    assert np.abs(back_y - v)[rows, cols].max() < 0.1
+
+
+def test_otra_distorsion_deja_un_resto_que_no_es_giro_ni_aumento() -> None:
+    nominal = elp_like()
+    d = nominal.D.copy()
+    d[1] *= 1.05  # 5 % más del segundo coeficiente radial
+    true = CameraModel(nominal.K, d, nominal.R)
+    out = perturb_right_camera(texture(8), true, nominal, GEOM)
+    assert out.error.is_identity  # no hay giro ni cambio de focal...
+    vertical = np.abs(out.field[:, :, 1])
+    assert vertical.max() > 0.5  # ...pero las filas se corren, sobre todo lejos del centro
+    assert vertical[GEOM.height // 2, GEOM.width // 2] < 0.05
+
+
+def test_hermanas_reproducibles_y_dentro_del_rango() -> None:
+    nominal = elp_like()
+    ranges = CameraRanges()
+    a = sample_sibling(np.random.default_rng(11), nominal, ranges)
+    b = sample_sibling(np.random.default_rng(11), nominal, ranges)
+    c = sample_sibling(np.random.default_rng(12), nominal, ranges)
+    assert np.array_equal(a.K, b.K) and np.array_equal(a.D, b.D) and np.array_equal(a.R, b.R)
+    assert not np.array_equal(a.K, c.K)
+    error = parametric_error(a, nominal)
+    assert abs(error.roll_deg) <= ranges.roll_deg + 1e-6
+    assert abs(error.log_focal) <= ranges.focal + 1e-9
+    assert abs(a.K[0, 2] - nominal.K[0, 2]) <= ranges.center_px
+    assert np.all(np.abs(a.D - nominal.D) <= ranges.distortion * np.abs(nominal.D) + 1e-12)
+    with pytest.raises(InvalidInput):
+        CameraRanges(focal=-0.1)
+
+
+# --- corrección con términos de lente -----------------------------------------------------
+
+
+def lens_matches(
+    lens, n: int = 1500, noise_px: float = 0.1, seed: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Puntos vistos por los dos ojos; el derecho necesita la corrección `lens`."""
+    from visionx.depth.crestereo_adapt.lens import pull_maps
+
+    rng = np.random.default_rng(seed)
+    left = np.column_stack([rng.uniform(20, GEOM.width - 20, n),
+                            rng.uniform(20, GEOM.height - 20, n)])  # fmt: skip
+    disparity = GEOM.fx * GEOM.baseline_m / rng.uniform(0.5, 6.0, n)
+    right_clean = left - np.column_stack([disparity, np.zeros(n)])
+    # El punto limpio q sale del lugar pull(q) de la derecha base: ahí es donde se lo observa.
+    map_x, map_y = pull_maps(lens, GEOM)
+    xs = right_clean[:, 0].astype(np.float32).reshape(-1, 1)
+    ys = right_clean[:, 1].astype(np.float32).reshape(-1, 1)
+    base = np.column_stack([cv2.remap(map_x, xs, ys, cv2.INTER_LINEAR).ravel(),
+                            cv2.remap(map_y, xs, ys, cv2.INTER_LINEAR).ravel()])  # fmt: skip
+    inside = (xs.ravel() > 1) & (xs.ravel() < GEOM.width - 2)
+    left, base = left[inside], base[inside]
+    return left + rng.normal(0, noise_px, left.shape), base + rng.normal(0, noise_px, base.shape)
+
+
+def test_mapas_de_lente_son_la_inversa_de_corregir_puntos() -> None:
+    from visionx.depth.crestereo_adapt.lens import LensCorrection, correct_points, pull_maps
+
+    lens = LensCorrection(Correction(roll_deg=0.5, pitch_deg=-0.3, log_focal=0.004), 0.004, -0.001)
+    map_x, map_y = pull_maps(lens, GEOM)
+    v, u = np.mgrid[40:320:40, 40:600:40]
+    source = np.column_stack([map_x[v, u].ravel(), map_y[v, u].ravel()])
+    back = correct_points(lens, GEOM, source)
+    assert np.abs(back - np.column_stack([u.ravel(), v.ravel()])).max() < 1e-3  # px
+    assert LensCorrection().is_identity and not lens.is_identity
+    identity_x, identity_y = pull_maps(LensCorrection(), GEOM)
+    assert np.allclose(identity_x[100, 200], 200.0) and np.allclose(identity_y[100, 200], 100.0)
+
+
+def test_sin_radial_la_correccion_de_lente_es_la_homografia() -> None:
+    from visionx.depth.crestereo_adapt.lens import LensCorrection, correct_points, warp_lens
+
+    c = Correction(roll_deg=0.6, pitch_deg=0.2, yaw_deg=0.1, log_focal=-0.003)
+    points = np.array([[100.0, 80.0], [500.0, 300.0]])
+    assert np.allclose(
+        correct_points(LensCorrection(c), GEOM, points),
+        apply_homography(homography(c, GEOM), points),
+    )
+    image = texture(9)
+    rows, cols = interior()
+    a = warp_lens(image, LensCorrection(c), GEOM)[rows, cols].astype(np.int16)
+    b = warp_image(image, homography(c, GEOM))[rows, cols].astype(np.int16)
+    assert np.abs(a - b).mean() < 0.5
+
+
+def test_el_ajuste_de_lente_recupera_giro_y_radial() -> None:
+    from visionx.depth.crestereo_adapt.lens import LensCorrection, LensDecision, fit_lens
+
+    truth = LensCorrection(Correction(roll_deg=0.5, pitch_deg=-0.4), radial2=0.006, radial4=0.0)
+    est = fit_lens(*lens_matches(truth), GEOM, decision=LensDecision(floor_radial2=1e-4))
+    assert est.ok, est.reason
+    assert {"roll", "pitch", "radial2"} <= set(est.applied)
+    assert est.lens.correction.roll_deg == pytest.approx(0.5, abs=0.05)
+    assert est.lens.correction.pitch_deg == pytest.approx(-0.4, abs=0.05)
+    assert est.lens.radial2 == pytest.approx(0.006, abs=0.0015)
+    assert est.residual_after_px < 0.3 < est.residual_before_px
+
+
+def test_el_ajuste_de_lente_no_toca_un_par_alineado() -> None:
+    from visionx.depth.crestereo_adapt.lens import LensCorrection, fit_lens
+
+    est = fit_lens(*lens_matches(LensCorrection(), seed=3), GEOM)
+    assert est.ok and est.applied == () and est.lens.is_identity
+    assert not est.fitted.is_identity  # el ajuste libre siempre encuentra "algo"
+    few = fit_lens(np.zeros((5, 2)), np.zeros((5, 2)), GEOM)
+    assert not few.ok and "pares" in few.reason

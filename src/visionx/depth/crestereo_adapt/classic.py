@@ -22,7 +22,9 @@ sale de la curvatura del ajuste. Para el yaw suele ser grande: casi no deja huel
 
 from __future__ import annotations
 
+import dataclasses
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import cv2
@@ -106,23 +108,74 @@ def _residuals(
     return pts_l[:, 1] - moved[:, 1]
 
 
-def _jacobian(
-    vector: np.ndarray,
+def epipolar_inliers(
+    pts_l: np.ndarray, pts_r: np.ndarray, params: ClassicParams
+) -> tuple[np.ndarray, np.ndarray]:
+    """Descarta emparejamientos equivocados groseros con RANSAC sobre la geometría epipolar.
+
+    No supone que el par ya esté alineado. Sortea subconjuntos al azar: se fija la semilla para
+    que el mismo par dé siempre lo mismo.
+    """
+    cv2.setRNGSeed(0)
+    _, mask = cv2.findFundamentalMat(pts_l, pts_r, cv2.FM_RANSAC, params.ransac_px, 0.999)
+    if mask is not None and int(mask.sum()) >= params.min_inliers:
+        keep = mask.ravel().astype(bool)
+        return pts_l[keep], pts_r[keep]
+    return pts_l, pts_r
+
+
+def robust_fit(
+    residual: Callable[[np.ndarray], np.ndarray],
+    size: int,
     free: list[int],
-    pts_l: np.ndarray,
-    pts_r: np.ndarray,
-    geometry: StereoGeometry,
-) -> np.ndarray:
-    """Cuánto cambia cada residuo al mover cada parámetro libre (diferencias centradas)."""
-    step = 1e-6
-    columns = []
-    for index in free:
-        delta = np.zeros(4)
-        delta[index] = step
-        plus = _residuals(vector + delta, pts_l, pts_r, geometry)
-        minus = _residuals(vector - delta, pts_l, pts_r, geometry)
-        columns.append((plus - minus) / (2 * step))
-    return np.column_stack(columns)
+    params: ClassicParams,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Cuadrados mínimos robustos de un vector de `size` parámetros; solo se mueven los `free`.
+
+    `residual(vector)` devuelve un residuo por punto. Devuelve (vector ajustado, desvío
+    estándar por parámetro con 0 en los fijos, máscara de puntos coherentes).
+    """
+
+    def jacobian(vector: np.ndarray, rows: np.ndarray | None = None) -> np.ndarray:
+        # Cuánto cambia cada residuo al mover cada parámetro libre (diferencias centradas).
+        step = 1e-6
+        columns = []
+        for index in free:
+            delta = np.zeros(size)
+            delta[index] = step
+            column = (residual(vector + delta) - residual(vector - delta)) / (2 * step)
+            columns.append(column if rows is None else column[rows])
+        return np.column_stack(columns)
+
+    vector = np.zeros(size)
+    for _ in range(params.iterations):
+        r = residual(vector)
+        # Huber: peso 1 para residuos chicos y decreciente para los grandes. La escala sale de
+        # la dispersión robusta de los propios residuos, con piso en `huber_px`.
+        spread = 1.4826 * float(np.median(np.abs(r - np.median(r))))
+        k = max(params.huber_px, 1.345 * spread)
+        weights = np.where(np.abs(r) <= k, 1.0, k / np.maximum(np.abs(r), 1e-12))
+        jac = jacobian(vector)
+        normal = jac.T @ (weights[:, None] * jac)
+        # Amortiguación mínima: evita dividir por cero si un parámetro casi no se observa.
+        normal += 1e-12 * np.trace(normal) * np.eye(len(free))
+        step = np.linalg.solve(normal, -jac.T @ (weights * r))
+        vector[free] += step
+        if float(np.max(np.abs(step))) < 1e-9:
+            break
+
+    r = residual(vector)
+    spread = 1.4826 * float(np.median(np.abs(r - np.median(r))))
+    inlier = np.abs(r) <= max(3.0 * spread, params.huber_px)
+    # Incertidumbre: varianza de los residuos por la inversa de la curvatura del ajuste.
+    jac = jacobian(vector, inlier)
+    dof = max(int(inlier.sum()) - len(free), 1)
+    variance = float(np.sum(r[inlier] ** 2)) / dof
+    covariance = variance * np.linalg.pinv(jac.T @ jac)
+    sigma = np.zeros(size)
+    for position, index in enumerate(free):
+        sigma[index] = math.sqrt(max(float(covariance[position, position]), 0.0))
+    return vector, sigma, inlier
 
 
 def fit_correction(
@@ -130,9 +183,18 @@ def fit_correction(
     pts_r: np.ndarray,
     geometry: StereoGeometry,
     params: ClassicParams | None = None,
+    parameters: tuple[str, ...] | None = None,
 ) -> AlignmentEstimate:
-    """Ajusta la corrección del ojo derecho a pares de puntos ya emparejados."""
+    """Ajusta la corrección del ojo derecho a pares de puntos ya emparejados.
+
+    `parameters` elige a mano qué se ajusta (nombres de `PARAMETERS`); lo demás queda en cero.
+    Sin él, se ajustan pitch y roll, y yaw y focal según `params`.
+    """
     p = params or ClassicParams()
+    if parameters is not None:
+        unknown = set(parameters) - set(PARAMETERS)
+        if unknown:
+            raise InvalidInput(f"parámetros desconocidos: {sorted(unknown)}")
     pts_l = np.asarray(pts_l, dtype=np.float64).reshape(-1, 2)
     pts_r = np.asarray(pts_r, dtype=np.float64).reshape(-1, 2)
     if pts_l.shape != pts_r.shape:
@@ -150,49 +212,28 @@ def fit_correction(
         return failed(f"solo {matches} pares emparejados (mínimo {p.min_inliers})")
     before = float(np.median(np.abs(pts_l[:, 1] - pts_r[:, 1])))
 
-    # RANSAC epipolar: descarta pares equivocados sin suponer que el par ya está alineado.
-    _, mask = cv2.findFundamentalMat(pts_l, pts_r, cv2.FM_RANSAC, p.ransac_px, 0.999)
-    if mask is not None and int(mask.sum()) >= p.min_inliers:
-        keep = mask.ravel().astype(bool)
-        pts_l, pts_r = pts_l[keep], pts_r[keep]
+    pts_l, pts_r = epipolar_inliers(pts_l, pts_r, p)
 
     # Parámetros libres, en el orden de PARAMETERS: pitch, yaw, roll, log_focal.
-    free = [0, 2]
-    if p.estimate_yaw:
-        free.insert(1, 1)
-    if p.estimate_focal:
-        free.append(3)
-    vector = np.zeros(4)
-    weights = np.ones(len(pts_l))
-    for _ in range(p.iterations):
-        r = _residuals(vector, pts_l, pts_r, geometry)
-        # Huber: peso 1 para residuos chicos y decreciente para los grandes. La escala sale de
-        # la dispersión robusta de los propios residuos, con piso en `huber_px`.
-        spread = 1.4826 * float(np.median(np.abs(r - np.median(r))))
-        k = max(p.huber_px, 1.345 * spread)
-        weights = np.where(np.abs(r) <= k, 1.0, k / np.maximum(np.abs(r), 1e-12))
-        jac = _jacobian(vector, free, pts_l, pts_r, geometry)
-        normal = jac.T @ (weights[:, None] * jac)
-        # Amortiguación mínima: evita dividir por cero si un parámetro casi no se observa.
-        normal += 1e-12 * np.trace(normal) * np.eye(len(free))
-        step = np.linalg.solve(normal, -jac.T @ (weights * r))
-        vector[free] += step
-        if float(np.max(np.abs(step))) < 1e-9:
-            break
-
-    r = _residuals(vector, pts_l, pts_r, geometry)
-    spread = 1.4826 * float(np.median(np.abs(r - np.median(r))))
-    inlier = np.abs(r) <= max(3.0 * spread, p.huber_px)
+    if parameters is not None:
+        free = [i for i, name in enumerate(PARAMETERS) if name in parameters]
+    else:
+        free = [0, 2]
+        if p.estimate_yaw:
+            free.insert(1, 1)
+        if p.estimate_focal:
+            free.append(3)
+    if not free:  # nada que ajustar: la corrección es "no tocar"
+        zero = dict.fromkeys(PARAMETERS, 0.0)
+        return AlignmentEstimate(Correction(), zero, matches, len(pts_l), before, before, True)
+    vector, deviation, inlier = robust_fit(
+        lambda v: _residuals(v, pts_l, pts_r, geometry), 4, free, p
+    )
     inliers = int(inlier.sum())
-    after = float(np.median(np.abs(r)))
-    # Incertidumbre: varianza de los residuos por la inversa de la curvatura del ajuste.
-    jac = _jacobian(vector, free, pts_l[inlier], pts_r[inlier], geometry)
-    dof = max(inliers - len(free), 1)
-    variance = float(np.sum(r[inlier] ** 2)) / dof
-    covariance = variance * np.linalg.pinv(jac.T @ jac)
+    after = float(np.median(np.abs(_residuals(vector, pts_l, pts_r, geometry))))
     sigma = dict.fromkeys(PARAMETERS, 0.0)
-    for position, index in enumerate(free):
-        value = math.sqrt(max(float(covariance[position, position]), 0.0))
+    for index in free:  # los ángulos se informan en grados; log_focal no tiene unidades
+        value = float(deviation[index])
         sigma[PARAMETERS[index]] = value if index == 3 else math.degrees(value)
 
     correction = Correction.from_vector(vector)
@@ -217,3 +258,91 @@ def estimate_alignment(
     geometry.require_size(right, "right")
     pts_l, pts_r = match_points(left, right, params)
     return fit_correction(pts_l, pts_r, geometry, params)
+
+
+@dataclass(frozen=True)
+class DecisionParams:
+    """Cuándo vale la pena aplicar cada parámetro de la corrección.
+
+    Corregir con un valor ruidoso empeora lo que había: en la curva de robustez del 18/11, con
+    errores de 0,05° el clásico dejaba la profundidad peor que sin tocar. La regla es aplicar
+    un parámetro solo si su valor supera `k` veces su incertidumbre.
+
+    La incertidumbre que calcula el ajuste es optimista: supone que los residuos son ruido
+    puro y no ve errores sistemáticos (distorsión mal modelada, puntos mal ubicados). Por eso
+    se le pone un **piso** por parámetro, medido corriendo el estimador sobre sesiones sanas
+    de la ELP, donde la respuesta correcta es cero (BITACORA 2026-11-18): roll hasta 0,021°,
+    pitch hasta 0,009°, yaw hasta 0,036°, focal hasta 0,053 %.
+    """
+
+    k: float = 2.0
+    floor_roll_deg: float = 0.02
+    floor_pitch_deg: float = 0.01
+    floor_yaw_deg: float = 0.04
+    floor_log_focal: float = 0.0005
+
+    def floor(self, name: str) -> float:
+        return {
+            "roll": self.floor_roll_deg,
+            "pitch": self.floor_pitch_deg,
+            "yaw": self.floor_yaw_deg,
+            "log_focal": self.floor_log_focal,
+        }[name]
+
+
+def _value(correction: Correction, name: str) -> float:
+    return correction.log_focal if name == "log_focal" else getattr(correction, f"{name}_deg")
+
+
+def significant_parameters(
+    estimate: AlignmentEstimate, decision: DecisionParams | None = None
+) -> tuple[str, ...]:
+    """Parámetros cuyo valor supera `k` veces su incertidumbre (con piso)."""
+    d = decision or DecisionParams()
+    keep = []
+    for name in PARAMETERS:
+        threshold = d.k * max(float(estimate.sigma[name]), d.floor(name))
+        if abs(_value(estimate.correction, name)) > threshold:
+            keep.append(name)
+    return tuple(keep)
+
+
+def fit_significant(
+    pts_l: np.ndarray,
+    pts_r: np.ndarray,
+    geometry: StereoGeometry,
+    params: ClassicParams | None = None,
+    decision: DecisionParams | None = None,
+) -> tuple[AlignmentEstimate, tuple[str, ...]]:
+    """Ajuste con la regla de decisión: devuelve la corrección a aplicar y qué parámetros usa.
+
+    Se ajusta todo junto y después se anulan los parámetros que no superan su umbral. Los que
+    quedan conservan el valor del ajuste completo. No se vuelve a ajustar solo con ellos: los
+    parámetros se influyen entre sí, y al sacar uno del ajuste los demás absorben su efecto y
+    cambian (se probó con los pares del 09/11: el yaw solo dejaba de superar el umbral). Si
+    ninguno lo supera, la respuesta es no corregir.
+    """
+    estimate = fit_correction(pts_l, pts_r, geometry, params)
+    if not estimate.ok:
+        return estimate, ()
+    chosen = significant_parameters(estimate, decision)
+    kept = {
+        name: _value(estimate.correction, name) if name in chosen else 0.0 for name in PARAMETERS
+    }
+    correction = Correction(
+        roll_deg=kept["roll"],
+        pitch_deg=kept["pitch"],
+        yaw_deg=kept["yaw"],
+        log_focal=kept["log_focal"],
+    )
+    # Residuo que queda con la corrección que de verdad se aplica.
+    remaining = _residuals(
+        correction.as_vector(),
+        np.asarray(pts_l, dtype=np.float64).reshape(-1, 2),
+        np.asarray(pts_r, dtype=np.float64).reshape(-1, 2),
+        geometry,
+    )
+    applied = dataclasses.replace(
+        estimate, correction=correction, residual_after_px=float(np.median(np.abs(remaining)))
+    )
+    return applied, chosen
