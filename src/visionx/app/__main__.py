@@ -210,7 +210,7 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     print(
         f"asistente: {assistant.s.model} (necesita internet)"
         if assistant
-        else "asistente: apagado (sin ANTHROPIC_API_KEY, sin extra ia o tope de gasto)"
+        else "asistente: apagado (sin ~/.visionx/anthropic_api_key, sin extra ia o tope de gasto)"
     )
     controller = Controller(
         CommandParser(catalog, questions=assistant is not None),

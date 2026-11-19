@@ -16,13 +16,18 @@ uv run python scripts/profundidad/descargar_crestereo.py      # solo si se prueb
 ```
 
 **API key de Claude** (leer, describir y preguntas libres). Sin ella la app funciona igual, con
-la lectura y la descripción locales de antes. En `~/.zshrc`, no en el repo:
+la lectura y la descripción locales de antes. Va en un archivo privado, fuera del repo:
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+mkdir -p ~/.visionx && chmod 700 ~/.visionx
+printf '%s' 'sk-ant-...' > ~/.visionx/anthropic_api_key && chmod 600 ~/.visionx/anthropic_api_key
 ```
 
-Abrir una terminal nueva después. Cada consulta cuesta ~0,5 centavos de dólar (Sonnet 5.5) y
+**Nunca como `ANTHROPIC_API_KEY`** (ni en `~/.zshrc` ni en ningún lado): ese nombre lo leen solos
+Claude Code y los SDK de Anthropic, y gastan los créditos de la key en lo suyo. Pasó el 19/11: la
+CLI se cobró los 5 USD de la key de VisionX. Si ya está, borrarla de `~/.zshrc` y abrir una
+terminal nueva. Lo ideal es una key de un *workspace* propio de VisionX en la consola de
+Anthropic, con un tope de gasto mensual. Cada consulta cuesta ~0,5 centavos de dólar (Sonnet 5.5) y
 queda anotada en `outputs/vlm/gasto.jsonl`; con 5 USD anotados la app deja de consultar
 (`assistant.budget_usd`).
 
@@ -48,7 +53,7 @@ audio:
 |---|---|---|
 | Voz Mateo | `uv run python -m visionx.voice decir "Busco la taza."` | Suena Mateo; la 2.ª vez «síntesis ~1 ms» |
 | Sin red | Apagar el wifi y repetir con otra frase | Habla Piper (davefx); no se cuelga |
-| Asistente | `ejecutar` imprime `asistente: claude-sonnet-5-5` al arrancar | Si dice «apagado», falta la key o el extra `ia` |
+| Asistente | `ejecutar` imprime `asistente: claude-sonnet-5-5` al arrancar | Si dice «apagado», falta `~/.visionx/anthropic_api_key` o el extra `ia` |
 | Cámara | `uv run python -m visionx.camera ver --config configs/local.yaml` | Ojo izquierdo a la izquierda |
 
 ## 3. Correr la app

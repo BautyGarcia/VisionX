@@ -227,3 +227,21 @@ def test_frequent_phrases_match_what_the_guide_says():
         "Listo, ya puedo medir distancias.",
     ):
         assert expected in phrases, expected
+
+
+def test_key_comes_only_from_the_visionx_file_or_variable(tmp_path, monkeypatch):
+    from visionx.assistant.core import load_api_key
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "la-de-otros-programas")
+    assert load_api_key(str(tmp_path / "no-existe")) is None  # ANTHROPIC_API_KEY no cuenta
+    key_file = tmp_path / "anthropic_api_key"
+    key_file.write_text("sk-visionx\n", encoding="utf-8")
+    assert load_api_key(str(key_file)) == "sk-visionx"
+    monkeypatch.setenv("VISIONX_ANTHROPIC_API_KEY", "sk-variable")
+    assert load_api_key(str(key_file)) == "sk-variable"
+
+
+def test_tests_never_see_the_real_key():
+    from visionx.assistant.core import has_credentials
+
+    assert not has_credentials()  # conftest: otro HOME y sin variables

@@ -36,7 +36,8 @@ voz = [
 # Pesos latinos fijados y descargados aparte con `python -m visionx.reading descargar`.
 ocr = ["rapidocr==3.10.0", "onnxruntime>=1.23,<2"]
 # Asistente (T10/T11): Claude con imagen para leer, describir y preguntas libres. Necesita red y
-# ANTHROPIC_API_KEY; sin el extra o sin la key, los modos usan su versión local.
+# la key propia en ~/.visionx/anthropic_api_key (nunca ANTHROPIC_API_KEY); sin el extra o sin la
+# key, los modos usan su versión local.
 ia = [
     "anthropic>=1.0",
 ]

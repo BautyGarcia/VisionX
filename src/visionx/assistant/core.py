@@ -2,7 +2,9 @@
 
 Decidido por Tomás el 18/11, después de comparar Opus 5.5, Sonnet 5.5 y Haiku 5.5 sobre 20 casos
 de los clips (outputs/vlm/comparativa.html): Sonnet 5.5 con effort low empieza a hablar en ~0,9 s
-(mediana) y no inventó contenido. Necesita internet y ANTHROPIC_API_KEY; sin eso, cada modo
+(mediana) y no inventó contenido. Necesita internet y la key propia de VisionX (ver
+`load_api_key`: NUNCA `ANTHROPIC_API_KEY`, que también usarían Claude Code y otros programas);
+sin eso, cada modo
 vuelve a su versión local (OCR + lectura por bloques, plantilla de describir).
 
 - La respuesta llega por streaming y se entrega de a frases: la voz empieza con la primera.
@@ -79,6 +81,8 @@ class AssistantSettings:
     # consulta más y los modos usan su respaldo local. 0 = sin tope.
     ledger: str = "outputs/vlm/gasto.jsonl"
     budget_usd: float = 0.0
+    # Key SOLO de VisionX: archivo privado fuera del repo. No se usa ANTHROPIC_API_KEY.
+    key_file: str = "~/.visionx/anthropic_api_key"
 
     @classmethod
     def from_config(cls, cfg: dict[str, Any]) -> AssistantSettings:
@@ -133,8 +137,30 @@ class Ledger:
         return usd
 
 
-def has_credentials() -> bool:
-    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+KEY_ENV = "VISIONX_ANTHROPIC_API_KEY"
+KEY_FILE = "~/.visionx/anthropic_api_key"
+
+
+def load_api_key(key_file: str = KEY_FILE) -> str | None:
+    """La key de VisionX: `VISIONX_ANTHROPIC_API_KEY` o el archivo `key_file`.
+
+    Nunca `ANTHROPIC_API_KEY`: ese nombre lo leen solos Claude Code y los SDK de Anthropic, y
+    con la key de VisionX ahí, cualquiera de ellos gasta sus créditos (pasó el 19/11: la CLI se
+    cobró 5 USD). Con un nombre y un archivo propios, solo el asistente de VisionX la usa.
+    """
+    key = os.environ.get(KEY_ENV, "").strip()
+    if key:
+        return key
+    path = Path(key_file).expanduser()
+    try:
+        key = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return key or None
+
+
+def has_credentials(key_file: str = KEY_FILE) -> bool:
+    return load_api_key(key_file) is not None
 
 
 # --- texto -------------------------------------------------------------------------------
@@ -338,13 +364,17 @@ class Assistant:
             import anthropic  # noqa: F401
         except ImportError:
             return False
-        return has_credentials()
+        return has_credentials(self.s.key_file)
 
     def client(self) -> Any:
         if self._client is None:
             import anthropic
 
-            self._client = anthropic.Anthropic(timeout=self.s.timeout_s, max_retries=1)
+            key = load_api_key(self.s.key_file)
+            if key is None:
+                raise RuntimeError("falta la key de VisionX (~/.visionx/anthropic_api_key)")
+            # api_key explícita: el SDK no cae a ANTHROPIC_API_KEY ni a otras credenciales.
+            self._client = anthropic.Anthropic(api_key=key, timeout=self.s.timeout_s, max_retries=1)
         return self._client
 
     def submit(
