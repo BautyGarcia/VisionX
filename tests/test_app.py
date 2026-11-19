@@ -482,3 +482,13 @@ def test_cli_runs_headless_with_scripted_orders(tmp_path, capsys):
     assert objs and {"clase", "z_m", "fraccion_valida", "politica"} <= set(objs[0])
     assert (tmp_path / "dashboard.png").stat().st_size > 0
     assert app_main(["comparar", "--frames", "5", "--csv", str(tmp_path / "c.csv")]) == 0
+
+
+def test_dashboard_arrow_points_to_the_guided_target():
+    from visionx.app.dashboard import draw_target_arrow
+    from visionx.shared.geometry import StereoGeometry
+
+    g = StereoGeometry(640, 360, 300.0, 300.0, 320.0, 180.0, 0.06)
+    out = draw_target_arrow(np.zeros((360, 640, 3), np.uint8), (-20.0, -10.0), g)
+    ys, xs = np.nonzero(out[:, :, 1] > 200)
+    assert xs.min() < 320 and ys.max() > 180  # a la izquierda y abajo del centro

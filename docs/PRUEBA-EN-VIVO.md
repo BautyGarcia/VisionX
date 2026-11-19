@@ -48,8 +48,10 @@ Tomás se cobró 5 USD de la key de VisionX. La app lee solo `~/.visionx/anthrop
 el gasto queda en `outputs/vlm/gasto.jsonl` y con 5 USD anotados la app deja de consultar
 (`assistant.budget_usd`).
 
-**Caché de voz (Mateo).** Copiar de Drive `VisionX-artefactos/voz/cache-mateo/edge_es-UY-MateoNeural`
-a `data/cache/voz/` (tiene que quedar `data/cache/voz/edge_es-UY-MateoNeural/v1/*.npy`). Esas
+**Caché de voz (Mateo a 1,15).** Copiar de Drive
+`VisionX-artefactos/voz/cache-mateo/edge_es-UY-MateoNeural_15_` a `data/cache/voz/` (tiene que
+quedar `data/cache/voz/edge_es-UY-MateoNeural_15_/v1/*.npy`; la carpeta sin `_15_` es la de la
+velocidad anterior y ya no se usa). Esas
 frases salen al instante y sin red. Alternativa con red (~4 min):
 `uv run python -m visionx.voice precalentar`.
 
@@ -92,9 +94,14 @@ en la Mac (617 ms) tiene que llegar. Si no llega, subir `depth.precisa.espera_s`
 
 ```bash
 uv run python -m visionx.app ejecutar --fuente usb --detector yolo --profundidad crestereo \
-  --profundidad-precisa crestereo-preciso --voz --config configs/local.yaml \
-  --traza outputs/beta/vivo-1.jsonl
+  --voz --config configs/local.yaml --traza outputs/beta/vivo-1.jsonl
 ```
+
+**Sin `--profundidad-precisa`.** En la primera prueba en vivo (19/11) el preciso tardó 1588 ms
+con todo corriendo y no llegaba en `espera_s` (2 s): distancia y describir esperaban 2 s de más
+y después usaban igual el continuo (en el dashboard: `espera-vencida`). El continuo de CREStereo
+ya es preciso a corta distancia, así que en vivo va solo. Para comparar, agregar
+`--profundidad-precisa crestereo-preciso` y subir `depth.precisa.espera_s` a 2,5.
 
 Con la ventana en foco: **espacio** = empezar / terminar de hablar, **c** = cancelar, **q** =
 salir. Auriculares puestos. Para verlo por Discord: compartir la ventana de la app **con audio**
@@ -110,7 +117,7 @@ palabra.
 
 | Modo | Decí / hacé | Pasa si |
 |---|---|---|
-| Buscar | «Buscá la taza» con la taza fuera de cuadro; girar despacio, acercarse | Bip al verla y «Taza a la izquierda.»; después **sonar**: bip del lado de la taza, más rápido y agudo al centrarla, silencio si se pierde; metros cada ~4 s; «Llegaste» |
+| Buscar | «Buscá la taza» con la taza fuera de cuadro; seguir las instrucciones y acercarse | «Veo taza.» y después «Girá a la izquierda» → «Más a la izquierda» → «Un poco a la izquierda» → «Un poco más abajo»; al centrarla «Centrado. Está a 1,4 metros, adelante.» y una frase de dónde está apoyada; metros cada ~2,5 s al acercarse; «Llegaste». En el dashboard, flecha verde al objetivo |
 | Elegir | Dos objetos iguales: «buscá la taza» → «la blanca» (o «la de la izquierda») | Pregunta describiéndolos («Veo una taza blanca a la izquierda y un vaso rojo a la derecha. ¿Cuál querés?», ~2 s) y guía a la elegida |
 | Distancia | Objeto a 0,5 / 1 / 2 / 3 m de cinta: «¿a qué distancia está la taza?» | En ~2 s, una frase: qué es, sobre qué está, metros, costado en cm (si está corrido) y altura respecto del cuerpo. Error ≤ 10 cm hasta 2 m |
 | Leer | Envase a 25–50 cm: «leé» | «Adelante tenés … que dice …»; entre comillas solo lo que el OCR confirmó |
@@ -162,8 +169,11 @@ El audio de las demos es estéreo (sonar): escucharlas con auriculares. Subir
 
 | Clave | Por defecto | Para qué |
 |---|---|---|
-| `modes.guide_style` | `sonar` | `palabras` = la guía con frases de dirección de antes |
-| `modes.sonar_meters_s` | 4,0 | Mínimo entre dos avisos de metros con sonar |
+| `modes.guide_style` | `centrar` | `centrar` = instrucciones hasta centrar y después metros (pedido de Tomás tras el vivo del 19/11); `sonar` = bips; `palabras` = frases de dirección |
+| `modes.turn_deg` / `more_deg` / `center_deg` | 30 / 15 / 8 | Límites de «Girá», «Más» y «Un poco» (grados) |
+| `modes.center_v_deg` / `low_deg` | 12 / 22 | Límites de «Un poco más abajo» y «Abajo» |
+| `modes.center_repeat_s` / `approach_meters_s` | 2,5 / 2,5 | Repetir la instrucción / mínimo entre avisos de metros |
+| `audio.speech_rate` | 1,15 | Velocidad de Mateo (la caché está generada a esa velocidad) |
 | `modes.preempt_min_s` | 0,6 | Con `palabras`: mínimo entre cortes de una frase de dirección vieja |
 | `assistant.enabled` / `model` | `true` / `claude-sonnet-5-5` | Apagar el asistente o cambiar de modelo |
 | `assistant.budget_usd` | 5,0 | Tope de gasto anotado en `outputs/vlm/gasto.jsonl` |
