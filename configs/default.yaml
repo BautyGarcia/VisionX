@@ -324,7 +324,7 @@ audio:
   max_record_s: 8           # tope de una orden con el botón, s
   deadlines_s:              # vigencia de cada orden, s; vencida, su respuesta ya no se dice (candidatos, sin medir)
     search: 0               # 0 = sin vencimiento: termina cuando la persona lo dice (Tomás, 19/11)
-    distance: 10            # respuesta con dos instancias ~5 s de habla + medir (arranque en frío ~2 s) + margen
+    distance: 25            # con 10 cortaba la frase de Claude antes de los metros: Whisper + síntesis + ~7 s de frase (vivo 19/11)
     read: 30
     describe: 20
     choose: 10
