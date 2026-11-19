@@ -895,18 +895,24 @@ Cada par tiene dos variantes: limpia y con el ojo derecho desalineado por un err
 **Ordenar: AUSE.** Comparadores sin entrenar: el error fotométrico y el chequeo
 izquierda-derecha, que necesita una segunda pasada completa de CREStereo.
 
-| Datos | b, primera versión (6 canales) | b, segunda versión (8 canales) | Izquierda-derecha | Fotométrico |
+| Datos | b, primera versión (6 canales) | b, segunda versión (8 canales), semillas 0 y 1 | Izquierda-derecha | Fotométrico |
 |---|---|---|---|---|
-| InStereo2K val, limpio (102) | 0,330 | **0,276** | 0,276 | 1,023 |
-| InStereo2K val, desalineado (102) | 0,388 | 0,361 | **0,341** | 0,647 |
-| Middlebury 2014 extra, limpio (13) | — | **0,139** | 0,175 | 0,789 |
-| Middlebury 2014 extra, desalineado (13) | — | **0,307** | 0,320 | 0,696 |
+| InStereo2K val, limpio (102) | 0,330 | 0,276 y 0,291 | **0,276** | 1,023 |
+| InStereo2K val, desalineado (102) | 0,388 | 0,361 y 0,369 | **0,341** | 0,647 |
+| Middlebury 2014 extra, limpio (13) | — | **0,139** (semilla 0) | 0,175 | 0,789 |
+| Middlebury 2014 extra, desalineado (13) | — | **0,307** (semilla 0) | 0,320 | 0,696 |
 
 - La primera versión ordenaba **peor** que el chequeo izquierda-derecha. Lo que la mejoró fueron
   los dos canales que salen de CREStereo. El desacuerdo entre pasadas, solo y sin red, ya da
   0,35 en InStereo2K.
-- La segunda versión **empata** con izquierda-derecha en InStereo2K limpio, pierde por poco en
-  el desalineado y gana en Middlebury. No es una victoria clara; es el mismo orden a menos costo.
+- La segunda versión queda **cerca de izquierda-derecha sin superarlo** en InStereo2K: entre
+  igual y 5 % peor en pares limpios según la semilla, y 6 a 8 % peor en los desalineados. En
+  Middlebury gana, con una sola semilla y 13 pares. No es una victoria: es un orden parecido a
+  mucho menos costo. La hipótesis de ordenar mejor que izquierda-derecha **no se cumple** hoy.
+- **Ablación con corrección de disparidad** (misma red, dejando que también corrija d): el
+  error no cambia (0,625 → 0,624 px en limpio; 3,657 → 3,662 px en desalineado) y el AUSE queda
+  igual (0,300 y 0,365). Una red chica no mejora la disparidad de CREStereo; se confirma que el
+  aporte está en b.
 - **Costo en la Mac** (M2 Max, MPS): la U-Net suma 94 ms al modo preciso (de 619 a 713 ms de
   mediana) y 25 ms al continuo (de 119 a 144 ms). El chequeo izquierda-derecha sumaría una
   pasada entera, unos 600 ms en preciso.
@@ -935,7 +941,8 @@ entre pasadas se dispara. No hay cómo medirlo en escenas naturales de la ELP si
 **hace falta el banco con stickers** para calibrar b en la cámara real.
 
 **Límites.**
-- Una sola semilla. La época se eligió con la misma validación que se informa.
+- Dos semillas en InStereo2K y una en Middlebury. La época se eligió con la misma validación
+  que se informa.
 - No hay un test limpio: CREStereo probablemente vio InStereo2K y Middlebury, así que sus
   errores ahí son más chicos que en datos nuevos. El número de Middlebury son 13 pares.
 - La focal de InStereo2K se supuso igual al ancho de la imagen para armar las desalineaciones.
@@ -959,6 +966,49 @@ tiene una parte en filas, que se ve, y una en columnas, que queda determinada po
   30,5 a 21,3 % y de 18,5 a 9,7 % en dos de las tres cámaras, y en la otra queda igual; con un
   cuarto, mejora una y empeora otra. Sigue muy lejos del campo exacto (0,4–0,9 %). Lo que
   falta es, sobre todo, el corrimiento de columnas del centro óptico, que no se ve en las filas.
+
+### Corrección clásica más distancia conocida (19/11)
+
+Lo que la alineación no puede ver en las filas (el corrimiento de columnas del centro óptico y
+del yaw) es, a primer orden, un corrimiento constante de disparidad: justo lo que mide el paso
+de distancia conocida. Se emuló en el experimento de cámaras hermanas: el corrimiento se saca
+del primer par (como si se hubiera medido ahí una distancia con cinta) y se aplica a los otros
+seis, que son los que se evalúan. Mediana del cambio de profundidad, tres cámaras por nivel.
+
+| Nivel | Sin corregir | Regla de 4 + distancia | Lente + distancia | Campo exacto |
+|---|---|---|---|---|
+| ×0,1 | 3,4 / 5,4 / 6,1 % | 1,3 / 1,3 / 2,1 % | 2,0 / 1,3 / 1,8 % | 0,33 / 0,26 / 0,23 % |
+| ×0,25 | 7,1 / 14,5 / 15,0 % | 2,7 / 2,1 / 4,9 % | 2,8 / 2,6 / 2,0 % | 0,32 / 0,29 / 0,22 % |
+| ×0,5 | 14,5 / 33,3 / 28,1 % | 4,5 / 3,1 / 10,9 % | 3,9 / 2,8 / 2,7 % | 0,35 / 0,29 / 0,24 % |
+| ×1 | 31,6 / 85,4 / 33,0 % | 7,7 / 5,6 / 42,5 % | 6,1 / 5,4 / 4,5 % | 0,41 / 0,31 / 0,25 % |
+
+- **La distancia conocida recupera la mayor parte de lo que faltaba.** Sin ella, el clásico
+  dejaba entre 2,5 y 49 %; con ella y los términos de lente queda entre 1,3 y 6 %.
+- **Los términos de lente sí sirven acá:** con la regla de cuatro hay casos que no se arreglan
+  (10,9 % y 42,5 %); con lente no aparecen. En los pares reales del precinto pasó lo contrario,
+  así que cuál conviene sigue abierto.
+- **Lo que queda hasta el campo exacto (de ~2 % a ~0,3 %)** es el margen real para una corrección
+  densa aprendida.
+- Es una emulación optimista: el corrimiento sale de la referencia de todo un cuadro, no de un
+  objeto medido con cinta. Rangos supuestos, tres cámaras por nivel, un clip.
+
+### Evaluador del banco ELP (19/11)
+
+`python -m visionx.depth.bench` mide métodos de profundidad contra los stickers del banco
+([Datos y comparación](#datos-y-comparacion)). Dos comandos: `marcar` abre una ventana para
+ubicar a mano cada sticker en la izquierda rectificada y escribe `puntos.yaml`; `evaluar` corre
+los métodos y compara, en una ventana chica alrededor de cada punto, la mediana de la
+profundidad contra la cinta más el cero de la cinta.
+
+- **Qué informa:** puntos medidos, % dentro de 5 % (contando los no medidos como no acertados),
+  error mediano y P90, por rango de distancia. Si el método trae b: el intervalo de 90 % en
+  metros, cuántas veces contiene a la referencia y el factor por el que habría que multiplicar
+  b para que quede calibrada en esos puntos.
+- **Sesiones de test:** rechaza `s3`, `s4` y `s5` salvo con `--test-congelado`.
+- **Probado** con el clip `dev-1114-distancias` (cinco objetos con distancia anotada), con los
+  puntos ubicados a ojo y sin stickers: sirve para ver que la herramienta corre, no como medida
+  de precisión. Los tres métodos coinciden entre sí dentro de 1–3 %, y el modo continuo queda a
+  menos de 1 % del preciso por objeto. `marcar` no se pudo probar: necesita pantalla.
 
 ### Orden de trabajo, orden de caída y ablaciones
 
