@@ -7,11 +7,11 @@ la dice, y lo que dice se verifica: un número que no medimos no suena.
 from __future__ import annotations
 
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from tests.test_assistant import FakeClient, settings, wait
 from visionx.assistant import Assistant, Delivery
 from visionx.assistant.core import distances_in, verify_distances
 from visionx.modes.common import (
@@ -24,6 +24,54 @@ from visionx.modes.common import (
 from visionx.shared.contracts import DistancePolicy, SpatialObject
 from visionx.shared.errors import InvalidInput
 from visionx.shared.uncertainty import LN10, laplace_interval, relative_width
+
+
+class _Stream:
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    @property
+    def text_stream(self):
+        yield from self.chunks
+
+    def get_final_message(self):
+        return SimpleNamespace(
+            stop_reason="end_turn", usage=SimpleNamespace(input_tokens=1500, output_tokens=100)
+        )
+
+
+class FakeClient:
+    """Cliente de Claude falso: sin red ni gasto."""
+
+    def __init__(self, chunks):
+        self.calls = []
+        outer = self
+
+        class Messages:
+            def stream(self, **kwargs):
+                outer.calls.append(kwargs)
+                return _Stream(chunks)
+
+        self.messages = Messages()
+        self.beta = SimpleNamespace(messages=Messages())
+
+
+def settings(**kw):
+    from visionx.assistant import AssistantSettings
+
+    return AssistantSettings(ledger="", **kw)
+
+
+def wait(job, timeout=5.0):
+    assert job.done.wait(timeout)
+    return job
+
 
 S = ModeSettings()
 IMG = np.zeros((72, 128, 3), np.uint8)
