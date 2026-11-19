@@ -40,6 +40,29 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T07: plan para pasar de 4 a 10 fps, con el criterio fijado antes de medir
+
+**Tareas:** T07 (y T12 por CREStereo). **Persona/agente:** Tomás (decisiones) / Claude Code.
+**Rama:** `b/velocidad`.
+
+**Diagnóstico.** En el primer vivo, YOLO tardaba 299 ms por cuadro y CREStereo continuo 160 ms:
+el detector es el cuello (la app va al ritmo del más lento). YOLO corre en CPU por defecto
+(`detection.device: cpu`). En la PC de Tomás, YOLO solo a 960 px tarda ~150 ms (CPU, 30 cuadros).
+
+**Decisiones de Tomás.** Probar las tres opciones (YOLO en MPS, 768 px, CREStereo continuo con 3
+iteraciones) sobre clips y en vivo; elegir con umbrales fijados antes (detector ≥ 10 fps y
+profundidad ≥ 5 fps en vivo; detección −5 puntos como máximo; cinta +1 cm como máximo; sin
+errores); reportar en una planilla del repo y en BITACORA. El preciso (1280×720, 4 it., 2
+pasadas) queda congelado para las métricas finales de la red y también a pedido en vivo (con
+espera de 3 s).
+
+**Hecho.** [VELOCIDAD](VELOCIDAD.md) con qué correr para cada config y cómo reportar;
+`configs/velocidad/C0…C4.yaml` (incluyen `configs/local.yaml`; `incluir:` nuevo en la carga de
+configuración); `python -m visionx.detection presencia` (% de cuadros con cada objeto y latencia)
+y `--dispositivo` en `medir`; planilla `datasets/velocidad/resultados.csv`. Tests OK.
+
+**Próximo paso.** Bauty mide C0–C4 en la Mac y completa la planilla.
+
 ## 2026-11-19 (noche) — Primera prueba en vivo en la Mac y buscar rehecho: centrar y después distancia
 
 **Tareas:** T07, T08, T09. **Persona/agente:** Bauty (Mac, ELP) y Tomás (Discord) en vivo;

@@ -1,0 +1,12 @@
+# C2 — Opciones 1+2: YOLO en MPS con imágenes de 768 px (docs/VELOCIDAD.md).
+# Se superpone a la config local de la máquina (cámara, audio): no editar local.yaml por prueba.
+incluir: configs/local.yaml
+detection:
+  device: mps
+  imgsz: 768
+depth:
+  precisa:
+    espera_s: 3.0          # el preciso en vivo tarda ~1,6 s con todo corriendo (19/11)
+  crestereo:
+    continuo:
+      iters: 4
