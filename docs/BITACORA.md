@@ -75,6 +75,24 @@ texturas por vértice, pinhole ideal sin ruido. Es la cantidad; la realidad la d
 **Próximo paso.** Bauty (Mac, con la U-Net): `gtsynth evaluar` en val con `elp`, `hermana-0.5`,
 `hermana-1` y `distinta`; con val, el factor de b. Test una sola vez, al final.
 
+## 2026-11-19 (noche) — T15: guía para medir los modos (M8, M10) y M8 al día con buscar
+
+**Tareas:** T15, T09. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/medicion-modos`.
+
+**Hecho.**
+- [MEDICION-MODOS](MEDICION-MODOS.md): las métricas de los modos que faltan para el informe en dos
+  sesiones con la Mac (Bauty en la cámara, Tomás por Discord), con los protocolos que ya existían
+  (`python -m visionx.protocolos`), los umbrales de TECNICO fijados antes de medir y dónde queda
+  cada número (`datasets/modos/`, Drive y BITACORA). Enlazada desde AGENTS (paso 7).
+- M8 al día con la búsqueda nueva: el falso aviso es también «Veo …» (la guía «centrar» no tiene
+  bip; `falsos_avisos_por_min`), y `exito_s` puede quedar vacío: se toma de la traza cuando la
+  persona dice «la encontré».
+- `protocolos m8 borrador`: arma la planilla desde la traza, una fila por «buscá…», con tiempos y
+  resultado sugerido (encontrado / cancelar / pérdida; lo que terminó con «terminá» queda para
+  revisar a mano). Tests en `tests/test_protocolos.py`.
+
+**Próximo paso.** Agendar las dos sesiones con Bauty.
+
 ## 2026-11-19 (noche) — T13: la incertidumbre llega a la voz (tres niveles) y se verifica
 
 **Tareas:** T13, T11, T15. **Persona/agente:** Tomás (pedido; devolución de la cátedra) / Claude
@@ -893,6 +911,7 @@ caché.
 
 **Próximo paso.** Precalentar la caché con las frases frecuentes de la guía antes de la expo y
 probar la voz en el bucle con micrófono (Tomás).
+
 ## 2026-11-18 — T12: compuerta de CREStereo (wrapper, latencia, cinta y robustez)
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-compuerta-crestereo`
@@ -1421,6 +1440,7 @@ propios para M10.
 - Cámaras: solo está conectada la C922; la ELP no se probó en esta PC.
 
 **Límites.** Ninguna medición de esta PC representa la Mac de la demo.
+
 ## 2026-11-17 — T09 (parte A): ubicación espacial en `depth/spatial/`
 
 **Tarea:** T09, parte de A. **Persona/agente:** Bauty / Claude Code (coordinador + subagente).
