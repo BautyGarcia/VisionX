@@ -58,7 +58,7 @@ from visionx.voice.commands import CommandParser
 
 G = synthetic_geometry()  # 640x360, fx = 608
 CATALOG = ClassCatalog(COCO_CLASSES)
-S = ModeSettings()
+S = ModeSettings(guide_style="palabras")  # frases de guía; el sonar se prueba aparte
 SEC = 1_000_000_000
 
 
@@ -1770,3 +1770,162 @@ def test_free_question_goes_to_the_assistant_with_the_question():
     off = describe(assistant=FakeAssistant(available=False))
     said = texts(off.start(cmd(Mode.DESCRIBE, "¿Qué es?", t_s=1), View(seen, None), int(1.1 * SEC)))
     assert said == ["Ahora no puedo responder preguntas: no tengo conexión."]
+
+
+def test_lateral_and_body_height_phrases():
+    from visionx.modes.common import body_height_phrase, lateral_phrase
+
+    assert lateral_phrase(1.1, -15, S) == "unos 30 centímetros a tu izquierda"
+    assert lateral_phrase(1.1, 3, S) == "al frente"  # menos de side_min_m: no se dice
+    assert lateral_phrase(2.0, -35, S) == "1,4 metros a tu izquierda"
+    assert body_height_phrase(1.1, 0) == "a la altura de tu pecho"
+    assert body_height_phrase(1.1, -25) == "a la altura de tu cintura"
+    assert body_height_phrase(3.0, -25) == "cerca del piso"
+
+
+def test_distance_with_assistant_passes_measured_numbers_and_waits_one_sentence():
+    a = FakeAssistant(("Tenés una taza blanca sobre un taburete, a 1,1 metros, al frente.",))
+    h = DistanceHandler(G, CATALOG.spoken, S, assistant=a)
+    c = cmd(Mode.DISTANCE, "cup", t_s=1)
+    m = joint(1.1, 11, [("cup", 0, 3, 1.07, SPEAK)], measured=True)
+    assert texts(h.start(c, View(None, m), int(1.2 * SEC))) == []  # consultando
+    kind, kw = a.calls[0]
+    assert kind == "distancia"
+    assert kw["objects"] == ["taza: a 1,1 metros; al frente; a la altura de tu pecho"]
+    says, done = h.tick(c, View(None, m), int(1.8 * SEC))
+    assert texts(says) == ["Tenés una taza blanca sobre un taburete, a 1,1 metros, al frente."]
+    assert done
+
+
+def test_distance_falls_back_to_the_plain_answer_when_the_assistant_fails():
+    h = DistanceHandler(G, CATALOG.spoken, S, assistant=FakeAssistant(error="sin red"))
+    c = cmd(Mode.DISTANCE, "cup", t_s=1)
+    m = joint(1.1, 11, [("cup", 0, 3, 1.07, SPEAK)], measured=True)
+    h.start(c, View(None, m), int(1.2 * SEC))
+    says, done = h.tick(c, View(None, m), int(1.3 * SEC))
+    assert texts(says) == ["Taza al frente, a 1,1 metros."] and done
+
+
+def test_arrival_cuts_the_guidance_that_is_still_playing():
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("cup", 0, None)]), joint(0.2, 2, [("cup", 0, None)])])
+    near = joint(0.3, 3, [("cup", 0, None, 0.55, SPEAK)], measured=True)
+    says, done = h.tick(c, View(joint(0.4, 4, [("cup", 0, None)]), near), int(0.4 * SEC))
+    assert done and says[0].text_or_sound.startswith("Llegaste") and says[0].replace
+
+
+def test_sonar_cues_pan_to_the_side_and_speed_up_when_centered():
+    from visionx.modes.sonar import Sonar, SonarSettings, beep, cue_for
+
+    s = SonarSettings()
+    left, right, ahead = cue_for(-40, s), cue_for(40, s), cue_for(2, s)
+    assert left[0] < 0 < right[0] and ahead[1] > left[1]  # lado y tono
+    assert ahead[2] < left[2]  # al frente, más seguido
+    stereo = beep(-1.0, 880, s, 24_000)
+    assert stereo.shape[1] == 2 and abs(stereo[:, 1]).max() < 1e-6  # todo a la izquierda
+    sonar = Sonar(s)
+    cues = [sonar.step(0.05 * i, (2.0, 0.1)) for i in range(40)]
+    assert sum(c is not None for c in cues) >= 12  # ~cada 0,12 s al frente
+    assert sonar.step(3.0, (2.0, 2.0)) is None  # no se lo ve hace 2 s: silencio
+
+
+def test_sonar_style_speaks_only_key_moments():
+    sonar = ModeSettings()  # por defecto: sonar
+    assert sonar.guide_style == "sonar"
+    h, c = search(sonar), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    # gira de la izquierda al frente: con palabras habría varias frases de dirección
+    frames = [joint(0.1 * i, i, [("cup", -40 + i, None)]) for i in range(1, 60)]
+    out, _ = run(h, c, frames)
+    said = [t for _, t in out]
+    assert said == ["sonido:bip", "Taza a la izquierda."]  # solo encontrarla
+    assert h.sonar_target(int(5.9 * SEC))[0] > -1  # el sonar sabe dónde está
+
+
+class OptionsAssistant:
+    """Asistente falso para «¿cuál?»: describe dos botellas."""
+
+    available = True
+
+    def __init__(self, raw="1: verde\n2: transparente\nPREGUNTA: Veo una botella verde a la "
+                 "izquierda y una transparente a la derecha. ¿Cuál querés?"):  # fmt: skip
+        from visionx.assistant import AssistantJob
+
+        self._cls, self._raw, self.calls = AssistantJob, raw, []
+
+    def submit(self, request_id, kind, image, **kw):
+        job = self._cls(request_id, kind)
+        job.raw, job.total_s = self._raw, 0.5
+        job.done.set()
+        self.calls.append((kind, kw))
+        return job
+
+
+def test_parse_options_needs_every_object():
+    from visionx.assistant.core import parse_options
+
+    found, q = parse_options("1: verde\n2: transparente\nPREGUNTA: ¿Cuál querés?", 2)
+    assert found == {0: "verde", 1: "transparente"} and q == "¿Cuál querés?"
+    assert parse_options("1: verde", 2)[0] == {}  # falta una: pregunta sin descripciones
+
+
+def test_search_asks_with_descriptions_and_understands_la_verde():
+    a = OptionsAssistant()
+    h, c = search(), cmd(Mode.SEARCH, "bottle")
+    h.assistant = a
+    h.start(c, View(), 0)
+    two = [("bottle", -20, 1), ("bottle", 20, 2)]
+    out, _ = run(h, c, [joint(0.1, 1, two), joint(0.2, 2, two)])
+    assert [t for _, t in out] == ["sonido:bip"]  # consulta en curso: sin pregunta fija
+    kind, kw = a.calls[0]
+    assert kind == "opciones" and kw["objects"][0].startswith("1: botella un poco a la izquierda")
+    out, _ = run(h, c, [joint(0.8, 8, two)])
+    assert [t for _, t in out] == [
+        "Veo una botella verde a la izquierda y una transparente a la derecha. ¿Cuál querés?"
+    ]
+    assert h.awaiting_choice()
+    says = h.choose(c, "la verde", View(joint(0.9, 9, two)), int(0.9 * SEC))
+    assert h.state == "guiando" and h.target.angle_h_deg == pytest.approx(-20, abs=0.1)
+    assert texts(says)[-1].startswith("Botella")
+    assert texts(h.choose(c, "la azul", View(joint(1, 10, two)), SEC))  # ya guía: lo dice
+
+
+def test_controller_routes_la_verde_to_the_choice_instead_of_a_question():
+    from visionx.app.controller import Controller
+    from visionx.voice.commands import CommandParser
+
+    class Sink:
+        def __init__(self):
+            self.events = []
+
+        def submit(self, e):
+            self.events.append(e)
+
+        def cancel(self, rid):
+            pass
+
+        def cancel_all(self):
+            pass
+
+    calls = []
+
+    class Chooser:
+        def start(self, command, view, now):
+            return []
+
+        def tick(self, command, view, now):
+            return [], False
+
+        def awaiting_choice(self):
+            return True
+
+        def choose(self, command, choice, view, now):
+            calls.append(choice)
+            return []
+
+    ctl = Controller(CommandParser(CATALOG, questions=True), Sink(),
+                     handlers={Mode.SEARCH: Chooser()})  # fmt: skip
+    ctl.handle_text("Buscá la botella.")
+    ctl.handle_text("La verde.")
+    assert calls == ["La verde."] and ctl.active.mode is Mode.SEARCH

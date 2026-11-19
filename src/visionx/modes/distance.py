@@ -24,18 +24,21 @@ from visionx.modes.common import (
     ModeSettings,
     View,
     age_s,
+    body_height_phrase,
     candidates,
     closing_due,
     closing_text,
     direction,
+    lateral_phrase,
     measure,
     measure_phrase,
+    meters,
     precision_view,
     request_precision,
     speech_s,
 )
 from visionx.modes.target import Target, TargetMemory, plural
-from visionx.shared.contracts import Command
+from visionx.shared.contracts import Command, Priority
 from visionx.shared.geometry import StereoGeometry
 
 # Sin objeto nombrado ni guía: "al frente" tolera el doble del margen central.
@@ -50,8 +53,15 @@ class DistanceHandler:
         settings: ModeSettings | None = None,
         memory: TargetMemory | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        assistant: Any = None,
     ) -> None:
         self.geometry = geometry
+        # Asistente (Claude): una sola frase con lo que se ve («taza blanca sobre un taburete»)
+        # y los números medidos tal cual (distancia, costado, altura). Sin él, la frase de siempre.
+        self.assistant = assistant
+        self._delivery: Any = None
+        self._fallback = ""
+        self._facts: list[str] = []
         self.spoken = spoken
         self.s = settings or ModeSettings()
         self.memory = memory or TargetMemory()
@@ -66,6 +76,7 @@ class DistanceHandler:
         self._label = command.target
         self._answered = False  # start() puede responder ya; el tick siguiente solo cierra
         self._guided_target = None
+        self.cancel()
         remembered = self.memory.recent(now_ns, self.s.target_memory_s)
         if self._label is None:
             self._label = self.memory.recent_label(now_ns, self.s.target_memory_s)
@@ -83,7 +94,14 @@ class DistanceHandler:
         says, _ = self.tick(command, view, now_ns)
         return says
 
+    def cancel(self) -> None:
+        if self._delivery is not None:
+            self._delivery.job.cancel()
+        self._delivery, self._facts = None, []
+
     def tick(self, command: Command, view: View, now_ns: int) -> tuple[list[Say], bool]:
+        if self._delivery is not None and command.request_id == self.request_id:
+            return self._deliver(command, now_ns)
         if command.request_id != self.request_id or self._answered:
             return [], True
         closing = self._closing(command, view, now_ns)
@@ -96,12 +114,15 @@ class DistanceHandler:
             view = selected
         joint = self._usable(view.measured, command, now_ns)
         if joint is not None:
+            self._facts = []
             answer = self._answer(joint, view, now_ns)
             if answer is not None:
                 self._answered = True
                 answer = closing_text(
                     command, now_ns, [answer, closing, "Sin medida."], self.s, reserve=False
                 )
+                if self._facts and answer and self._assistant_ready():
+                    return self._ask(command, view, joint, answer, now_ns)
                 return ([Say(answer)] if answer else []), True
         if due:
             self._answered = True
@@ -160,11 +181,70 @@ class DistanceHandler:
             return self._single(cands[0], name, joint)
         return self._several(cands, name, joint)
 
+    # -- asistente ---------------------------------------------------------------------------
+
+    def _assistant_ready(self) -> bool:
+        return self.assistant is not None and self.assistant.available
+
+    def _fact(self, c: Candidate, name: str) -> None:
+        """Lo medido de un objeto, para que el asistente lo diga tal cual."""
+        m = measure(c.obj, self.s)
+        if m.ok and m.z_m is not None:
+            parts = [
+                f"a {meters(m.z_m, self.s)}",
+                lateral_phrase(m.z_m, c.angle_h_deg, self.s),
+                body_height_phrase(m.z_m, c.angle_v_deg),
+            ]
+        else:
+            parts = [direction(c.angle_h_deg, self.s, c.angle_v_deg), measure_phrase(m, self.s)]
+        self._facts.append(f"{name}: " + "; ".join(parts))
+
+    def _ask(self, command: Command, view: View, joint: Joint, answer: str, now_ns: int):
+        from visionx.assistant import Delivery
+
+        frame = view.original if view.original is not None else joint.frame
+        name = self.spoken(self._label) if self._label else "lo que tengo al frente"
+        job = self.assistant.submit(
+            command.request_id,
+            "distancia",
+            frame.left,
+            request=f"¿A qué distancia está {name}?",
+            objects=list(self._facts),
+        )
+        self._delivery, self._fallback = Delivery(job, now_ns), answer
+        self._answered = False
+        self._event("asistente-pedido", {"objetos": list(self._facts), "respaldo": answer})
+        return [], False
+
+    def _deliver(self, command: Command, now_ns: int) -> tuple[list[Say], bool]:
+        d = self._delivery
+        if d.failed or (command.deadline_ns is not None and now_ns >= command.deadline_ns):
+            d.job.cancel()
+            self._delivery, self._answered = None, True
+            self._event("asistente-error", {"error": d.job.error})
+            return [Say(self._fallback)], True  # la frase de siempre, con el número
+        says = [Say(s, Priority.SHORT) for s in d.ready(now_ns)]
+        if d.finished:
+            self._delivery, self._answered = None, True
+            job = d.job
+            self._event(
+                "asistente-respuesta",
+                {
+                    "texto": job.text,
+                    "primer_texto_s": job.first_s,
+                    "total_s": job.total_s,
+                    "usd": job.usd,
+                },
+            )
+            return says, True
+        return says, False
+
     def _single(self, c: Candidate, name: str, joint: Joint) -> str:
         target = Target(c.label, c.angle_h_deg, c.track_id, c.received_ns, c.angle_v_deg)
         target.remember_measure(c)
         self.memory.remember(target)
         m = measure(c.obj, self.s)
+        self._fact(c, name)
         self._event("respuesta", self._data(joint, c, m.z_m, m.reason))
         where = direction(c.angle_h_deg, self.s, c.angle_v_deg)
         return f"{name.capitalize()} {where}, {measure_phrase(m, self.s)}."
@@ -174,6 +254,7 @@ class DistanceHandler:
         parts = []
         for c in shown:
             m = measure(c.obj, self.s)
+            self._fact(c, name)
             self._event("respuesta", self._data(joint, c, m.z_m, m.reason))
             where = direction(c.angle_h_deg, self.s, c.angle_v_deg)
             parts.append(f"{where}, {measure_phrase(m, self.s)}")

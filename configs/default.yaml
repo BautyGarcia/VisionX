@@ -210,6 +210,8 @@ modes:
   preempt_min_s: 0.6        # dirección nueva mientras suena la vieja: se corta y se dice la nueva
                             # (0,4 en la demo buscar-a del 19/11: cortes cada 0,4 s al barrer)
   short_guide: true         # después de la primera frase, sin el nombre: «Un poco a la izquierda.»
+  guide_style: sonar        # sonar (bips del lado del objeto; elegido por Tomás 19/11) | palabras
+  sonar_meters_s: 4.0       # con sonar: mínimo entre dos avisos de metros, s
   distance_change_m: 0.3    # guía: metros nuevos se dicen solos si cambian al menos esto...
   distance_change_frac: 0.15 # ...o esta fracción (lo mayor); sin cambio no se repite la frase
   speech_base_s: 0.3        # duración estimada de una frase: base...
@@ -320,8 +322,11 @@ audio:
   tts:
     engine: edge              # edge (voz neuronal, NECESITA INTERNET; sin red sigue con Piper) | piper (local)
     edge_voice: es-UY-MateoNeural  # elegida por Tomás el 18/11 (muestras en outputs/voz/voces-naturales)
-    edge_timeout_s: 4.0       # sin audio completo en este tiempo, esa frase la dice Piper
-    edge_retry_s: 30.0        # tras una falla de Edge, todo por Piper durante este lapso
+    fallback: none            # none = solo Mateo (pedido de Tomás 19/11); piper = respaldo local
+    edge_timeout_s: 4.0       # tiempo base para bajar una frase...
+    edge_timeout_per_char_s: 0.04  # ...más esto por carácter (respuestas largas del asistente)
+    edge_attempts: 2          # intentos por frase; si fallan todos, la frase se saltea
+    edge_retry_s: 30.0        # con fallback piper: tras una falla, todo por Piper este lapso
     cache_dir: data/cache/voz # frases ya dichas por Edge (sirven sin red); null = sin caché en disco
     voice: es_ES-davefx-medium  # voz de Piper (v1.0.0): única con engine piper, respaldo con edge
     voices_dir: weights/piper

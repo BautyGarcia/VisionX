@@ -44,8 +44,11 @@ Nunca estimes otros números de distancia; podés decir «cerca» o «más lejos
 ayuda: si un objeto no se ve en la imagen, ignoralo; si su nombre está mal (un lavarropas \
 anotado como horno), usá el nombre correcto con sus metros. Nunca menciones la lista, la \
 detección ni la cámara.
-- Si no estás seguro de algo, decilo («parece…»). Nunca inventes ni completes con lo que sabés \
-de una marca lo que no se ve o no se lee (tipo de producto, sabor, dosis).
+- Si no estás seguro de algo, decilo («parece…»). Nunca presentes como visto o escrito lo que \
+no se ve o no se lee (tipo de producto, sabor, dosis, cantidad).
+- Si te preguntan algo que no está escrito (para qué sirve un ingrediente, si algo es dulce), \
+podés responder con conocimiento general, aclarando que es en general y no lo que dice el \
+envase («la ashwagandha en general se usa para…»). Nunca des dosis que no se lean.
 - Las manos que aparecen sosteniendo algo son de la persona que te habla: no digas «alguien».
 - Texto: si te paso lo que leyó el OCR, entre comillas citá SOLO texto que esté en esa lista \
 (podés corregir mayúsculas o tildes). Si ves texto que el OCR no tiene, decí «parece decir …» \
@@ -57,9 +60,20 @@ lo más útil según la imagen o pedí que lo repita."""
 KINDS = {
     "leer": "LEER: decí qué es el objeto que tiene adelante y lo más importante que dice.",
     "leer-todo": "LEER TODO: leé todo el texto que se pueda, en orden, sin resumir.",
-    "describir": "DESCRIBIR: en 3 frases cortas como máximo, lo más cercano o importante primero "
-    "(obstáculos y lo que se puede usar), sin detalles decorativos.",
+    "describir": "DESCRIBIR: 3 frases como máximo y de no más de 15 palabras cada una, lo más "
+    "cercano o importante primero (obstáculos y lo que se puede usar), sin detalles decorativos.",
     "pregunta": "PREGUNTA: respondé la pregunta con lo que ves.",
+    "opciones": "OPCIONES: hay varios objetos iguales, numerados de izquierda a derecha con su "
+    "posición. Respondé SOLO estas líneas: una por objeto con el formato «N: descripción», donde "
+    "la descripción son 1 a 3 palabras que lo distinguen de los otros (color, tamaño, sobre qué "
+    "está), y al final una línea «PREGUNTA: …» que empiece con «Veo», los nombre por cómo son y "
+    "de qué lado están y termine en «¿Cuál querés?» (p. ej. «Veo una taza blanca a la izquierda "
+    "y un vaso rojo a la derecha. ¿Cuál querés?»). Sin metros.",
+    "distancia": "DISTANCIA: con un objeto, UNA sola frase: qué es (color, sobre qué está o al "
+    "lado de qué) y, tal cual, la distancia, el costado y la altura medidos de la lista. Con "
+    "varios: primero cuántos son («Hay dos tazas.») y después una frase corta por cada uno, de "
+    "izquierda a derecha, con lo que los distingue y su distancia; el costado y la altura solo si "
+    "ayudan a encontrarlo. Sin números que no estén en la lista.",
 }
 
 
@@ -246,6 +260,26 @@ def split_sentences(
     return out, rest
 
 
+_OPTION = re.compile(r"(?m)^\s*(\d+)\s*[:.)-]\s*(.+?)\s*$")
+_QUESTION = re.compile(r"(?mi)^\s*PREGUNTA\s*:\s*(.+?)\s*$")
+
+
+def parse_options(raw: str, n: int) -> tuple[dict[int, str], str | None]:
+    """«1: verde / 2: transparente / PREGUNTA: …» -> ({0: "verde", 1: "transparente"}, pregunta).
+
+    Índices desde 0, en el orden de izquierda a derecha con que se numeraron. Si no están
+    todas las opciones, devuelve {} y la pregunta se arma sin descripciones.
+    """
+    found = {}
+    for m in _OPTION.finditer(raw):
+        i = int(m.group(1)) - 1
+        if 0 <= i < n and not m.group(2).upper().startswith("PREGUNTA"):
+            found[i] = m.group(2).strip().rstrip(".")
+    q = _QUESTION.search(raw)
+    question = q.group(1).strip() if q else None
+    return (found if len(found) == n else {}), question
+
+
 def jpeg_b64(image: np.ndarray, width: int, quality: int) -> str:
     import cv2
 
@@ -325,6 +359,7 @@ class AssistantJob:
     usage: dict[str, int] = field(default_factory=dict)
     usd: float = 0.0
     ocr: list[str] | None = None
+    raw: str = ""  # texto tal cual llegó (sin cortar en frases), para respuestas con formato
 
     def cancel(self) -> None:
         self.cancelled.set()
@@ -425,6 +460,7 @@ class Assistant:
                 if job.first_s is None:
                     job.first_s = self._clock() - t0
                 buffer += delta
+                job.raw += delta
                 ready, buffer = split_sentences(buffer)
                 for sentence in ready:
                     self._emit(job, sentence, t0, full)

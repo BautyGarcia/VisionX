@@ -40,6 +40,62 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (tarde) — T08/T09/T10/T11: sonar en buscar, «¿cuál?» describiendo, distancia con detalle, solo Mateo; lista para la Mac
+
+**Tareas:** T07–T11. **Persona/agente:** Tomás (decisiones, revisión de demos) / Claude Code.
+**Rama:** `b/beta-2` (PR siguiente al #27, que se mergeó a `main` como `904f412` el 19/11).
+
+**Decisiones de Tomás tras ver las demos (19/11).**
+- Lectura «es la que mejor anda». Buscar no: «queda la voz corriendo o se corta de la nada y no
+  ubica bien al objeto». Eligió guía con **sonar** + pocas palabras.
+- **Una sola voz (Mateo)**: sin respaldo de Piper.
+- Distancia con detalle en **una sola frase** (color, sobre qué está, metros, costado, altura
+  respecto del cuerpo); 2 s de espera «está perfecto».
+- Al ver varios iguales, preguntar **describiéndolos** y aceptar «la verde».
+- Describir con frases más cortas; distancia con varios: primero cuántos son.
+- La key nueva de Claude es **solo** para las consultas de VisionX (~1000).
+
+**Hecho.**
+- `modes/sonar.py`: bip estéreo con paneo de potencia constante según el ángulo; más seguido y
+  agudo al centrar (0,12 s al frente, 0,7 s en el borde), silencio si no se ve el objetivo hace
+  1 s. En vivo `SonarPlayer` (stream estéreo propio, `ejecutar --voz`); en la demo se mezcla en
+  estéreo. `modes.guide_style: sonar` (por defecto) habla solo al encontrar, metros nuevos cada
+  `sonar_meters_s`, «Perdí…» y «Llegaste»; `palabras` = guía anterior. «Llegaste» corta lo que
+  suena. La demo mantiene la flecha a la última posición del objetivo.
+- Buscar con asistente: al ver varios iguales, bip + pedido «opciones» (1–3 palabras por objeto
+  y una pregunta que empieza con «Veo…»); el controlador toma «la verde» / «la de la mesa» como
+  elección mientras se espera; también al reencontrar iguales tras una pérdida.
+- Distancia con asistente: el estéreo calcula metros, costado X = Z·tan(ángulo) (si ≥ 15 cm) y
+  altura respecto de la cámara al pecho (cabeza/pecho/cintura/rodillas/piso); Sonnet arma la
+  frase con esos números tal cual. Respaldo: la frase de siempre.
+- Voz: `audio.tts.fallback: none`; el tiempo de Edge crece con el largo de la frase y se
+  reintenta; si igual falla, la frase se saltea.
+- Asistente: describir en frases de ≤ 15 palabras; distancia con varios, primero cuántos;
+  conocimiento general aclarado para lo que no está escrito («en general, la ashwagandha…»).
+- `visionx.modes demo --profundidad` acepta cualquier estimador del registro; órdenes de las
+  demos versionadas en `datasets/demos/`; `docs/PRUEBA-EN-VIVO.md` reescrita para la Mac.
+
+**Evidencia.**
+- Tests: 1154 OK, ruff OK; ningún test usa la API ni ve la key (`tests/conftest.py`).
+- Demos con B0 en la PC (Drive `VisionX-artefactos/demos/beta-1119c/`, audio estéreo):
+  buscar con sonar (habla solo en momentos clave); elegir («Buscá la taza» → a los 1,8 s
+  «…la taza blanca de la banqueta a la izquierda o el vaso rojo… ¿Cuál querés?» → «La blanca» →
+  guía a −35°); distancias («Hay dos tazas.» y una frase por cada una, ~1,4 s después de la
+  orden; Sonnet corrigió «taza» por «vaso rojo» conservando los metros); escenas y lectura.
+- App completa con CREStereo (`ejecutar` sobre `dev-1114-distancias`, sin ventana, CPU):
+  detector 44 cuadros, CREStereo continuo 8 y preciso 1, **0 errores**; la precisa no llegó en
+  `espera_s` 2 s por la CPU (en la Mac mide 617 ms).
+- Gasto de la key nueva: 36 consultas, 0,19 USD (`outputs/vlm/gasto.jsonl`).
+
+**Límites.** Nada de esto corrió en vivo en la Mac: sonar + voz en auriculares, latencia de
+punta a punta, YOLO + CREStereo juntos en MPS. La altura respecto del cuerpo supone la cámara
+nivelada. Sin red, una frase que no está en la caché no suena (no hay segunda voz). En el clip
+de buscar, al reencontrar dos botellas quedó una sola a la vista antes de la pregunta y guió a
+esa (correcto, pero la demo no muestra la elección: por eso `ordenes-elegir.jsonl`).
+
+**Próximo paso.** Bauty: prueba en vivo en la Mac siguiendo `docs/PRUEBA-EN-VIVO.md` (con
+Tomás por Discord) y las demos finales con CREStereo de la sección 5.
+
 ## 2026-11-19 — T07/T08/T10/T11/T20: asistente con Claude, guía que corta, caché de voz y alerta de cercanía
 
 **Tareas:** T07, T08, T10, T11, T20 (y registro de T12). **Persona/agente:** Tomás (decisiones) /

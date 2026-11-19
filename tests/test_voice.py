@@ -516,7 +516,9 @@ def test_edge_synth_decodes_mp3_without_network():
 
     synth = EdgeSynth(VoiceSettings(edge_voice="es-UY-MateoNeural", speech_rate=0.9), fetch=fetch)
     audio = synth.synthesize("Llegaste.")
-    assert calls == [("Llegaste.", "es-UY-MateoNeural", "-10%", 4.0)]
+    ((text, voice, rate, timeout),) = calls
+    assert (text, voice, rate) == ("Llegaste.", "es-UY-MateoNeural", "-10%")
+    assert timeout == pytest.approx(4.0 + 0.04 * len("Llegaste."))  # más tiempo si es larga
     assert synth.sample_rate == 24_000 and audio.dtype == np.float32
     assert 0.2 < len(audio) / 24_000 < 0.45 and np.abs(audio).max() > 0.1
     assert synth.voice_id == "edge:es-UY-MateoNeural-10%"
@@ -600,3 +602,25 @@ def test_audio_output_prefetches_queued_phrases():
     output.close()
     assert sorted(slow.calls) == sorted(["Primera frase.", "Segunda frase.", "Tercera frase."])
     assert time.perf_counter() - t0 < 0.15 * 3  # en paralelo, no una detrás de otra
+
+
+def test_only_mateo_by_default_retries_and_never_switches_voice():
+    from visionx.shared.config import load_config
+
+    s = VoiceSettings.from_config(load_config())
+    assert s.tts_fallback == "none"
+    calls = []
+
+    def flaky(text, voice, rate, timeout_s):
+        calls.append(text)
+        if len(calls) == 1:
+            raise TimeoutError("lento")
+        return _mp3(0.3)
+
+    synth = EdgeSynth(VoiceSettings(edge_attempts=2), fetch=flaky)
+    assert len(synth.synthesize("Hola.")) > 0 and calls == ["Hola.", "Hola."]  # reintentó
+    dead = EdgeSynth(
+        VoiceSettings(edge_attempts=2), fetch=lambda *a: (_ for _ in ()).throw(TimeoutError("x"))
+    )
+    with pytest.raises(EstimatorError):
+        dead.synthesize("Hola.")  # sin respaldo: la frase se saltea, no suena otra voz

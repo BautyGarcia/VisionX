@@ -53,6 +53,11 @@ class VoiceSettings:
     edge_voice: str = "es-UY-MateoNeural"
     edge_timeout_s: float = 4.0
     edge_retry_s: float = 30.0
+    # Tomás, 19/11: «no quiero dos voces, quiero la de Mateo». Sin respaldo de Piper: una frase
+    # que Edge no entrega se reintenta y, si igual falla, se saltea (queda en el registro).
+    tts_fallback: str = "none"  # none | piper
+    edge_attempts: int = 2
+    edge_timeout_per_char_s: float = 0.04  # frases largas del asistente tardan más en bajar
     tts_cache_dir: str | None = "data/cache/voz"
     speech_rate: float = 1.0
     stt_model: str = "small"
@@ -81,6 +86,11 @@ class VoiceSettings:
             edge_voice=str(tts.get("edge_voice", d.edge_voice)),
             edge_timeout_s=float(tts.get("edge_timeout_s", d.edge_timeout_s)),
             edge_retry_s=float(tts.get("edge_retry_s", d.edge_retry_s)),
+            tts_fallback=str(tts.get("fallback", d.tts_fallback)),
+            edge_attempts=int(tts.get("edge_attempts", d.edge_attempts)),
+            edge_timeout_per_char_s=float(
+                tts.get("edge_timeout_per_char_s", d.edge_timeout_per_char_s)
+            ),
             tts_cache_dir=tts.get("cache_dir", d.tts_cache_dir) or None,
             speech_rate=float(a.get("speech_rate", d.speech_rate)),
             stt_model=str(stt.get("model", d.stt_model)),
@@ -249,13 +259,25 @@ class EdgeSynth:
         self.voice = settings.edge_voice
         self.rate = edge_rate(settings.speech_rate)
         self.timeout_s = settings.edge_timeout_s
+        self.timeout_per_char_s = settings.edge_timeout_per_char_s
+        self.attempts = max(1, settings.edge_attempts)
         self._fetch = fetch or _edge_fetch
         self.voice_id = f"edge:{self.voice}{'' if self.rate == '+0%' else self.rate}"
         self.last_ms = 0.0
 
     def synthesize(self, text: str) -> np.ndarray:
         t0 = time.perf_counter()
-        data = self._fetch(text, self.voice, self.rate, self.timeout_s)
+        timeout = self.timeout_s + self.timeout_per_char_s * len(text)
+        data, last = b"", None
+        for _ in range(self.attempts):
+            try:
+                data = self._fetch(text, self.voice, self.rate, timeout)
+                if data:
+                    break
+            except Exception as exc:  # timeout o red: se reintenta una vez más
+                last = exc
+        if not data and last is not None:
+            raise EstimatorError(f"Edge no entregó {text[:40]!r}: {last}") from last
         if not data:
             raise EstimatorError(f"Edge no devolvió audio para {text!r}")
         samples = trim_silence(decode_mp3(data, self.sample_rate), self.sample_rate)
@@ -361,7 +383,8 @@ class FallbackSynth:
 def build_synth(settings: VoiceSettings):
     """Sintetizador de la app según `audio.tts.engine`, con caché en memoria (y preload()).
 
-    piper: Piper sola. edge: Edge con caché en disco y Piper de respaldo.
+    piper: Piper sola. edge: Edge (Mateo) con caché en disco; con `fallback: piper`, Piper de
+    respaldo. Por defecto sin respaldo: una sola voz.
     """
     from visionx.voice.output import CachedSynth
 
@@ -372,6 +395,8 @@ def build_synth(settings: VoiceSettings):
     primary = EdgeSynth(settings)
     if settings.tts_cache_dir:
         primary = DiskCachedSynth(primary, _abs(settings.tts_cache_dir))
+    if settings.tts_fallback != "piper":
+        return CachedSynth(primary, prefetch=True)
     return FallbackSynth(
         CachedSynth(primary, prefetch=True),
         CachedSynth(PiperSynth(settings)),

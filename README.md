@@ -23,10 +23,11 @@ Completar la entrega académica no equivale a terminar todas las capacidades de 
 
 Hay captura y calibración de la ELP, profundidad B0–B5 y CREStereo congelado (T12), detección,
 voz y una aplicación con los cuatro modos (buscar/guiar, distancia, leer y describir) probada
-sobre clips grabados. Desde el 19/11 (PR #27): leer, describir y preguntas libres con Claude
-Sonnet 5.5 (extra `ia`, necesita red y la key en `~/.visionx/anthropic_api_key`), voz Mateo por red con Piper de
-respaldo, guía que corta la frase vieja y alerta de cercanía (BITACORA 2026-11-19). Falta la
-prueba en vivo en la Mac ([guía](docs/PRUEBA-EN-VIVO.md)), la red propia de T12, los
+sobre clips grabados. Desde el 19/11: leer, describir, distancia con detalle y preguntas libres
+con Claude Sonnet 5.5 (extra `ia`, red y la key en `~/.visionx/anthropic_api_key`), voz Mateo
+por red (una sola voz, con caché), guía de buscar con sonar estéreo, «¿cuál?» describiendo los
+iguales y alerta de cercanía apagada (BITACORA 2026-11-19). Falta la prueba en vivo en la Mac
+([guía](docs/PRUEBA-EN-VIVO.md)), la red propia de T12, los
 comparadores y las métricas M1/M7–M10. Los detalles y la evidencia están en ROADMAP y BITACORA.
 
 ## Preparar el entorno cuando se vaya a implementar

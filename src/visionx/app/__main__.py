@@ -234,6 +234,15 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     )
     script = load_script(args.ordenes)
     range_m = tuple((cfg.get("depth") or {}).get("range_m", [0.5, 3.0]))
+    sonar = None
+    if args.voz and ModeSettings.from_config(cfg).guide_style == "sonar":
+        # Bips de la guía de buscar en su propio stream estéreo, al lado de la voz.
+        from visionx.modes.sonar import SonarPlayer
+        from visionx.shared.contracts import Mode
+
+        out_device = (cfg.get("audio") or {}).get("output_device")
+        sonar = SonarPlayer(controller, controller.handlers.get(Mode.SEARCH), device=out_device)
+        sonar.start()
     if args.consola:
 
         def console() -> None:
@@ -312,6 +321,8 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print("interrumpido")
     finally:
+        if sonar is not None:
+            sonar.close()
         controller.close()
         if args.captura:
             # Lo último que se unió, dibujado igual que en la ventana: evidencia sin pantalla.
