@@ -694,3 +694,62 @@ def test_voice_end_energy_warning_and_default_duration(tmp_path, capsys, cut):
     assert item["rms_ultimos_200ms"] == pytest.approx(0.15 if cut else 0)
     assert ("posible frase cortada" in capsys.readouterr().out) == cut
     assert item["estado"] == "pendiente"
+
+
+def test_m8_busqueda_actual_veo_y_la_encontre(tmp_path):
+    """Guía «centrar»: el falso aviso es «Veo …» y el éxito sale de «la encontré» en la traza."""
+    path = trace_file(
+        tmp_path,
+        [
+            (0, "orden", {}),
+            (1, "audio", dict(request_id=1, texto="Veo taza.", resultado="reproducido")),
+            (6, "orden", dict(request_id=2)),
+            (25, "terminado", dict(request_id=2, motivo="encontrado")),
+            (40, "fin", {}),
+        ],
+    )
+    sheet = tmp_path / "m8.csv"
+    base = dict(
+        ensayo=1,
+        ambiente="casa",
+        objeto="cup",
+        resultado_real="ausente",
+        traza=path.name,
+        request_id=1,
+        inicio_s=0,
+        fin_s=6,
+        exito_s="",
+        notas="",
+    )
+    write_csv(sheet, [base, dict(base, ensayo=2, resultado_real="exito", request_id=2,
+                                 inicio_s=6, fin_s=40)])  # fmt: skip
+    out = usage.evaluate(sheet, tmp_path / "r", trace=path)
+    s = out["resumen"]
+    assert s["falsos_avisos_veo"] == 1 and s["falsos_avisos_por_min"] == 10
+    assert s["exito_60s_fraccion"] == 1  # 19 s desde inicio_s, tomado de la traza
+
+
+def test_m8_borrador_desde_la_traza(tmp_path):
+    path = trace_file(
+        tmp_path,
+        [
+            (0, "inicio", {}),
+            (1, "orden", dict(request_id=1, modo="search", objetivo="cup", texto="Buscá la taza.")),
+            (20, "terminado", dict(request_id=1, motivo="encontrado")),
+            (30, "orden", dict(request_id=2, modo="search", objetivo="bottle")),
+            (33, "cancelado", dict(request_id=2)),
+            (40, "orden", dict(request_id=3, modo="search", objetivo="book")),
+            (60, "terminado", dict(request_id=3, motivo="terminar-busqueda")),
+            (70, "fin", {}),
+        ],
+    )
+    rows = usage.borrador(path, tmp_path / "b.csv", "living")
+    assert [r["resultado_real"] for r in rows] == ["exito", "cancelar", usage.REVISAR]
+    assert rows[0]["inicio_s"] == 1 and rows[0]["fin_s"] == 22 and rows[0]["objeto"] == "cup"
+    assert rows[1]["fin_s"] < rows[2]["inicio_s"]  # sin superposición
+    # Con REVISAR resuelto, evalúa y saca el éxito de «la encontré».
+    fixed = [dict(r, resultado_real="ausente") if r["resultado_real"] == usage.REVISAR else r
+             for r in rows]  # fmt: skip
+    write_csv(tmp_path / "b.csv", fixed)
+    s = usage.evaluate(tmp_path / "b.csv", tmp_path / "r", trace=path)["resumen"]
+    assert s["exito_60s_fraccion"] == 1 and s["n_cancelar"] == 1

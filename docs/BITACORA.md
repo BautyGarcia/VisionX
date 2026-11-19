@@ -40,6 +40,24 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T15: guía para medir los modos (M8, M10) y M8 al día con buscar
+
+**Tareas:** T15, T09. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/medicion-modos`.
+
+**Hecho.**
+- [MEDICION-MODOS](MEDICION-MODOS.md): las métricas de los modos que faltan para el informe en dos
+  sesiones con la Mac (Bauty en la cámara, Tomás por Discord), con los protocolos que ya existían
+  (`python -m visionx.protocolos`), los umbrales de TECNICO fijados antes de medir y dónde queda
+  cada número (`datasets/modos/`, Drive y BITACORA). Enlazada desde AGENTS (paso 7).
+- M8 al día con la búsqueda nueva: el falso aviso es también «Veo …» (la guía «centrar» no tiene
+  bip; `falsos_avisos_por_min`), y `exito_s` puede quedar vacío: se toma de la traza cuando la
+  persona dice «la encontré».
+- `protocolos m8 borrador`: arma la planilla desde la traza, una fila por «buscá…», con tiempos y
+  resultado sugerido (encontrado / cancelar / pérdida; lo que terminó con «terminá» queda para
+  revisar a mano). Tests en `tests/test_protocolos.py`.
+
+**Próximo paso.** Agendar las dos sesiones con Bauty.
+
 ## 2026-11-19 (noche) — T08/T09: la frase de distancia ya no se corta al vencer; «maus»
 
 **Tareas:** T08, T09. **Persona/agente:** Bauty (vivo, traza `outputs/beta/voz-cortes.jsonl`,
