@@ -575,3 +575,28 @@ def test_trim_silence_keeps_a_short_margin():
     out = trim_silence(audio, rate, keep_start_ms=30, keep_end_ms=120)
     assert len(out) == 30 + 100 + 120 and out[30] == 0.5
     assert len(trim_silence(np.zeros(50, np.float32), rate)) == 50  # todo silencio: no se toca
+
+
+def test_prefetch_synthesizes_while_queued_and_never_twice():
+    slow = FakeSynth(delay_s=0.1)
+    cached = CachedSynth(slow, prefetch=True)
+    cached.prefetch("Uno.")
+    cached.prefetch("Uno.")  # ya en cálculo: no se pide de nuevo
+    audio = cached.synthesize("Uno.")  # espera la que está en curso
+    assert slow.calls == ["Uno."] and len(audio) == 40
+    off = CachedSynth(FakeSynth())
+    off.prefetch("Dos.")
+    assert off.synth.calls == []  # sin prefetch habilitado no hace nada
+
+
+def test_audio_output_prefetches_queued_phrases():
+    slow = FakeSynth(delay_s=0.15)
+    cached = CachedSynth(slow, prefetch=True)
+    output = AudioOutput(cached, FakePlayer())
+    t0 = time.perf_counter()
+    for i, text in enumerate(["Primera frase.", "Segunda frase.", "Tercera frase."]):
+        output.submit(event(1, text, created=i))
+    assert output.wait_idle(5)
+    output.close()
+    assert sorted(slow.calls) == sorted(["Primera frase.", "Segunda frase.", "Tercera frase."])
+    assert time.perf_counter() - t0 < 0.15 * 3  # en paralelo, no una detrás de otra

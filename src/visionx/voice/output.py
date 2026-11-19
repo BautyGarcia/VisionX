@@ -92,32 +92,73 @@ def render_sound(name: str, sample_rate: int) -> np.ndarray:
 
 class CachedSynth:
     """Guarda las últimas frases sintetizadas: las frecuentes ("Busco la taza.") no se vuelven a
-    calcular. preload() las prepara al arrancar, cuando nadie está esperando."""
+    calcular. preload() las prepara al arrancar, cuando nadie está esperando.
 
-    def __init__(self, synth: Synth, max_items: int = 64) -> None:
+    Con `prefetch=True` (voz por red, Edge), AudioOutput pide sintetizar cada frase apenas entra
+    a la cola: la siguiente frase se calcula mientras suena la actual y no queda un silencio de
+    ~1 s entre frases de una misma respuesta. Una frase en cálculo no se pide dos veces.
+    """
+
+    def __init__(self, synth: Synth, max_items: int = 64, *, prefetch: bool = False) -> None:
         self.synth = synth
         self.sample_rate = synth.sample_rate
         self.voice_id = getattr(synth, "voice_id", None)
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
         self._max = max_items
         self._lock = threading.Lock()
+        self._pending: dict[str, threading.Event] = {}
+        self._pool = None
+        self._prefetch = prefetch
         self.hits = 0
         self.misses = 0
 
     def synthesize(self, text: str) -> np.ndarray:
+        while True:
+            with self._lock:
+                if text in self._cache:
+                    self._cache.move_to_end(text)
+                    self.hits += 1
+                    return self._cache[text]
+                waiting = self._pending.get(text)
+                if waiting is None:
+                    done = self._pending[text] = threading.Event()
+                    break
+            waiting.wait()  # otro hilo la está calculando; si falló, se reintenta acá
+            with self._lock:
+                if text not in self._cache and self._pending.get(text) is waiting:
+                    break
+        try:
+            samples = self.synth.synthesize(text)  # fuera del lock: puede tardar cientos de ms
+            samples.setflags(write=False)  # compartido entre reproducciones: nadie lo modifica
+            with self._lock:
+                self.misses += 1
+                self._cache[text] = samples
+                while len(self._cache) > self._max:
+                    self._cache.popitem(last=False)
+            return samples
+        finally:
+            with self._lock:
+                self._pending.pop(text, None)
+            done.set()
+
+    def prefetch(self, text: str) -> None:
+        """Calcular en segundo plano (si está habilitado); los errores se ven al reproducir."""
+        if not self._prefetch:
+            return
         with self._lock:
-            if text in self._cache:
-                self._cache.move_to_end(text)
-                self.hits += 1
-                return self._cache[text]
-        samples = self.synth.synthesize(text)  # fuera del lock: puede tardar cientos de ms
-        samples.setflags(write=False)  # compartido entre reproducciones: nadie lo modifica
-        with self._lock:
-            self.misses += 1
-            self._cache[text] = samples
-            while len(self._cache) > self._max:
-                self._cache.popitem(last=False)
-        return samples
+            if text in self._cache or text in self._pending:
+                return
+            if self._pool is None:
+                from concurrent.futures import ThreadPoolExecutor
+
+                self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tts-previo")
+        self._pool.submit(self._quiet, text)
+
+    def _quiet(self, text: str) -> None:
+        try:
+            self.synthesize(text)
+        except Exception:  # noqa: S110 - el hilo de audio reintenta y registra el error
+            pass
 
     def preload(self, phrases: Iterable[str]) -> None:
         for phrase in phrases:
@@ -239,6 +280,10 @@ class AudioOutput:
             if self._closed:
                 raise RuntimeError("AudioOutput cerrado")
             self.records.append(record)
+            text = event.text_or_sound
+            prefetch = getattr(self.synth, "prefetch", None)
+            if prefetch is not None and not text.startswith(SOUND_PREFIX):
+                prefetch(text)
             if event.deadline_ns is not None and now > event.deadline_ns:
                 self._finish(record, Outcome.EXPIRED, now)
                 return

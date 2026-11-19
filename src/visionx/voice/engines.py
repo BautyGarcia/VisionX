@@ -349,6 +349,14 @@ class FallbackSynth:
         for phrase in phrases:
             self.synthesize(phrase)
 
+    def prefetch(self, text: str) -> None:
+        """Adelantar la voz principal mientras está arriba (Piper es local y rápido)."""
+        with self._lock:
+            up = self._clock() >= self._down_until
+        prefetch = getattr(self.primary, "prefetch", None)
+        if up and prefetch is not None:
+            prefetch(text)
+
 
 def build_synth(settings: VoiceSettings):
     """Sintetizador de la app según `audio.tts.engine`, con caché en memoria (y preload()).
@@ -365,7 +373,9 @@ def build_synth(settings: VoiceSettings):
     if settings.tts_cache_dir:
         primary = DiskCachedSynth(primary, _abs(settings.tts_cache_dir))
     return FallbackSynth(
-        CachedSynth(primary), CachedSynth(PiperSynth(settings)), retry_s=settings.edge_retry_s
+        CachedSynth(primary, prefetch=True),
+        CachedSynth(PiperSynth(settings)),
+        retry_s=settings.edge_retry_s,
     )
 
 
