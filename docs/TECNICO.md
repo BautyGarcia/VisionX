@@ -319,8 +319,12 @@ aceptada, B4 queda solo estéreo (PARTIAL) y B3 no responde. Umbrales provisorio
 
 ## CREStereo adaptable
 
-**Estado al 18/11: solo planificación.** No hay código, pesos, entrenamientos ni mediciones de
-este sistema. Todo lo que sigue es diseño previsto o hipótesis, salvo donde dice «medido» o
+**Estado al 18/11.** Implementado y medido en la rama `a/T12-compuerta-crestereo` (sin
+integrar): CREStereo congelado con el contrato `DepthEstimator`, el estimador clásico de
+alineación, el generador de perturbaciones de etapa 1 y las mediciones de la compuerta
+([Compuerta: lo medido](#compuerta-lo-medido-el-1811)). **No existen todavía** la red de
+alineación, la U-Net de incertidumbre, el flujo al conectar una cámara ni la integración en la
+app. Todo lo demás de esta sección es diseño previsto o hipótesis, salvo donde dice «medido» o
 «verificado». Lo decidió Bauty el 18/11, después de hablar con el profesor. El origen es la
 [nota del 18/11](VisionX_Nota_Bauty_CREStereo.pdf); el diseño se aparta de ella en varios
 puntos ([diferencias](#diferencias-con-la-nota-de-origen)) y, donde difieren, vale este manual.
@@ -656,6 +660,83 @@ Palancas, todas a medir:
 - Si CREStereo no sirve como base, la alternativa es un **alumno destilado** (T17 con CREStereo
   como maestro). Reemplazaría a la red de alineación como contribución: las dos cosas no entran
   en el calendario.
+
+### Compuerta: lo medido el 18/11
+
+Todo en la Mac M2 Max con MPS, PyTorch 2.15, calibración `elp-2026-11-11-corregida.yaml`.
+Artefactos en `outputs/profundidad/20261118-*` (fuera de Git). Detalle en BITACORA 2026-11-18.
+
+```text
+uv run python scripts/profundidad/descargar_crestereo.py          # una vez: código y pesos
+uv run --extra ml python -m visionx.depth.crestereo_adapt latencia recordings/CLIP
+uv run --extra ml python -m visionx.depth.crestereo_adapt cinta RUTA/cinta-s7
+uv run --extra ml python -m visionx.depth.crestereo_adapt robustez recordings/CLIP
+```
+
+**Latencia** (clip `dev-1114-distancias`, 100 pares en ciclo). La red corre en MPS sin recurrir
+a la CPU; 5,43 M de parámetros; memoria pico del proceso ~2 GB.
+
+| Modo | Cómo corre | P50 | P95 | Protocolo |
+|---|---|---|---|---|
+| Continuo | 640×360, 4 iteraciones, arranque en caliente | 120 ms | 136 ms | M9: 50 + 300 |
+| Continuo, cuadro en frío (1 de cada 31) | 640×360, 4 iteraciones, dos pasadas | 218 ms | — | M9 |
+| Preciso | 1280×720, 4 iteraciones, dos pasadas | 617 ms | 647 ms | M9: 50 + 300 |
+| (descartado) | 1280×720, 10 iteraciones, dos pasadas | 1395 ms | 1469 ms | 10 + 62 |
+
+- El continuo entra en la compuerta de 250 ms P95. El arranque en caliente baja el tiempo casi
+  a la mitad.
+- Dos pasadas cuestan lo mismo que una en frío (la segunda arranca de la primera y saltea las
+  etapas gruesas) y miden mejor: quedan por defecto.
+- La tabla completa (3 resoluciones × 2, 4 y 10 iteraciones × 1 y 2 pasadas × frío y caliente)
+  se midió con protocolo reducido, 10 + 62: sirve para elegir, no como M9.
+
+**Distancias con cinta** (`cinta-s7`: damero a 1, 1,5, 2, 2,5 y 3 m, 3 pares por distancia; error
+= distancia − cero de cinta − cinta).
+
+| Método | 1 m | 1,5 m | 2 m | 2,5 m | 3 m |
+|---|---|---|---|---|---|
+| Esquinas del damero (referencia) | +1,5 mm | −5,0 mm | −2,2 mm | −0,2 mm | +1,1 mm |
+| CREStereo preciso (1280×720, 4 it., 2 pasadas) | +1,9 mm | +2,0 mm | −2,1 mm | +25,6 mm | +34,2 mm |
+| CREStereo 1280×720, 10 it., 2 pasadas | +0,9 mm | −3,3 mm | −4,1 mm | +19,9 mm | +42,6 mm |
+| SGBM B0 (1280×720) | +12,6 mm | −16,6 mm | −18,4 mm | +37,6 mm | −87,7 mm |
+| CREStereo 640×360, 4 it., 1 pasada, en frío | +1,2 mm | +106,5 mm | +653,4 mm | +153,6 mm | +128,7 mm |
+
+- El preciso queda dentro de 1,1 % hasta 3 m y le gana a B0.
+- A 640×360 y 960×540 la red falla desde 2 m **sobre este blanco**. El damero es un patrón
+  repetitivo y a esa distancia cada cuadrado ocupa 2 o 3 píxeles; no se separó cuánto del error
+  es del blanco y cuánto de la resolución. La precisión del modo continuo en escenas naturales
+  **no está medida**.
+- No es una prueba independiente: la corrección de disparidad de la calibración se ajustó con
+  estas mismas mediciones. Falta B5 y Fusion en esta tabla.
+
+**Robustez** (8 pares repartidos del mismo clip, modo preciso). La referencia es la propia red
+sobre el par bien rectificado, no una profundidad real. Se desalinea el ojo derecho y se mide
+cuánto cambia la profundidad entre 0,5 y 3 m (mediana del cambio relativo).
+
+| Error | Filas corridas (mediana) | Sin corregir | Clásico (un par) | Corrección exacta |
+|---|---|---|---|---|
+| roll 0,05° | 0,28 px | 1,1 % | 1,8 % | 0,21 % |
+| roll 0,25° | 1,40 px | 5,3 % | 2,0 % | 0,25 % |
+| roll 1,0° | 5,60 px | 20,9 % | 2,9 % | 0,25 % |
+| pitch 0,25° | 2,86 px | 3,3 % | 1,8 % | 0,25 % |
+| pitch 1,0° | 11,43 px | 13,6 % | 1,6 % | 0,26 % |
+| yaw 0,05° | 0,08 px | 3,6 % | 1,1 % | 0,22 % |
+| yaw 0,25° | 0,38 px | 15,3 % | 2,6 % | 0,24 % |
+| focal 0,5 % | 0,90 px | 9,0 % | 2,5 % | 0,22 % |
+| focal 2 % | 3,56 px | 32,3 % | 1,7 % | 0,21 % |
+
+- **La desalineación daña la profundidad aunque las filas se corran poco.** El mismo error que
+  mueve filas también mueve columnas, y eso cambia la disparidad sin que falle el emparejado:
+  0,25° de roll ya son 5 % de mediana. Esta curva mide el daño total; no separa cuánto es de
+  la red y cuánto es geometría. Corrige el análisis previo al pivote, que miraba solo las filas.
+- **La corrección exacta recupera casi todo** (0,2–0,3 %): es el techo de cualquier alineación.
+- **El clásico de un solo par queda en 1–3 %** y, con errores de 0,05°, empeora lo que había.
+  Su piso lo fijan los parámetros que casi no dejan huella en las filas (yaw y focal). El
+  margen entre ese piso y el techo es el que tiene que ganar la red de alineación, o el mismo
+  clásico promediado en el tiempo, que no se probó.
+
+**Decisión de la compuerta:** CREStereo queda como estéreo de base. El modo continuo no necesita
+el respaldo de B0 por latencia; su precisión todavía hay que medirla.
 
 ### Orden de trabajo, orden de caída y ablaciones
 
