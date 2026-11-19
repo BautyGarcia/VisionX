@@ -31,6 +31,7 @@ from typing import Any
 import numpy as np
 import yaml
 
+from visionx.app.calibrate import build_calibrator
 from visionx.app.camera_status import CameraStatus, CameraStatusSettings
 from visionx.app.controller import Controller
 from visionx.app.dashboard import DashboardState, render
@@ -41,11 +42,12 @@ from visionx.app.fakes import (
     SyntheticStereoSource,
 )
 from visionx.app.precision import PrecisionWorker
+from visionx.app.proximity import ProximityAlert, ProximitySettings
 from visionx.app.runtime import Pipeline
 from visionx.app.science import TraceWriter, compare
 from visionx.app.spatial import ProvisionalSpatialEstimator
 from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
-from visionx.modes import build_handlers
+from visionx.modes import ModeSettings, build_handlers
 from visionx.shared.config import ROOT, load_config
 from visionx.shared.errors import EstimatorError, InvalidInput, SourceError
 from visionx.shared.interfaces import SpatialEstimator
@@ -224,7 +226,11 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
         ),
         deadlines_s={str(k): float(v) for k, v in (voice_cfg.get("deadlines_s") or {}).items()},
         on_event=on_event,
-        watchers=[CameraStatus(CameraStatusSettings.from_config(cfg))],
+        watchers=[
+            CameraStatus(CameraStatusSettings.from_config(cfg)),
+            ProximityAlert(ProximitySettings.from_config(cfg), geometry=geometry),
+        ],
+        calibrate=build_calibrator(depth, geometry, catalog.spoken, ModeSettings.from_config(cfg)),
     )
     script = load_script(args.ordenes)
     range_m = tuple((cfg.get("depth") or {}).get("range_m", [0.5, 3.0]))

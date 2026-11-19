@@ -83,11 +83,14 @@ class Controller:
         clock: Clock | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         watchers: list[Any] | None = None,
+        calibrate: Callable[[float, Any, int], list[str]] | None = None,
     ) -> None:
         self.parser = parser
         # Observadores fuera de las órdenes (p. ej. app.camera_status): observe(view, now) ->
         # list[Say]. Hablan con un request_id propio: no cortan ni vencen con el modo activo.
         self.watchers = list(watchers or [])
+        # «Calibrar distancia» (app.calibrate): (metros, vista, ahora) -> frases.
+        self.calibrate = calibrate
         self.output = output
         self.latest_view = latest_view
         self.handlers = handlers or {}
@@ -157,6 +160,21 @@ class Controller:
                     # Vencida: no se repite un hecho viejo como si fuera actual, pero tampoco
                     # se deja a la persona en silencio.
                     self._say(Say(EXPIRED_REPEAT), repeat_id, now, remember=False)
+                self.history.append((None, interp))
+                return None
+            if interp.mode is Mode.CONTROL and (interp.target or "").startswith("calibrar:"):
+                calib_id = self._new_id()
+                order["request_id"] = calib_id
+                self._on_event("orden", order)
+                z_m = float(interp.target.split(":", 1)[1])
+                phrases = (
+                    self.calibrate(z_m, self.latest_view(), now)
+                    if self.calibrate is not None
+                    else ["Calibrar no está disponible."]
+                )
+                self._on_event("calibrar", {"request_id": calib_id, "z_m": z_m, "dice": phrases})
+                for phrase in phrases:
+                    self._say(Say(phrase), calib_id, now)
                 self.history.append((None, interp))
                 return None
             if not interp.ok:
@@ -250,6 +268,8 @@ class Controller:
                 if observe is not None:
                     observe(view, now)
             for watcher in self.watchers:
+                if hasattr(watcher, "active_mode"):
+                    watcher.active_mode = self.active.mode.value if self.active else None
                 for say in watcher.observe(view, now):
                     request_id = self._new_id()
                     self._on_event("aviso", {"request_id": request_id, "texto": say.text_or_sound})

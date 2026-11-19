@@ -21,6 +21,8 @@ from visionx.shared.contracts import Command, FrameKey, Mode
 CANCEL = "cancelar"
 REPEAT = "repetir"
 READ_ALL = "todo"  # «leé todo»: lectura completa por bloques, sin resumir
+CALIBRATE = "calibrar"  # «calibrá, está a 2 metros» -> objetivo "calibrar:2"
+_CALIBRATE = re.compile(r"^(calibra\w*|calibrar)\b")
 # Preguntas (con asistente): empiezan con interrogativo; «¿qué dice?» sola sigue siendo leer.
 _QUESTION_START = re.compile(
     r"^(y )?(que|cual|cuales|cuando|cuanto|cuanta|cuantos|cuantas|como|donde|quien|para que|"
@@ -182,6 +184,16 @@ class CommandParser:
             return Interpretation(utterance, Mode.CONTROL, CANCEL, "cancelar")
         if _REPEAT.search(text):
             return Interpretation(utterance, Mode.CONTROL, REPEAT, "repetir")
+        if _CALIBRATE.search(text):
+            from visionx.app.calibrate import parse_meters
+
+            z_m = parse_meters(utterance)  # sin limpiar: «1,5» pierde la coma al normalizar
+            if z_m is None:
+                reply = "Decime a cuántos metros está. Por ejemplo: calibrá, está a 2 metros."
+                return Interpretation(
+                    utterance, Mode.CONTROL, None, "calibrar-sin-distancia", reply
+                )
+            return Interpretation(utterance, Mode.CONTROL, f"{CALIBRATE}:{z_m:g}", "calibrar")
 
         if _DISTANCE.search(text):
             cls = find_object(text, self.catalog)

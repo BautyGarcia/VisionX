@@ -62,7 +62,7 @@ class ModeSettings:
     repeat_s: float = 4.0  # repetir la dirección aunque no cambie
     # Si la dirección cambia mientras suena la frase anterior, se corta y se dice la nueva
     # (después de al menos esto desde la anterior, para no alternar en un límite).
-    preempt_min_s: float = 0.4
+    preempt_min_s: float = 0.6
     # Después de la primera frase, la guía no repite el nombre: «Un poco a la izquierda.»
     short_guide: bool = True
     # Metros nuevos durante la guía: se dicen solos («A 2 metros.») si cambiaron al menos esto

@@ -24,7 +24,8 @@ deteccion = [
     "lap>=0.5.12",  # asignación lineal de ByteTrack; Ultralytics lo instalaría solo en tiempo de uso
 ]
 # Voz (T08): micrófono/parlantes (sounddevice, MIT), STT local (faster-whisper, MIT; CPU en
-# Windows y Mac) y TTS local (Piper, GPL-3.0). Modelos y voces se bajan aparte, nunca en tests.
+# Windows y Mac), TTS local (Piper, GPL-3.0) y la voz por defecto por red (edge-tts, Mateo, con
+# Piper de respaldo). Modelos y voces se bajan aparte, nunca en tests.
 voz = [
     "sounddevice>=0.5",
     "faster-whisper>=1.2",
@@ -34,6 +35,8 @@ voz = [
 # OCR T10: RapidOCR actual + ONNX Runtime CPU (Windows/macOS, Python 3.11).
 # Pesos latinos fijados y descargados aparte con `python -m visionx.reading descargar`.
 ocr = ["rapidocr==3.10.0", "onnxruntime>=1.23,<2"]
+# Asistente (T10/T11): Claude con imagen para leer, describir y preguntas libres. Necesita red y
+# ANTHROPIC_API_KEY; sin el extra o sin la key, los modos usan su versión local.
 ia = [
     "anthropic>=1.0",
 ]
