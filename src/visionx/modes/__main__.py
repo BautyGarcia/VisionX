@@ -337,7 +337,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--fuente", required=True, help="carpeta de grabación o 'sintetica'")
     p.add_argument("--orden", action="append", help="SEGUNDO:frase (se puede repetir)")
     p.add_argument("--ordenes", help="JSONL con {t_s, texto}")
-    p.add_argument("--profundidad", choices=["B0", "B1", "B2", "ninguna"], default="B0")
+    p.add_argument(
+        "--profundidad",
+        default="B0",
+        help="B0–B5, fusion, crestereo, crestereo-preciso, depth.estimadores o ninguna",
+    )
     p.add_argument("--latencia-detector", type=float, default=0.0, help="s emulados")
     p.add_argument("--latencia-profundidad", type=float, default=0.0, help="s emulados")
     p.add_argument("--cada", type=int, default=1, help="el detector mira 1 de cada N frames")

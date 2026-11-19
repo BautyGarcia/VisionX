@@ -94,7 +94,28 @@ primera palabra.
 Al terminar, subir `outputs/beta/1119/` y `outputs/vlm/gasto.jsonl` a Drive
 `VisionX-artefactos/beta/1119/`.
 
-## 5. Problemas conocidos
+## 5. Demos finales con CREStereo (antes de la prueba en vivo)
+
+La interacción se ajusta con B0 en la PC de Tomás (sin GPU, CREStereo tarda 1,7 s por cuadro
+ahí). Las demos finales se generan en la Mac con la misma profundidad que la prueba en vivo. Los
+clips `recordings/dev-1114-*` son los de Bauty; las órdenes están en `datasets/demos/`. Cada
+demo hace ~5–9 consultas al asistente (~0,03 USD). La latencia del asistente es real (cada frase
+sale cuando la API la devolvió); la de profundidad se emula con `--latencia-profundidad`.
+
+```bash
+mkdir -p outputs/demos/final
+for c in lectura escenas buscar-a distancias; do
+  uv run python -m visionx.modes demo --fuente recordings/dev-1114-$c \
+    --ordenes datasets/demos/ordenes-$c.jsonl --profundidad crestereo \
+    --latencia-profundidad 0.13 --config configs/local.yaml \
+    --traza outputs/demos/final/demo-$c.jsonl --salida outputs/demos/final/demo-$c.mp4 \
+    > outputs/demos/final/demo-$c.txt 2>&1
+done
+```
+
+Subir `outputs/demos/final/` a Drive `VisionX-artefactos/demos/final/` y revisarlas juntos.
+
+## 6. Problemas conocidos
 
 - La primera vez que Mateo dice una frase nueva tarda ~1–2 s (red). Lo frecuente está en la caché.
 - El asistente necesita red. Con el wifi del lugar inestable, tener el hotspot del teléfono.
