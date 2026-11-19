@@ -292,6 +292,14 @@ def cmd_demo(args: argparse.Namespace) -> int:
         det_latency_s=args.latencia_detector, depth_latency_s=args.latencia_profundidad,
         every=args.cada, tick_s=tick_s, tail_s=args.cola, on_frame=on_frame,
     )  # fmt: skip
+    if args.traza:
+        with open(args.traza, "w", encoding="utf-8", newline="\n") as f:
+            for s in result.spoken:
+                f.write(json.dumps({"t_s": s.t_s, "tipo": "dice", "request_id": s.request_id,
+                                    "texto": s.text}, ensure_ascii=False) + "\n")  # fmt: skip
+            for t, kind, data in result.events:
+                f.write(json.dumps({"t_s": t, "tipo": kind, **data}, ensure_ascii=False,
+                                   default=str) + "\n")  # fmt: skip
     end = max([result.duration_s] + [s.end_s for s in schedule.segments]) + 0.5
     while cursor["base"] is not None and cursor["next"] <= end:
         writer.write(add_subtitles(cursor["base"], schedule, cursor["next"], painter))
@@ -337,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
 
     d = sub.add_parser("demo", help="como simular, más un MP4 con imagen, subtítulos y voz")
     for action in p._actions:  # mismas opciones que simular
-        if action.dest not in ("help", "traza", "capturas"):
+        if action.dest not in ("help", "capturas"):
             d._add_action(action)
     d.add_argument("--salida", required=True, help="archivo .mp4")
     d.add_argument("--sin-voz", action="store_true", help="sin Piper: subtítulos y silencio")
