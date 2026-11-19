@@ -40,6 +40,90 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-18 — Decisión: T12 pivotea de Fusion a CREStereo adaptable (solo planificación)
+
+**Tareas:** T12; afecta T13, T14, T15, T17 y T18. **Persona/agente:** Bauty (decisión) / Claude
+Code (análisis, coordinación y registro; subagentes para las búsquedas y para migrar ROADMAP y
+TECNICO). **Rama:** `a/T12-crestereo-adaptable`.
+
+**Decisión.** T12 deja de ser Fusion y pasa a ser **CREStereo adaptable**: CREStereo
+preentrenado y congelado, con una red propia antes (alineación de los dos ojos) y otra después
+(incertidumbre por píxel). No se busca mejorar la precisión de CREStereo sino hacerlo más útil:
+que reciba el par crudo de una cámara estéreo y devuelva metros con incertidumbre, sin que el
+usuario calibre ni rectifique. Especificación en [TECNICO](TECNICO.md#crestereo-adaptable);
+estado y calendario en [ROADMAP](ROADMAP.md#tareas).
+
+**Motivo.**
+- Fuera de dominio, Fusion empató con la regla fija B5 (entrada del 17/11): la red no aportaba
+  error medible sobre la regla.
+- Idea del profesor, informada por Bauty (sin documento de la cátedra): adaptar CREStereo por la
+  entrada y la salida para varias cámaras, con la calibración «en la memoria de la red». Pidió que
+  en nuestra cámara ande muy bien, en cámaras del mismo tipo relativamente bien y en cámaras con
+  otra distorsión al menos aceptable. Ofreció llevar a la exposición otra unidad igual.
+
+**Cómo se llegó (18/11, sin ejecutar nada).**
+- Se analizó la [nota del 18/11](VisionX_Nota_Bauty_CREStereo.pdf) contra esta bitácora. En la
+  ELP, el error vertical medido es chico (mediana 0,12 px, P95 0,46 px el 12/11; 2,5 px solo con
+  el precinto, 09/11) y el que mueve los metros es el corrimiento horizontal δ = 0,5275 px, que
+  la nota dejaba afuera por inobservable. Con el objetivo de varias cámaras, los rangos grandes de
+  la nota sí tienen sentido.
+- Dos búsquedas de fuentes (subagentes; enlaces en TECNICO). Verificado en el código original:
+  CREStereo supervisa el canal vertical hacia cero. Leído pero sin confirmar contra un clon local:
+  aumentación de la imagen derecha ±0,1° y ±2 px. El port a PyTorch no tiene licencia. No hay
+  reportes de CREStereo en MPS; terceros reportan 595 ms a resolución KITTI con 20 iteraciones en
+  una RTX 5060 Ti. Antecedente más cercano de la red de alineación: Flow-Guided Online Stereo
+  Rectification (CVPR 2024), que usa correlación.
+- Se descartó modificar la primera y la última capa de CREStereo: la primera no puede remuestrear
+  la imagen y entrenarla exige retropropagar por toda la red.
+- Ensayo de preguntas con tres agentes con perfil de profesor, sin contexto y con la misma
+  presentación (**no es opinión de la cátedra**). Coincidieron en: decir «corrección en línea
+  alrededor de un perfil», no «sin calibrar»; agregar el comparador clásico; reportar el yaw
+  aparte; probar con descalibración real; conseguir la segunda cámara antes de la expo; comparar
+  la incertidumbre contra el chequeo izquierda-derecha. Sugirieron recortar FiLM y las otras
+  cámaras: no se adopta, porque el profesor pidió varias cámaras.
+
+**Cambios respecto de la nota.** La red de alineación lleva correlación; el yaw entra; el residual
+denso queda solo vertical; la corrección va a los mapas de rectificación a baja frecuencia en vez
+de aplicarse por cuadro; la salida es incertidumbre (la corrección de disparidad queda como
+ablación); se agregan el comparador clásico, el perfil ELP dentro del modelo, el chequeo de
+cámara desconocida, el paso de distancia conocida y el modo relativo sin metros.
+
+**Hecho (documental).** ROADMAP y TECNICO migrados al pivote y esta entrada; la nota de origen se
+agrega a `docs/`. Fusion no se borra: queda como resultado negativo documentado y comparador, y
+su infraestructura se reutiliza para la U-Net de incertidumbre.
+
+**Evidencia.** Sin pruebas de software ni mediciones; revisión de coherencia, enlaces y diff. Del
+sistema nuevo no existe código, pesos ni resultados.
+
+**Para Tomás (propuesta por coordinar, no definida).** La app no cambia de contrato en esta
+migración. El diseño prevé más adelante: estados «ajustando la cámara», «no reconozco esta
+cámara» y «no puedo medir con esta cámara»; un comando «calibrar distancia»; carga de datos de
+una cámara desconocida; y un modo relativo sin metros, que es un cambio semántico de la salida
+de profundidad y pide versión, fixture y migración. También hay que acordar quién rectifica
+(hoy `RectifiedSource` entrega el par ya rectificado; en una segunda etapa el estimador
+recibiría el par crudo) y el alta del estimador en el registro, que hoy está en
+`b/beta-integracion` y no en `main`. La corrección en línea mueve solo el ojo derecho: la
+grilla izquierda donde el detector dibuja las máscaras no cambia. Nada de esto se implementa
+sin acordarlo.
+
+**Límites.** La latencia de CREStereo en la Mac no está medida y decide si queda como base. No
+está documentado con qué datos se entrenó `crestereo_eth3d`, así que MiddEval3 y ETH3D no sirven
+para el sistema nuevo (siguen reservados para B5 y Fusion) y la evidencia real pasa a ser el
+banco ELP con cinta. Un error de escala con lente parecida no lo detecta el sistema. El chequeo
+de cámara desconocida no se probó con ninguna cámara distinta.
+
+**Decisiones pendientes.**
+- Fecha: ROADMAP dice entrega el 10/12 (confirmada por Tomás); la nota dice congelar 4/12,
+  entrega 7/12 y expo 12/12. No se cambió la fecha oficial.
+- T14, T17 y T18 cambian de papel con el pivote; qué se corre y cuándo lo decide Bauty.
+- Confirmar con el profesor qué entiende por «la calibración en la memoria de la red», pedirle la
+  segunda unidad antes de la expo y revisar si la cámara del TP2 era otra unidad.
+
+**Próximo paso (Bauty, 19–21/11).** Wrapper de CREStereo en MPS y tabla de latencia; estimador
+clásico de alineación; curva de CREStereo sin corrección frente a calibración perturbada sobre
+clips crudos de la ELP; CREStereo sobre `cinta-s7` contra B0, B5 y Fusion. Con eso se decide si
+CREStereo queda como base.
+
 ## 2026-11-17 — T04: protocolo de grabación del banco ELP; ablación de Fusion que faltaba
 
 **Tareas:** T04, T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T04-protocolo-banco`.
