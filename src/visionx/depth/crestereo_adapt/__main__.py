@@ -400,7 +400,12 @@ def _spread_rectified(
 def _robustness(args: argparse.Namespace) -> int:
     from visionx.calibration import StereoCalibration
     from visionx.depth.crestereo_adapt import robustness
-    from visionx.depth.crestereo_adapt.classic import ClassicParams, fit_correction, match_points
+    from visionx.depth.crestereo_adapt.classic import (
+        ClassicParams,
+        fit_correction,
+        fit_significant,
+        match_points,
+    )
     from visionx.depth.crestereo_adapt.correction import (
         displacement_field,
         homography,
@@ -450,6 +455,7 @@ def _robustness(args: argparse.Namespace) -> int:
                 "sin_corregir": [],
                 "clasico": [],
                 "clasico_acumulado": [],
+                "clasico_regla": [],
                 "oraculo": [],
             }
             small = (align_geom.width, align_geom.height)
@@ -473,6 +479,15 @@ def _robustness(args: argparse.Namespace) -> int:
                 classic,
             )
             pooled_fix = homography(pooled.correction, capture) if pooled.ok else None
+            # Con la regla: los mismos puntos acumulados, pero solo se aplica cada parámetro
+            # si supera su umbral. Si ninguno lo supera, no se toca la imagen.
+            ruled, applied = fit_significant(
+                np.vstack([m[0] for m in matches_all]),
+                np.vstack([m[1] for m in matches_all]),
+                align_geom,
+                classic,
+            )
+            ruled_fix = homography(ruled.correction, capture) if ruled.ok and applied else None
             recovered: list[float] = []
             accepted = 0
             for frame, perturbed, (pts_l, pts_r), (ref, ref_ok) in zip(
@@ -498,6 +513,11 @@ def _robustness(args: argparse.Namespace) -> int:
                 per_system["clasico"].append(change(fixed))
                 fixed = perturbed if pooled_fix is None else warp_image(perturbed, pooled_fix)
                 per_system["clasico_acumulado"].append(change(fixed))
+                if ruled_fix is None:
+                    # No se movió la imagen: es la misma corrida que "sin corregir".
+                    per_system["clasico_regla"].append(per_system["sin_corregir"][-1])
+                else:
+                    per_system["clasico_regla"].append(change(warp_image(perturbed, ruled_fix)))
             row: dict[str, Any] = {
                 "parametro": parameter,
                 "nivel": level,
@@ -507,6 +527,7 @@ def _robustness(args: argparse.Namespace) -> int:
                 "clasico_error_parametro_pct": (
                     round(float(np.median(recovered)), 1) if recovered else None
                 ),
+                "regla_aplica": list(applied),
                 "acumulado": {
                     "ok": pooled.ok,
                     "pares_de_puntos": pooled.inliers,
@@ -567,7 +588,12 @@ def _real(args: argparse.Namespace) -> int:
     from visionx.calibration.calibrate import similarity_scale
     from visionx.calibration.detection import detect_corners, match_order
     from visionx.calibration.models import undistort_points
-    from visionx.depth.crestereo_adapt.classic import ClassicParams, fit_correction, match_points
+    from visionx.depth.crestereo_adapt.classic import (
+        ClassicParams,
+        fit_correction,
+        fit_significant,
+        match_points,
+    )
     from visionx.depth.crestereo_adapt.correction import apply_homography, homography
 
     cal = StereoCalibration.load(args.calibracion)
@@ -582,6 +608,7 @@ def _real(args: argparse.Namespace) -> int:
         "con_yaw": ClassicParams(),
         "sin_yaw": ClassicParams(estimate_yaw=False),
         "solo_giros": ClassicParams(estimate_yaw=False, estimate_focal=False),
+        "con_regla": ClassicParams(),  # todo libre, pero solo se aplica lo que supera su umbral
     }
 
     def board_check(ul: np.ndarray, ur: np.ndarray) -> tuple[float, float]:
@@ -623,17 +650,19 @@ def _real(args: argparse.Namespace) -> int:
             if corners is not None:
                 dy, scale = board_check(*corners)
                 print(f"  par {n}: damero sin corregir: filas {dy:.2f} px, escala {scale:+.2f} %")
+        all_l = np.vstack([m[0] for _, m, _ in pairs])
+        all_r = np.vstack([m[1] for _, m, _ in pairs])
         for label, params in variants.items():
-            pooled = fit_correction(
-                np.vstack([m[0] for _, m, _ in pairs]),
-                np.vstack([m[1] for _, m, _ in pairs]),
-                align_geom,
-                params,
-            )
+            applied: tuple[str, ...] | None = None
+            if label == "con_regla":
+                pooled, applied = fit_significant(all_l, all_r, align_geom, params)
+            else:
+                pooled = fit_correction(all_l, all_r, align_geom, params)
             c = pooled.correction
             entry: dict[str, Any] = {
                 "carpeta": name,
                 "variante": label,
+                "parametros_aplicados": list(applied) if applied is not None else None,
                 "ok": pooled.ok,
                 "motivo": pooled.reason,
                 "pares_de_puntos": pooled.inliers,
@@ -651,6 +680,7 @@ def _real(args: argparse.Namespace) -> int:
                 f"yaw {c.yaw_deg:+.3f}° (±{pooled.sigma['yaw']:.3f}) focal "
                 f"{c.log_focal * 100:+.3f} % | filas SIFT {entry['filas_sift_antes_px']:.2f} -> "
                 f"{entry['filas_sift_despues_px']:.2f} px, {pooled.inliers} puntos"
+                + ("" if applied is None else f" | aplica: {', '.join(applied) or 'nada'}")
                 + ("" if pooled.ok else f" | NO CONFIABLE: {pooled.reason}")
             )
             fix = homography(c, g)
@@ -802,6 +832,185 @@ def _coherence(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- hermanas: cámara real contra nominal (etapa 2) ----------------------------------------
+
+
+def _siblings(args: argparse.Namespace) -> int:
+    """Desalineación de «otra unidad del mismo modelo»: giro, focal, centro y distorsión juntos.
+
+    Separa cuánto del daño se arregla con cuatro números (giro y aumento) y cuánto necesita un
+    arreglo distinto en cada zona de la imagen. Sistemas:
+
+        sin corregir          el par tal como queda al rectificar con la calibración nominal
+        clásico con regla     puntos emparejados de todos los pares + regla de decisión
+        oráculo paramétrico   el giro y el aumento exactos (techo de una corrección de 4 números)
+        oráculo denso         el campo exacto (techo de cualquier corrección)
+    """
+    from visionx.calibration import StereoCalibration
+    from visionx.depth.crestereo_adapt import robustness
+    from visionx.depth.crestereo_adapt.classic import ClassicParams, fit_significant, match_points
+    from visionx.depth.crestereo_adapt.correction import homography, warp_image
+    from visionx.depth.crestereo_adapt.perturb import (
+        CameraModel,
+        CameraRanges,
+        mismatch_field,
+        mismatch_maps,
+        parametric_error,
+        sample_sibling,
+    )
+
+    cfg = load_config(args.config)
+    depth_cfg = cfg["depth"]
+    cal = StereoCalibration.load(ROOT / cfg["camera"]["calibration"])
+    frames, capture = _spread_rectified(args.clip, cal, args.pares)
+    range_m = (float(depth_cfg["range_m"][0]), float(depth_cfg["range_m"][1]))
+    model, device = load_model(PortConfig.from_config(depth_cfg["crestereo"]))
+    est = load_estimator(cfg, capture, args.modo, model=model, device=device)
+    align_geom = capture.resized(capture.width // 2, capture.height // 2)
+    small = (align_geom.width, align_geom.height)
+    classic = ClassicParams()
+    nominal = CameraModel(cal.right.K, cal.right.D, cal.rect.R2)
+    base = CameraRanges()
+    u, v = np.meshgrid(
+        np.arange(capture.width, dtype=np.float32), np.arange(capture.height, dtype=np.float32)
+    )
+    print(f"{len(frames)} pares de {args.clip}; red: {est.model_id}; rango {range_m} m")
+
+    def run(frame: StereoFrame, right: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        probe = StereoFrame(
+            session_id=frame.session_id,
+            frame_id=frame.frame_id,
+            left=frame.left,
+            right=right,
+            received_ns=frame.received_ns,
+            rectified=True,
+            calibration_id=frame.calibration_id,
+            geometry_id=frame.geometry_id,
+        )
+        result = est.predict(probe)
+        est.close()
+        return result.depth_m, result.valid_mask
+
+    references = [run(f, f.right) for f in frames]
+    rows: list[dict[str, Any]] = []
+    for fraction in args.fracciones:
+        ranges = CameraRanges(
+            roll_deg=base.roll_deg * fraction,
+            pitch_deg=base.pitch_deg * fraction,
+            yaw_deg=base.yaw_deg * fraction,
+            focal=base.focal * fraction,
+            center_px=base.center_px * fraction,
+            distortion=base.distortion * fraction,
+        )
+        for seed in range(args.hermanas):
+            true = sample_sibling(np.random.default_rng(seed), nominal, ranges)
+            field = mismatch_field(true, nominal, capture)
+            map_x, map_y = mismatch_maps(true, nominal, capture)
+            exact = parametric_error(true, nominal)
+            # Lo que queda después de aplicar el giro y el aumento exactos: la parte que no son
+            # cuatro números (centro óptico y distorsión).
+            undo = homography(exact, capture)
+            grid = np.dstack([u, v]).reshape(-1, 2).astype(np.float64)
+            moved = grid + field.reshape(-1, 2)
+            hom = np.column_stack([moved, np.ones(len(moved))]) @ undo.T
+            rest = (hom[:, :2] / hom[:, 2:3] - grid).reshape(capture.height, capture.width, 2)
+
+            perturbed_all, matches_all = [], []
+            for frame in frames:
+                perturbed = cv2.remap(frame.right, map_x, map_y, cv2.INTER_LINEAR)
+                perturbed_all.append(perturbed)
+                matches_all.append(
+                    match_points(
+                        cv2.resize(frame.left, small, interpolation=cv2.INTER_AREA),
+                        cv2.resize(perturbed, small, interpolation=cv2.INTER_AREA),
+                        classic,
+                    )
+                )
+            ruled, applied = fit_significant(
+                np.vstack([m[0] for m in matches_all]),
+                np.vstack([m[1] for m in matches_all]),
+                align_geom,
+                classic,
+            )
+            ruled_fix = homography(ruled.correction, capture) if ruled.ok and applied else None
+            per_system: dict[str, list[dict[str, float]]] = {
+                "sin_corregir": [],
+                "clasico_regla": [],
+                "oraculo_parametrico": [],
+                "oraculo_denso": [],
+            }
+            for frame, perturbed, (ref, ref_ok) in zip(
+                frames, perturbed_all, references, strict=True
+            ):
+
+                def change(right: np.ndarray, frame=frame, ref=ref, ref_ok=ref_ok) -> dict:
+                    depth, ok = run(frame, right)
+                    return robustness.depth_change(depth, ok, ref, ref_ok, range_m)
+
+                per_system["sin_corregir"].append(change(perturbed))
+                if ruled_fix is None:
+                    per_system["clasico_regla"].append(per_system["sin_corregir"][-1])
+                else:
+                    per_system["clasico_regla"].append(change(warp_image(perturbed, ruled_fix)))
+                per_system["oraculo_parametrico"].append(change(warp_image(perturbed, undo)))
+                dense = cv2.remap(
+                    perturbed, u + field[:, :, 0], v + field[:, :, 1], cv2.INTER_LINEAR
+                )
+                per_system["oraculo_denso"].append(change(dense))
+            row: dict[str, Any] = {
+                "fraccion": fraction,
+                "semilla": seed,
+                "error_exacto": {
+                    "roll_deg": round(exact.roll_deg, 4),
+                    "pitch_deg": round(exact.pitch_deg, 4),
+                    "yaw_deg": round(exact.yaw_deg, 4),
+                    "log_focal": round(exact.log_focal, 5),
+                },
+                "clasico": {
+                    "aplica": list(applied),
+                    "roll_deg": round(ruled.correction.roll_deg, 4),
+                    "pitch_deg": round(ruled.correction.pitch_deg, 4),
+                    "yaw_deg": round(ruled.correction.yaw_deg, 4),
+                    "log_focal": round(ruled.correction.log_focal, 5),
+                },
+                "filas_px_mediana": round(float(np.median(np.abs(field[:, :, 1]))), 2),
+                "resto_filas_px_mediana": round(float(np.median(np.abs(rest[:, :, 1]))), 2),
+                "resto_columnas_px_mediana": round(float(np.median(np.abs(rest[:, :, 0]))), 2),
+            }
+            for name, values in per_system.items():
+                row[name] = {k: round(x, 3) for k, x in robustness.summarize(values).items()}
+            rows.append(row)
+            print(
+                f"x{fraction:<4g} semilla {seed}: filas {row['filas_px_mediana']:5.2f} px, "
+                f"resto {row['resto_filas_px_mediana']:4.2f}/"
+                f"{row['resto_columnas_px_mediana']:4.2f} px | "
+                + " | ".join(f"{n} {row[n]['mediana_pct']:5.2f} %" for n in per_system)
+                + f" | aplica {','.join(applied) or 'nada'}"
+            )
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = Path(args.salida) / f"{stamp}-hermanas-crestereo-{Path(args.clip).name}"
+    _write_report(
+        out_dir,
+        "hermanas.yaml",
+        {
+            "clip": str(args.clip),
+            "pares": [int(f.frame_id) for f in frames],
+            "calibracion": cfg["camera"]["calibration"],
+            "metodo": est.model_id,
+            "rangos_base": {k: getattr(base, k) for k in base.__dataclass_fields__},
+            "rango_m": list(range_m),
+            "referencia": "la misma red sobre el par bien rectificado (no es GT)",
+            "commit": _git_commit(),
+            "comando": " ".join(sys.argv),
+            "equipo": _equipment(device),
+            "filas": rows,
+        },
+    )
+    print(f"resultados en {out_dir}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m visionx.depth.crestereo_adapt",
@@ -872,6 +1081,20 @@ def main(argv: list[str] | None = None) -> int:
     co.add_argument("--variantes", nargs="*", default=[], help="como 960x540:i4p2 (en frío)")
     co.add_argument("--config", default=None, help="override YAML explícito")
     co.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
+    he = sub.add_parser("hermanas", help="otra unidad del mismo modelo: lente y giro distintos")
+    he.add_argument("clip", help="carpeta de una grabación sin rectificar (T02)")
+    he.add_argument("--modo", default="preciso", choices=["preciso", "continuo"])
+    he.add_argument("--pares", type=int, default=6)
+    he.add_argument("--hermanas", type=int, default=3, help="cámaras sorteadas por nivel")
+    he.add_argument(
+        "--fracciones",
+        nargs="+",
+        type=float,
+        default=[0.1, 0.25, 0.5, 1.0],
+        help="fracción de los rangos de CameraRanges",
+    )
+    he.add_argument("--config", default=None, help="override YAML explícito")
+    he.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
     args = parser.parse_args(argv)
     try:
         if args.comando == "latencia":
@@ -882,6 +1105,8 @@ def main(argv: list[str] | None = None) -> int:
             return _real(args)
         if args.comando == "coherencia":
             return _coherence(args)
+        if args.comando == "hermanas":
+            return _siblings(args)
         return _tape(args)
     except (InvalidInput, EstimatorError, SourceError) as exc:
         print(f"error: {exc}", file=sys.stderr)

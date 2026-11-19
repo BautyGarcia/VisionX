@@ -22,6 +22,7 @@ sale de la curvatura del ajuste. Para el yaw suele ser grande: casi no deja huel
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
 
@@ -130,9 +131,18 @@ def fit_correction(
     pts_r: np.ndarray,
     geometry: StereoGeometry,
     params: ClassicParams | None = None,
+    parameters: tuple[str, ...] | None = None,
 ) -> AlignmentEstimate:
-    """Ajusta la corrección del ojo derecho a pares de puntos ya emparejados."""
+    """Ajusta la corrección del ojo derecho a pares de puntos ya emparejados.
+
+    `parameters` elige a mano qué se ajusta (nombres de `PARAMETERS`); lo demás queda en cero.
+    Sin él, se ajustan pitch y roll, y yaw y focal según `params`.
+    """
     p = params or ClassicParams()
+    if parameters is not None:
+        unknown = set(parameters) - set(PARAMETERS)
+        if unknown:
+            raise InvalidInput(f"parámetros desconocidos: {sorted(unknown)}")
     pts_l = np.asarray(pts_l, dtype=np.float64).reshape(-1, 2)
     pts_r = np.asarray(pts_r, dtype=np.float64).reshape(-1, 2)
     if pts_l.shape != pts_r.shape:
@@ -151,17 +161,25 @@ def fit_correction(
     before = float(np.median(np.abs(pts_l[:, 1] - pts_r[:, 1])))
 
     # RANSAC epipolar: descarta pares equivocados sin suponer que el par ya está alineado.
+    # Sortea subconjuntos al azar: se fija la semilla para que el mismo par dé siempre lo mismo.
+    cv2.setRNGSeed(0)
     _, mask = cv2.findFundamentalMat(pts_l, pts_r, cv2.FM_RANSAC, p.ransac_px, 0.999)
     if mask is not None and int(mask.sum()) >= p.min_inliers:
         keep = mask.ravel().astype(bool)
         pts_l, pts_r = pts_l[keep], pts_r[keep]
 
     # Parámetros libres, en el orden de PARAMETERS: pitch, yaw, roll, log_focal.
-    free = [0, 2]
-    if p.estimate_yaw:
-        free.insert(1, 1)
-    if p.estimate_focal:
-        free.append(3)
+    if parameters is not None:
+        free = [i for i, name in enumerate(PARAMETERS) if name in parameters]
+    else:
+        free = [0, 2]
+        if p.estimate_yaw:
+            free.insert(1, 1)
+        if p.estimate_focal:
+            free.append(3)
+    if not free:  # nada que ajustar: la corrección es "no tocar"
+        zero = dict.fromkeys(PARAMETERS, 0.0)
+        return AlignmentEstimate(Correction(), zero, matches, len(pts_l), before, before, True)
     vector = np.zeros(4)
     weights = np.ones(len(pts_l))
     for _ in range(p.iterations):
@@ -217,3 +235,91 @@ def estimate_alignment(
     geometry.require_size(right, "right")
     pts_l, pts_r = match_points(left, right, params)
     return fit_correction(pts_l, pts_r, geometry, params)
+
+
+@dataclass(frozen=True)
+class DecisionParams:
+    """Cuándo vale la pena aplicar cada parámetro de la corrección.
+
+    Corregir con un valor ruidoso empeora lo que había: en la curva de robustez del 18/11, con
+    errores de 0,05° el clásico dejaba la profundidad peor que sin tocar. La regla es aplicar
+    un parámetro solo si su valor supera `k` veces su incertidumbre.
+
+    La incertidumbre que calcula el ajuste es optimista: supone que los residuos son ruido
+    puro y no ve errores sistemáticos (distorsión mal modelada, puntos mal ubicados). Por eso
+    se le pone un **piso** por parámetro, medido corriendo el estimador sobre sesiones sanas
+    de la ELP, donde la respuesta correcta es cero (BITACORA 2026-11-18): roll hasta 0,021°,
+    pitch hasta 0,009°, yaw hasta 0,036°, focal hasta 0,053 %.
+    """
+
+    k: float = 2.0
+    floor_roll_deg: float = 0.02
+    floor_pitch_deg: float = 0.01
+    floor_yaw_deg: float = 0.04
+    floor_log_focal: float = 0.0005
+
+    def floor(self, name: str) -> float:
+        return {
+            "roll": self.floor_roll_deg,
+            "pitch": self.floor_pitch_deg,
+            "yaw": self.floor_yaw_deg,
+            "log_focal": self.floor_log_focal,
+        }[name]
+
+
+def _value(correction: Correction, name: str) -> float:
+    return correction.log_focal if name == "log_focal" else getattr(correction, f"{name}_deg")
+
+
+def significant_parameters(
+    estimate: AlignmentEstimate, decision: DecisionParams | None = None
+) -> tuple[str, ...]:
+    """Parámetros cuyo valor supera `k` veces su incertidumbre (con piso)."""
+    d = decision or DecisionParams()
+    keep = []
+    for name in PARAMETERS:
+        threshold = d.k * max(float(estimate.sigma[name]), d.floor(name))
+        if abs(_value(estimate.correction, name)) > threshold:
+            keep.append(name)
+    return tuple(keep)
+
+
+def fit_significant(
+    pts_l: np.ndarray,
+    pts_r: np.ndarray,
+    geometry: StereoGeometry,
+    params: ClassicParams | None = None,
+    decision: DecisionParams | None = None,
+) -> tuple[AlignmentEstimate, tuple[str, ...]]:
+    """Ajuste con la regla de decisión: devuelve la corrección a aplicar y qué parámetros usa.
+
+    Se ajusta todo junto y después se anulan los parámetros que no superan su umbral. Los que
+    quedan conservan el valor del ajuste completo. No se vuelve a ajustar solo con ellos: los
+    parámetros se influyen entre sí, y al sacar uno del ajuste los demás absorben su efecto y
+    cambian (se probó con los pares del 09/11: el yaw solo dejaba de superar el umbral). Si
+    ninguno lo supera, la respuesta es no corregir.
+    """
+    estimate = fit_correction(pts_l, pts_r, geometry, params)
+    if not estimate.ok:
+        return estimate, ()
+    chosen = significant_parameters(estimate, decision)
+    kept = {
+        name: _value(estimate.correction, name) if name in chosen else 0.0 for name in PARAMETERS
+    }
+    correction = Correction(
+        roll_deg=kept["roll"],
+        pitch_deg=kept["pitch"],
+        yaw_deg=kept["yaw"],
+        log_focal=kept["log_focal"],
+    )
+    # Residuo que queda con la corrección que de verdad se aplica.
+    remaining = _residuals(
+        correction.as_vector(),
+        np.asarray(pts_l, dtype=np.float64).reshape(-1, 2),
+        np.asarray(pts_r, dtype=np.float64).reshape(-1, 2),
+        geometry,
+    )
+    applied = dataclasses.replace(
+        estimate, correction=correction, residual_after_px=float(np.median(np.abs(remaining)))
+    )
+    return applied, chosen
