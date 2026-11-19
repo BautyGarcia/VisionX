@@ -69,6 +69,7 @@ class VoiceSettings:
     input_device: int | str | None = None
     output_device: int | str | None = None
     block_ms: float = 20.0
+    output_latency_s: float = 0.2
     max_record_s: float = 8.0
     deadlines_s: dict[str, float] = field(default_factory=dict)
     preload: tuple[str, ...] = ()
@@ -102,6 +103,7 @@ class VoiceSettings:
             input_device=a.get("input_device"),
             output_device=a.get("output_device"),
             block_ms=float(a.get("block_ms", d.block_ms)),
+            output_latency_s=float(a.get("output_latency_s", d.output_latency_s)),
             max_record_s=float(a.get("max_record_s", d.max_record_s)),
             deadlines_s={str(k): float(v) for k, v in (a.get("deadlines_s") or {}).items()},
             preload=tuple(str(p) for p in (tts.get("preload") or ())),

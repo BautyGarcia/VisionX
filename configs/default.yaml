@@ -317,6 +317,7 @@ audio:
   input_device: null        # micrófono (índice o nombre de `python -m visionx.voice dispositivos`); null = el del sistema
   output_device: null       # parlantes/auriculares; null = los del sistema
   block_ms: 20              # bloque de reproducción, ms: demora máxima de un cancelar antes del búfer del dispositivo
+  output_latency_s: 0.2     # búfer del parlante, s: aguanta picos de cómputo sin cortar la voz (con «low» se entrecortaba en vivo, 19/11); 0 = «low»
   max_record_s: 8           # tope de una orden con el botón, s
   deadlines_s:              # vigencia de cada orden, s; vencida, su respuesta ya no se dice (candidatos, sin medir)
     search: 30

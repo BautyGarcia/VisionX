@@ -40,6 +40,35 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T08: la voz se entrecortaba al preguntar distancias
+
+**Tareas:** T08. **Persona/agente:** Bauty (Mac, grabando el banco `s1`) lo reportó; Tomás /
+Claude Code. **Rama:** `b/voz-sin-cortes`.
+
+**Problema.** Con la app en vivo, al preguntar la distancia de un objeto la voz se entrecortaba
+mucho.
+
+**Causa (probable, por el código).** `SoundDevicePlayer` abría el parlante con
+`latency="low"` (búfer de pocos ms en la Mac) y escribía bloques de 20 ms desde un hilo de
+Python: el hilo tenía que llegar cada 20 ms sin falta. Preguntar la distancia dispara la
+profundidad precisa (1280×720, ~1,6 s de cómputo en vivo) junto con el detector, la U-Net, Claude
+y la síntesis; el hilo llega tarde, el búfer se vacía y la voz se corta. Coincide con que solo
+pasaba en las preguntas de distancia.
+
+**Hecho.**
+- Búfer del parlante configurable, `audio.output_latency_s: 0.2` (0 = «low» como antes). Cancelar
+  sigue siendo inmediato: `abort()` descarta el búfer. Cada frase arranca ~0,2 s más tarde.
+- Cortes contados por frase (`stream.write` avisa cuando el búfer se vació): van a la traza como
+  `cortes` y `latencias` agrega la línea «voz entrecortada: N de M frases con cortes».
+- Tests: `tests/test_voz_cortes.py` (4).
+
+**Límites.** No reproducido en la Mac todavía: la causa sale del código y del síntoma. Si con
+0,2 s sigue, probar 0,4 y mirar `cortes` en la traza; si aun así se corta, el siguiente paso es
+reproducir desde un callback de PortAudio con la frase entera ya en memoria.
+
+**Próximo paso.** Bauty: pull, repetir la pregunta de distancia con `--traza` y pasar
+`latencias`.
+
 ## 2026-11-19 (noche) — T13/T15: cómo llega la incertidumbre a la voz y mini dataset con ground truth
 
 **Tareas:** T13, T15. **Persona/agente:** Tomás (decisiones) / Claude Code (búsqueda y

@@ -184,6 +184,12 @@ El audio de las demos es estéreo (sonar): escucharlas con auriculares. Subir
 
 ## 7. Problemas conocidos
 
+- **Voz entrecortada al preguntar distancias** (19/11, con el banco `s1`): el búfer del parlante
+  era mínimo y, mientras corre la profundidad precisa, el audio llegaba tarde. Desde el PR de
+  `b/voz-sin-cortes` el búfer es de 0,2 s (`audio.output_latency_s`). Si todavía se corta,
+  subirlo a 0,4 en `configs/local.yaml` y mirar la línea «voz entrecortada» de
+  `python -m visionx.app latencias --traza …` (cuenta los cortes por frase).
+
 - **Sin internet:** el asistente se apaga (leer y describir vuelven a la versión local) y la voz
   solo dice lo que está en la caché; **una frase nueva sin red no suena** (no hay otra voz). Con
   wifi dudoso: hotspot del teléfono, o `audio.tts.fallback: piper` para que diga todo con otra voz.

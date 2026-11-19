@@ -153,7 +153,7 @@ def cmd_decir(args: argparse.Namespace) -> int:
         return 0
     from visionx.voice.output import AudioOutput, SoundDevicePlayer
 
-    output = AudioOutput(synth, SoundDevicePlayer(s.output_device, s.block_ms))
+    output = AudioOutput(synth, SoundDevicePlayer(s.output_device, s.block_ms, s.output_latency_s))
     output.submit(AudioEvent(1, Priority.SHORT, args.texto, created_ns=output.clock.now_ns()))
     output.wait_idle(timeout_s=duration + 10)
     output.close()
@@ -243,7 +243,7 @@ def cmd_escuchar(args: argparse.Namespace) -> int:
     stt = WhisperTranscriber(s)
     synth = build_synth(s)
     synth.preload(s.preload)
-    output = AudioOutput(synth, SoundDevicePlayer(s.output_device, s.block_ms))
+    output = AudioOutput(synth, SoundDevicePlayer(s.output_device, s.block_ms, s.output_latency_s))
     mic = PushToTalk(s.input_device, s.max_record_s)
     request_id = 0
     print("Enter para hablar, Enter para terminar. 'q' + Enter para salir.")

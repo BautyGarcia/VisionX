@@ -192,6 +192,7 @@ class PlaybackRecord:
     valid_until_ns: int | None = None
     fact_received_ns: int | None = None
     frame: FrameKey | None = None
+    cortes: int = 0  # veces que el búfer del dispositivo se vació mientras sonaba (voz cortada)
 
     @property
     def wait_ms(self) -> float | None:
@@ -220,6 +221,7 @@ class PlaybackRecord:
             "fact_age_ms": (self.started_ns - self.fact_received_ns) / 1e6
             if self.started_ns is not None and self.fact_received_ns is not None
             else None,
+            "cortes": self.cortes,
             "frame": {"session_id": self.frame.session_id, "frame_id": self.frame.frame_id}
             if self.frame is not None
             else None,
@@ -406,6 +408,8 @@ class AudioOutput:
             completed = self.player.play(samples, rate, self._stop_current)
         except Exception as exc:
             return Outcome.FAILED, f"dispositivo: {exc}"
+        finally:
+            record.cortes = int(getattr(self.player, "last_underflows", 0))
         with self._cond:
             if completed:
                 return Outcome.PLAYED, None
@@ -451,14 +455,26 @@ class FakePlayer:
 class SoundDevicePlayer:
     """Parlantes/auriculares con sounddevice (PortAudio). Escribe bloques de `block_ms` y
     revisa `stop` entre bloques. Al cortar usa abort(), que descarta lo que quedó en el búfer
-    del dispositivo en vez de dejarlo sonar."""
+    del dispositivo en vez de dejarlo sonar.
 
-    def __init__(self, device: int | str | None = None, block_ms: float = 20.0) -> None:
+    `latency_s` es el búfer del dispositivo. Con uno mínimo («low», unos ms en la Mac), el hilo
+    que escribe tiene que llegar cada `block_ms` sin falta: cuando la profundidad precisa, la
+    U-Net y el detector cargan la máquina, llega tarde y la voz se entrecorta (prueba en vivo
+    del 19/11, preguntando distancias). Un búfer de ~0,2 s aguanta esos picos; cancelar sigue
+    siendo inmediato porque abort() lo descarta. `last_underflows` cuenta los vaciados de la
+    última frase (van a la traza como `cortes`).
+    """
+
+    def __init__(
+        self, device: int | str | None = None, block_ms: float = 20.0, latency_s: float = 0.2
+    ) -> None:
         import sounddevice as sd
 
         self._sd = sd
         self.device = device
         self.block_ms = block_ms
+        self.latency_s = latency_s
+        self.last_underflows = 0
         self._stream = None
         self._rate: int | None = None
 
@@ -473,7 +489,7 @@ class SoundDevicePlayer:
             dtype="float32",
             device=self.device,
             blocksize=block,
-            latency="low",
+            latency=self.latency_s if self.latency_s > 0 else "low",
         )
         self._rate = sample_rate
 
@@ -482,13 +498,15 @@ class SoundDevicePlayer:
         stream = self._stream
         block = max(1, int(sample_rate * self.block_ms / 1000))
         data = np.ascontiguousarray(samples, dtype=np.float32).reshape(-1, 1)
+        self.last_underflows = 0
         stream.start()
         try:
             for start in range(0, len(data), block):
                 if stop.is_set():
                     stream.abort()
                     return False
-                stream.write(data[start : start + block])
+                if stream.write(data[start : start + block]) and start > 0:
+                    self.last_underflows += 1  # el primero es el arranque, no un corte
             stream.stop()  # espera a que termine de sonar lo escrito
             return True
         except BaseException:
