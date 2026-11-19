@@ -212,6 +212,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
         Painter,
         W,
         add_subtitles,
+        mix_sonar,
         mux,
         render_frame,
         write_wav,
@@ -256,6 +257,10 @@ def cmd_demo(args: argparse.Namespace) -> int:
         synth_obj = build_synth(VoiceSettings.from_config(cfg))
         synth, sample_rate = synth_obj.synthesize, synth_obj.sample_rate
     schedule = AudioSchedule(synth, sample_rate)
+    from visionx.modes.sonar import Sonar, SonarSettings, target_of
+
+    sonar = Sonar(SonarSettings()) if settings.guide_style == "sonar" else None
+    sonar_cues: list = []
     painter = Painter()
     out = Path(args.salida)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -287,6 +292,12 @@ def cmd_demo(args: argparse.Namespace) -> int:
             st.target_angle = (target.angle_h_deg, target.angle_v_deg) if target else None
         else:
             st.mode, st.state, st.target_angle = "-", "inactivo", None
+        if sonar is not None:
+            guiding = active is not None and active.mode.value == "search"
+            handler = holder["handlers"].get(active.mode) if guiding else None
+            cue = sonar.step(t_s, target_of(handler, clock.now_ns()) if guiding else None)
+            if cue is not None:
+                sonar_cues.append(cue)
         while cursor["base"] is not None and cursor["next"] <= t_s:
             writer.write(add_subtitles(cursor["base"], schedule, cursor["next"], painter))
             cursor["next"] += 1 / args.fps
@@ -312,7 +323,10 @@ def cmd_demo(args: argparse.Namespace) -> int:
         writer.write(add_subtitles(cursor["base"], schedule, cursor["next"], painter))
         cursor["next"] += 1 / args.fps
     writer.release()
-    write_wav(tmp / "audio.wav", schedule.mix(end), sample_rate)
+    audio = schedule.mix(end)
+    if sonar is not None and sonar_cues:
+        audio = mix_sonar(audio, sonar_cues, sonar.s, sample_rate)
+    write_wav(tmp / "audio.wav", audio, sample_rate)
     if mux(tmp / "video.mp4", tmp / "audio.wav", out):
         print(f"demo: {out} ({end:.1f} s, con audio)")
     else:

@@ -339,7 +339,7 @@ def test_audio_event_validates_optional_fact_timestamp(invalid):
 
 
 def test_combined_guide_age_uses_oldest_fact_and_keeps_independent_expiry():
-    settings = ModeSettings(confirm_hits=1)
+    settings = ModeSettings(confirm_hits=1, guide_style="palabras")
     handler = SearchHandler(G, CATALOG.spoken, settings)
     command = cmd(Mode.SEARCH, "cup")
     handler.start(command, View(joint(0, 0, [("cup", 0, 1)])), 0)

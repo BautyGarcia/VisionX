@@ -68,6 +68,10 @@ class ModeSettings:
     short_guide: bool = True
     # Distancia con detalle (con asistente): costado en cm si está corrido al menos esto.
     side_min_m: float = 0.15
+    # Guía de buscar: "sonar" (bips del lado del objeto, palabras solo en momentos clave) o
+    # "palabras" (frases de dirección, la de antes). Tomás eligió sonar el 19/11.
+    guide_style: str = "sonar"
+    sonar_meters_s: float = 4.0  # con sonar: mínimo entre dos avisos de metros
     # Metros nuevos durante la guía: se dicen solos («A 2 metros.») si cambiaron al menos esto
     # (lo mayor de los dos). Evita repetir la frase entera por un redondeo o por el borde del
     # rango (2,95 «a 3 metros» contra 3,05 «más de 3 metros»).

@@ -321,6 +321,12 @@ class SearchHandler:
                                     fact_received_ns=received)),
         ]  # fmt: skip
 
+    def sonar_target(self, now_ns: int) -> tuple[float, float] | None:
+        """(ángulo horizontal, s desde que se lo vio) mientras se guía; None si no."""
+        if self._finished or self.state != GUIDING or self.target is None:
+            return None
+        return self.target.angle_h_deg, (now_ns - self.target.last_seen_ns) / 1e9
+
     def _guide(self, name: str, now_ns: int) -> list[Say]:
         text, valid_until, received = self._guide_fact(name, now_ns)
         if text == "" or text.startswith("Llegaste"):
@@ -330,6 +336,17 @@ class SearchHandler:
             # «Llegaste» es la frase final: corta la guía que todavía suena (no se encola detrás).
             return [replace(say, replace=True)] if say.text_or_sound else [say]
         since = None if self._last_say_ns is None else (now_ns - self._last_say_ns) / 1e9
+        if self.s.guide_style == "sonar":
+            # La dirección la da el sonar; en palabras, solo metros nuevos cada tanto.
+            m = self._fact_measure
+            if m is None or not self._distance_news(m):
+                return []
+            if since is not None and since < self.s.sonar_meters_s:
+                return []
+            short = measure_phrase(m, self.s)
+            say = self._phrase(short[0].upper() + short[1:] + ".", now_ns,
+                               valid_until_ns=valid_until, fact_received_ns=received)  # fmt: skip
+            return [self._said(say)]
         # Ni antes del mínimo ni mientras la frase anterior todavía suena (no encolar guía vieja).
         speaking = speech_s(self._last_phrase or "", self.s) + 0.2
         if since is not None and since < max(self.s.min_interval_s, speaking):

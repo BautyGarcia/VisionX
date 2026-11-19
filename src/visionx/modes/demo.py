@@ -22,6 +22,7 @@ Es material para mirar cómo trabaja el sistema, no una medición: las latencias
 
 from __future__ import annotations
 
+import math
 import shutil
 import subprocess
 import wave
@@ -121,8 +122,9 @@ class AudioSchedule:
 
 
 def write_wav(path: Path, samples: np.ndarray, sample_rate: int) -> None:
+    """Mono (N) o estéreo (N x 2, con el sonar de la guía)."""
     with wave.open(str(path), "wb") as w:
-        w.setnchannels(1)
+        w.setnchannels(1 if samples.ndim == 1 else samples.shape[1])
         w.setsampwidth(2)
         w.setframerate(sample_rate)
         w.writeframes((samples * 32767).astype(np.int16).tobytes())
@@ -252,6 +254,13 @@ def render_frame(
                 target_xy = ((x1 + x2) // 2, (y1 + y2) // 2)
     if target_xy is not None:
         cv2.arrowedLine(cam, (CAM_W // 2, CAM_H // 2), target_xy, GREEN, 3, tipLength=0.05)
+    elif st.target_angle is not None and st.state == "guiando":
+        # No se lo ve en este cuadro: flecha más fina a donde estaba (ángulos del objetivo).
+        h, v = st.target_angle
+        u = geometry.cx + geometry.fx * math.tan(math.radians(h))
+        w = geometry.cy - geometry.fy * math.tan(math.radians(v or 0.0))
+        xy = (int(min(max(u * sx, 0), CAM_W - 1)), int(min(max(w * sy, 0), CAM_H - 1)))
+        cv2.arrowedLine(cam, (CAM_W // 2, CAM_H // 2), xy, (90, 170, 90), 2, tipLength=0.05)
     cv2.drawMarker(cam, (CAM_W // 2, CAM_H // 2), (255, 255, 255), cv2.MARKER_CROSS, 24, 1)
     # Las etiquetas se dibujan sobre la imagen de la cámara: así no invaden el panel lateral.
     canvas[:CAM_H, :CAM_W] = painter.text(cam, labels)
@@ -287,6 +296,20 @@ def add_subtitles(
     if beeping:
         cv2.circle(img, (W - 40, CAM_H + 40), 16, GREEN, -1)
     return img
+
+
+def mix_sonar(mono: np.ndarray, cues, settings, sample_rate: int) -> np.ndarray:
+    """Voz (mono, al centro) + bips del sonar (estéreo, del lado del objeto)."""
+    from visionx.modes.sonar import beep
+
+    out = np.stack([mono, mono], axis=1).astype(np.float32)
+    for cue in cues:
+        b = beep(cue.pan, cue.freq_hz, settings, sample_rate)
+        a = int(cue.t_s * sample_rate)
+        n = min(len(b), len(out) - a)
+        if n > 0:
+            out[a : a + n] += b[:n]
+    return np.clip(out, -1.0, 1.0)
 
 
 def mux(video: Path, audio: Path, out: Path) -> bool:

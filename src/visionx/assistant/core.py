@@ -60,12 +60,14 @@ lo más útil según la imagen o pedí que lo repita."""
 KINDS = {
     "leer": "LEER: decí qué es el objeto que tiene adelante y lo más importante que dice.",
     "leer-todo": "LEER TODO: leé todo el texto que se pueda, en orden, sin resumir.",
-    "describir": "DESCRIBIR: en 3 frases cortas como máximo, lo más cercano o importante primero "
-    "(obstáculos y lo que se puede usar), sin detalles decorativos.",
+    "describir": "DESCRIBIR: 3 frases como máximo y de no más de 15 palabras cada una, lo más "
+    "cercano o importante primero (obstáculos y lo que se puede usar), sin detalles decorativos.",
     "pregunta": "PREGUNTA: respondé la pregunta con lo que ves.",
-    "distancia": "DISTANCIA: respondé en UNA sola frase qué es el objeto (color, sobre qué está o "
-    "al lado de qué) y, tal cual, la distancia, el costado y la altura medidos de la lista. Con "
-    "varios, uno por uno de izquierda a derecha, breve. Sin números que no estén en la lista.",
+    "distancia": "DISTANCIA: con un objeto, UNA sola frase: qué es (color, sobre qué está o al "
+    "lado de qué) y, tal cual, la distancia, el costado y la altura medidos de la lista. Con "
+    "varios: primero cuántos son («Hay dos tazas.») y después una frase corta por cada uno, de "
+    "izquierda a derecha, con lo que los distingue y su distancia; el costado y la altura solo si "
+    "ayudan a encontrarlo. Sin números que no estén en la lista.",
 }
 
 

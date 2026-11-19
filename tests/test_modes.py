@@ -58,7 +58,7 @@ from visionx.voice.commands import CommandParser
 
 G = synthetic_geometry()  # 640x360, fx = 608
 CATALOG = ClassCatalog(COCO_CLASSES)
-S = ModeSettings()
+S = ModeSettings(guide_style="palabras")  # frases de guía; el sonar se prueba aparte
 SEC = 1_000_000_000
 
 
@@ -1813,3 +1813,31 @@ def test_arrival_cuts_the_guidance_that_is_still_playing():
     near = joint(0.3, 3, [("cup", 0, None, 0.55, SPEAK)], measured=True)
     says, done = h.tick(c, View(joint(0.4, 4, [("cup", 0, None)]), near), int(0.4 * SEC))
     assert done and says[0].text_or_sound.startswith("Llegaste") and says[0].replace
+
+
+def test_sonar_cues_pan_to_the_side_and_speed_up_when_centered():
+    from visionx.modes.sonar import Sonar, SonarSettings, beep, cue_for
+
+    s = SonarSettings()
+    left, right, ahead = cue_for(-40, s), cue_for(40, s), cue_for(2, s)
+    assert left[0] < 0 < right[0] and ahead[1] > left[1]  # lado y tono
+    assert ahead[2] < left[2]  # al frente, más seguido
+    stereo = beep(-1.0, 880, s, 24_000)
+    assert stereo.shape[1] == 2 and abs(stereo[:, 1]).max() < 1e-6  # todo a la izquierda
+    sonar = Sonar(s)
+    cues = [sonar.step(0.05 * i, (2.0, 0.1)) for i in range(40)]
+    assert sum(c is not None for c in cues) >= 12  # ~cada 0,12 s al frente
+    assert sonar.step(3.0, (2.0, 2.0)) is None  # no se lo ve hace 2 s: silencio
+
+
+def test_sonar_style_speaks_only_key_moments():
+    sonar = ModeSettings()  # por defecto: sonar
+    assert sonar.guide_style == "sonar"
+    h, c = search(sonar), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    # gira de la izquierda al frente: con palabras habría varias frases de dirección
+    frames = [joint(0.1 * i, i, [("cup", -40 + i, None)]) for i in range(1, 60)]
+    out, _ = run(h, c, frames)
+    said = [t for _, t in out]
+    assert said == ["sonido:bip", "Taza a la izquierda."]  # solo encontrarla
+    assert h.sonar_target(int(5.9 * SEC))[0] > -1  # el sonar sabe dónde está
