@@ -60,6 +60,11 @@ class ModeSettings:
     # Ritmo de la voz durante la guía.
     min_interval_s: float = 1.2  # entre dos frases de guía
     repeat_s: float = 4.0  # repetir la dirección aunque no cambie
+    # Si la dirección cambia mientras suena la frase anterior, se corta y se dice la nueva
+    # (después de al menos esto desde la anterior, para no alternar en un límite).
+    preempt_min_s: float = 0.4
+    # Después de la primera frase, la guía no repite el nombre: «Un poco a la izquierda.»
+    short_guide: bool = True
     # Metros nuevos durante la guía: se dicen solos («A 2 metros.») si cambiaron al menos esto
     # (lo mayor de los dos). Evita repetir la frase entera por un redondeo o por el borde del
     # rango (2,95 «a 3 metros» contra 3,05 «más de 3 metros»).

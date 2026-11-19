@@ -285,7 +285,8 @@ def test_guidance_speaks_on_change_not_every_frame():
     out, _ = run(h, c, frames)
     said = [t for _, t in out]
     assert said[:2] == ["sonido:bip", "Taza a la izquierda."]
-    assert "Taza un poco a la izquierda." in said and "Taza al frente." in said
+    # después de la primera, frases cortas sin el nombre (short_guide)
+    assert "Un poco a la izquierda." in said and "Al frente." in said
     times = [t for t, x in out if not x.startswith("sonido")]
     assert all(b - a >= S.min_interval_s - 1e-9 for a, b in zip(times, times[1:], strict=False))
     assert len(out) < 8  # 59 frames, pocas frases
@@ -295,7 +296,7 @@ def test_repeats_direction_after_interval_if_nothing_changes():
     h, c = search(), cmd(Mode.SEARCH, "cup")
     h.start(c, View(), 0)
     out, _ = run(h, c, [joint(0.1 * i, i, [("cup", -30, None)]) for i in range(1, 60)])
-    phrases = [t for t, x in out if x == "Taza a la izquierda."]
+    phrases = [t for t, x in out if x in ("Taza a la izquierda.", "A la izquierda.")]
     assert len(phrases) == 2 and phrases[1] - phrases[0] == pytest.approx(S.repeat_s, abs=0.11)
 
 
@@ -485,10 +486,10 @@ def test_meters_during_guidance_only_when_fresh_and_valid_and_arrival_ends():
     stale = View(joint(9.9, 99, [("cup", 0, None)]), m2)  # Z de hace 4,1 s: no se dice
     assert not any("metro" in t for t in texts(h.tick(c, stale, int(9.9 * SEC))[0]))
     m2b = joint(10.0, 100, [("cup", 1, None, 1.4, SPEAK)], measured=True)
-    # la frase anterior ("Taza al frente.", 9,9 s) tarda ~1,3 s: la nueva espera a que termine
-    says, _ = h.tick(c, View(joint(11.2, 112, [("cup", 0, None)]), m2b), int(11.2 * SEC))
+    # la frase anterior ("Al frente.", 9,9 s) tarda ~1,15 s: la nueva espera a que termine
+    says, _ = h.tick(c, View(joint(11.0, 110, [("cup", 0, None)]), m2b), int(11.0 * SEC))
     assert texts(says) == []
-    says, _ = h.tick(c, View(joint(11.5, 115, [("cup", 0, None)]), m2b), int(11.5 * SEC))
+    says, _ = h.tick(c, View(joint(11.2, 112, [("cup", 0, None)]), m2b), int(11.2 * SEC))
     # misma dirección que la frase anterior: solo los metros nuevos, no la frase entera
     assert texts(says) == ["A 1,4 metros."]
     m3 = joint(11.6, 116, [("cup", 0, None, 0.55, SPEAK)], measured=True)
@@ -1673,7 +1674,7 @@ def test_guidance_does_not_repeat_small_distance_changes():
     assert at(4.8) == []  # sin medida nueva: nada
     assert at(5.0, 2.2) == ["A 2,2 metros."]  # cambió 0,85 m
     assert at(6.4, 2.1) == []  # 0,1 m: redondeo, no se repite
-    assert at(7.8, 2.1, h_deg=-30) == ["Taza a la izquierda."]  # otra dirección: frase entera
+    assert at(7.8, 2.1, h_deg=-30) == ["A la izquierda."]  # otra dirección: frase entera
 
 
 def test_far_meters_are_approximate_up_to_the_range_end():
@@ -1688,3 +1689,25 @@ def test_far_meters_are_approximate_up_to_the_range_end():
     assert meters(3.2, far) == "unos 3 metros"
     assert measure_phrase(Measure(4.0, None), far) == "a unos 4 metros"
     assert measure_phrase(Measure(6.2, "muy-lejos"), far) == "lejos, a más de 5 metros"
+
+
+def test_direction_change_while_speaking_cuts_and_replaces_the_old_phrase():
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("cup", -30, 7)]), joint(0.2, 2, [("cup", -30, 7)])])
+    # la cámara gira rápido: 0,6 s después la taza ya está a la derecha
+    says, _ = h.tick(c, View(joint(0.8, 8, [("cup", 30, 7)])), int(0.8 * SEC))
+    assert texts(says) == ["A la derecha."] and says[0].replace
+
+
+def test_no_replacement_before_preempt_min_or_without_a_change():
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("cup", -30, 7)]), joint(0.2, 2, [("cup", -30, 7)])])
+    # cambió, pero hace menos de preempt_min_s que empezó la frase: no se corta todavía
+    assert texts(h.tick(c, View(joint(0.3, 3, [("cup", 30, 7)])), int(0.3 * SEC))[0]) == []
+    h2, c2 = search(), cmd(Mode.SEARCH, "cup", request_id=2)
+    h2.start(c2, View(), 0)
+    run(h2, c2, [joint(0.1, 1, [("cup", -30, 7)]), joint(0.2, 2, [("cup", -30, 7)])])
+    # misma dirección mientras suena: nada
+    assert texts(h2.tick(c2, View(joint(0.9, 9, [("cup", -31, 7)])), int(0.9 * SEC))[0]) == []

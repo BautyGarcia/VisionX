@@ -206,6 +206,8 @@ modes:
   lost_s: 2.5               # sin ver el objetivo durante esto: "Perdí ...", s (clips buscar: menos avisos falsos)
   min_interval_s: 1.2       # mínimo entre dos frases de guía, s
   repeat_s: 4.0             # repetir la dirección aunque no cambie, s
+  preempt_min_s: 0.4        # dirección nueva mientras suena la vieja: se corta y se dice la nueva
+  short_guide: true         # después de la primera frase, sin el nombre: «Un poco a la izquierda.»
   distance_change_m: 0.3    # guía: metros nuevos se dicen solos si cambian al menos esto...
   distance_change_frac: 0.15 # ...o esta fracción (lo mayor); sin cambio no se repite la frase
   speech_base_s: 0.3        # duración estimada de una frase: base...

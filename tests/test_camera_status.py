@@ -128,3 +128,18 @@ def test_controller_speaks_watchers_with_their_own_request():
     assert controller.active is None and controller.last_spoken == DEFAULT_PHRASES["alineando"]
     controller.tick()
     assert len(sink.events) == 1  # una sola vez
+
+
+def test_controller_replace_cancels_the_same_request_before_speaking():
+    from visionx.app.controller import Say
+
+    sink = Sink()
+    sink.cancelled = []
+    sink.cancel = lambda rid: sink.cancelled.append(rid)
+    controller = Controller(CommandParser(ClassCatalog(COCO_CLASSES)), sink, clock=ManualClock())
+    controller._say(Say("A la derecha.", replace=True), 7, 0)
+    controller._say(Say("A 2 metros."), 7, 0)
+    assert sink.cancelled == [7] and [e.text_or_sound for e in sink.events] == [
+        "A la derecha.",
+        "A 2 metros.",
+    ]

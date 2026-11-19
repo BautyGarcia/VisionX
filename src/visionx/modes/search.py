@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from visionx.app.controller import Say
@@ -332,7 +333,16 @@ class SearchHandler:
         # Ni antes del mínimo ni mientras la frase anterior todavía suena (no encolar guía vieja).
         speaking = speech_s(self._last_phrase or "", self.s) + 0.2
         if since is not None and since < max(self.s.min_interval_s, speaking):
-            return []
+            # Salvo que la dirección cambió: lo que suena ya es falso. Se corta y se dice la
+            # nueva (las zonas tienen histéresis; preempt_min_s evita alternar en un límite).
+            changed = self._said_where is not None and self._fact_where != self._said_where
+            if not changed or since < self.s.preempt_min_s:
+                return []
+            say = self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received)
+            if not say.text_or_sound:
+                return []
+            self._event("guia-reemplazada", {"antes": self._said_where, "ahora": self._fact_where})
+            return [self._said(replace(say, replace=True))]
         m = self._fact_measure
         if since is None or since >= self.s.repeat_s or self._fact_where != self._said_where:
             say = self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received)
@@ -387,9 +397,15 @@ class SearchHandler:
                         min(valid_until, measured_until), received)  # fmt: skip
             if m.ok or m.reason in ("muy-cerca", "muy-lejos"):
                 self._fact_measure = m
-                return (f"{name.capitalize()} {where}, {measure_phrase(m, self.s)}.",
+                return (f"{self._lead(name, where)}, {measure_phrase(m, self.s)}.",
                         min(valid_until, measured_until), received)  # fmt: skip
-        return f"{name.capitalize()} {where}.", valid_until, self.target.last_seen_ns
+        return self._lead(name, where) + ".", valid_until, self.target.last_seen_ns
+
+    def _lead(self, name: str, where: str) -> str:
+        """«Taza a la izquierda» la primera vez; después solo «A la izquierda» (short_guide)."""
+        if self.s.short_guide and self._said_where is not None:
+            return where[0].upper() + where[1:]
+        return f"{name.capitalize()} {where}"
 
     def _phrase(
         self,

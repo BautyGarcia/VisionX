@@ -47,6 +47,8 @@ class Say:
     valid_until_ns: int | None = None
     fact_received_ns: int | None = None
     frame: FrameKey | None = None
+    # Reemplaza lo que esté sonando o pendiente del mismo pedido (guía que quedó vieja).
+    replace: bool = False
 
 
 class ModeHandler(Protocol):
@@ -315,6 +317,9 @@ class Controller:
             return
         if self.active is not None and self.active.request_id == request_id:
             deadline = self.active.deadline_ns
+        if say.replace:
+            self.output.cancel(request_id)
+            self._on_event("reemplazo", {"request_id": request_id, "texto": say.text_or_sound})
         self.output.submit(
             AudioEvent(
                 request_id,
