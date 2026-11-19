@@ -319,8 +319,7 @@ aceptada, B4 queda solo estéreo (PARTIAL) y B3 no responde. Umbrales provisorio
 
 ## CREStereo adaptable
 
-**Estado al 18/11.** Implementado y medido en la rama `a/T12-compuerta-crestereo` (sin
-integrar): CREStereo congelado con el contrato `DepthEstimator`, el estimador clásico de
+**Estado al 18/11.** Implementado y medido (PR #32 y rama `a/T12-continuo-y-descalibracion`): CREStereo congelado con el contrato `DepthEstimator`, el estimador clásico de
 alineación, el generador de perturbaciones de etapa 1 y las mediciones de la compuerta
 ([Compuerta: lo medido](#compuerta-lo-medido-el-1811)). **No existen todavía** la red de
 alineación, la U-Net de incertidumbre, el flujo al conectar una cámara ni la integración en la
@@ -671,6 +670,8 @@ uv run python scripts/profundidad/descargar_crestereo.py          # una vez: có
 uv run --extra ml python -m visionx.depth.crestereo_adapt latencia recordings/CLIP
 uv run --extra ml python -m visionx.depth.crestereo_adapt cinta RUTA/cinta-s7
 uv run --extra ml python -m visionx.depth.crestereo_adapt robustez recordings/CLIP
+uv run --extra ml python -m visionx.depth.crestereo_adapt coherencia recordings/CLIP
+uv run python -m visionx.depth.crestereo_adapt descalibracion CALIBRACION.yaml CARPETA
 ```
 
 **Latencia** (clip `dev-1114-distancias`, 100 pares en ciclo). La red corre en MPS sin recurrir
@@ -735,8 +736,66 @@ cuánto cambia la profundidad entre 0,5 y 3 m (mediana del cambio relativo).
   margen entre ese piso y el techo es el que tiene que ganar la red de alineación, o el mismo
   clásico promediado en el tiempo, que no se probó.
 
+**Robustez con escenas variadas y puntos acumulados** (clip `dev-1114-escenas`, 8 pares
+repartidos en 218 s con la cámara en mano). Se agrega el clásico **acumulado**: como el error es
+de la cámara y no de la escena, se juntan los puntos de los 8 pares y se ajusta una sola vez.
+
+| Error | Sin corregir | Clásico, un par | Clásico acumulado | Corrección exacta |
+|---|---|---|---|---|
+| roll 0,05° | 1,5 % | 4,6 % | 2,8 % | 0,29 % |
+| roll 0,25° | 7,2 % | 4,2 % | 2,5 % | 0,35 % |
+| roll 1,0° | 39,2 % | 5,9 % | 3,3 % | 0,42 % |
+| pitch 0,25° | 4,5 % | 4,2 % | 3,0 % | 0,35 % |
+| yaw 0,1° | 6,7 % | 4,4 % | 2,2 % | 0,32 % |
+| focal 1 % | 14,3 % | 5,5 % | 3,9 % | 0,29 % |
+
+- Acumular baja el error del clásico a la mitad, pero queda en 2–4 %, unas diez veces el techo.
+- Ese piso casi no depende de cuánto error había: es ruido y sesgo del propio estimador. Con
+  errores de hasta ~0,1° conviene no corregir. Hace falta una regla que aplique la corrección
+  solo cuando supera con claridad su incertidumbre; todavía no existe.
+- El clásico no está ajustado: busca puntos a media resolución, con parámetros por defecto.
+
+**Descalibración real** (`descalibracion`, sin red). Pares del 09/11 con la calibración del
+04/11, que ya no describía a la cámara; tablero de 28 mm. El damero da dos controles
+independientes de los puntos SIFT: diferencia de filas y escala del tablero triangulado.
+
+| Caso | Sin corregir | Clásico sin yaw | Clásico con yaw |
+|---|---|---|---|
+| Con el precinto (3 pares): filas | 1,7 a 3,0 px | 0,2 a 0,8 px | 0,3 a 0,9 px |
+| Con el precinto: escala | −2,2 a −5,4 % | −2,0 a −5,2 % | −3,2 a +1,0 % |
+| Precinto suelto (5 pares): filas | 0,15 a 0,31 px | 0,09 a 0,11 px | 0,09 a 0,17 px |
+| Precinto suelto: escala | −3,0 a −4,4 % | −2,4 a −3,6 % | −0,5 a −1,0 % |
+| Control, sesión sana s3 (38 pares): escala, mediana | −0,03 % | −0,09 % | −0,96 % |
+
+- **Arreglar las filas no arregla los metros.** Con el precinto, el clásico sin yaw deja las
+  filas en menos de 1 px y la escala igual de mal.
+- **Al soltar el precinto las filas volvieron, pero la escala no** (−3 a −4 %). El 09/11 se
+  había mirado solo el desvío vertical y se dio la cámara por recuperada.
+- **El yaw se puede estimar en esta lente**, lo bastante para pasar de −3,6 % a −0,7 % de
+  escala (yaw estimado +0,11°). Pero en la sesión sana introduce −1 % que no estaba: tiene un
+  sesgo del orden de 0,04° que su incertidumbre calculada (±0,003°) no refleja.
+- Son 3 y 5 pares; el control usa las mismas fotos con las que se hizo esa calibración.
+
+**Modo continuo contra el preciso** (`coherencia`, `dev-1114-escenas`, 6 tramos de 12 cuadros
+seguidos). Diferencia relativa de profundidad por píxel contra el modo preciso, que es el que se
+midió con cinta. Mediana, y entre paréntesis el percentil 90.
+
+| Sistema | 0,5–1 m | 1–2 m | 2–3 m | 3–6 m |
+|---|---|---|---|---|
+| Continuo (640×360, arranque en caliente) | 6,2 % (19,6) | 6,3 % (16,2) | 2,8 % (13,8) | 3,7 % (11,4) |
+| 640×360, dos pasadas, siempre en frío | 6,3 % (20,3) | 3,5 % (13,9) | 2,6 % (10,1) | 3,6 % (9,6) |
+| 960×540, dos pasadas, siempre en frío | 2,8 % (11,7) | 2,2 % (8,7) | 1,7 % (6,8) | 2,2 % (7,3) |
+
+- El continuo se aparta 3 a 6 % del preciso en mediana, y un tercio de los píxeles más de 5 %.
+  Alcanza para guiar (más cerca, más lejos, dirección); **no para anunciar metros**: esos salen
+  del modo preciso, a pedido.
+- Con la cámara en movimiento, el arranque en caliente empeora el tramo de 1 a 2 m (6,3 % contra
+  3,5 % en frío): cuatro iteraciones no alcanzan a mover del todo la disparidad heredada.
+- Es por píxel y sobre toda la imagen. Por objeto, con la mediana dentro de la máscara, debería
+  ser menor; no se midió.
+
 **Decisión de la compuerta:** CREStereo queda como estéreo de base. El modo continuo no necesita
-el respaldo de B0 por latencia; su precisión todavía hay que medirla.
+el respaldo de B0 por latencia y sirve para guiar; los metros se anuncian con el modo preciso.
 
 ### Orden de trabajo, orden de caída y ablaciones
 

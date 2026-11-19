@@ -272,3 +272,14 @@ def test_barridos_de_a_un_parametro() -> None:
     rows = [{"a": 1.0, "b": float("nan")}, {"a": 3.0, "b": float("nan")}]
     out = robustness.summarize(rows)
     assert out["a"] == 2.0 and math.isnan(out["b"])
+
+
+def test_la_homografia_gira_alrededor_del_centro_del_ojo_derecho() -> None:
+    """Con los centros corridos (doffs), el punto que no se mueve en filas es cx + doffs."""
+    import dataclasses
+
+    shifted = dataclasses.replace(GEOM, doffs=30.0)
+    g = homography(Correction(roll_deg=0.5), shifted)
+    center = np.array([[shifted.cx + 30.0, shifted.cy]])
+    assert np.allclose(apply_homography(g, center), center, atol=1e-9)
+    assert not np.allclose(apply_homography(g, [[shifted.cx, shifted.cy]]), [[GEOM.cx, GEOM.cy]])
