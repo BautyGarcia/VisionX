@@ -333,6 +333,8 @@ class SearchHandler:
                 return self._acquire(match, name, now_ns, continued=True)
             # Con selección previa, ni un único candidato dudoso autoriza cambiar de objeto.
             self.state, self._choices = CHOOSING, cands
+            if len(cands) > 1 and self._options_job is None and not self._options:
+                self._ask_options(cands, frame, now_ns)  # «¿cuál?» también describiendo
             return []
         if self.state == CHOOSING:
             self._choices = cands  # la elección se aplica a lo último que se vio
