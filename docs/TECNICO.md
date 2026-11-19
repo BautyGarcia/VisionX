@@ -895,18 +895,24 @@ Cada par tiene dos variantes: limpia y con el ojo derecho desalineado por un err
 **Ordenar: AUSE.** Comparadores sin entrenar: el error fotométrico y el chequeo
 izquierda-derecha, que necesita una segunda pasada completa de CREStereo.
 
-| Datos | b, primera versión (6 canales) | b, segunda versión (8 canales) | Izquierda-derecha | Fotométrico |
+| Datos | b, primera versión (6 canales) | b, segunda versión (8 canales), semillas 0 y 1 | Izquierda-derecha | Fotométrico |
 |---|---|---|---|---|
-| InStereo2K val, limpio (102) | 0,330 | **0,276** | 0,276 | 1,023 |
-| InStereo2K val, desalineado (102) | 0,388 | 0,361 | **0,341** | 0,647 |
-| Middlebury 2014 extra, limpio (13) | — | **0,139** | 0,175 | 0,789 |
-| Middlebury 2014 extra, desalineado (13) | — | **0,307** | 0,320 | 0,696 |
+| InStereo2K val, limpio (102) | 0,330 | 0,276 y 0,291 | **0,276** | 1,023 |
+| InStereo2K val, desalineado (102) | 0,388 | 0,361 y 0,369 | **0,341** | 0,647 |
+| Middlebury 2014 extra, limpio (13) | — | **0,139** (semilla 0) | 0,175 | 0,789 |
+| Middlebury 2014 extra, desalineado (13) | — | **0,307** (semilla 0) | 0,320 | 0,696 |
 
 - La primera versión ordenaba **peor** que el chequeo izquierda-derecha. Lo que la mejoró fueron
   los dos canales que salen de CREStereo. El desacuerdo entre pasadas, solo y sin red, ya da
   0,35 en InStereo2K.
-- La segunda versión **empata** con izquierda-derecha en InStereo2K limpio, pierde por poco en
-  el desalineado y gana en Middlebury. No es una victoria clara; es el mismo orden a menos costo.
+- La segunda versión queda **cerca de izquierda-derecha sin superarlo** en InStereo2K: entre
+  igual y 5 % peor en pares limpios según la semilla, y 6 a 8 % peor en los desalineados. En
+  Middlebury gana, con una sola semilla y 13 pares. No es una victoria: es un orden parecido a
+  mucho menos costo. La hipótesis de ordenar mejor que izquierda-derecha **no se cumple** hoy.
+- **Ablación con corrección de disparidad** (misma red, dejando que también corrija d): el
+  error no cambia (0,625 → 0,624 px en limpio; 3,657 → 3,662 px en desalineado) y el AUSE queda
+  igual (0,300 y 0,365). Una red chica no mejora la disparidad de CREStereo; se confirma que el
+  aporte está en b.
 - **Costo en la Mac** (M2 Max, MPS): la U-Net suma 94 ms al modo preciso (de 619 a 713 ms de
   mediana) y 25 ms al continuo (de 119 a 144 ms). El chequeo izquierda-derecha sumaría una
   pasada entera, unos 600 ms en preciso.
@@ -935,7 +941,8 @@ entre pasadas se dispara. No hay cómo medirlo en escenas naturales de la ELP si
 **hace falta el banco con stickers** para calibrar b en la cámara real.
 
 **Límites.**
-- Una sola semilla. La época se eligió con la misma validación que se informa.
+- Dos semillas en InStereo2K y una en Middlebury. La época se eligió con la misma validación
+  que se informa.
 - No hay un test limpio: CREStereo probablemente vio InStereo2K y Middlebury, así que sus
   errores ahí son más chicos que en datos nuevos. El número de Middlebury son 13 pares.
 - La focal de InStereo2K se supuso igual al ancho de la imagen para armar las desalineaciones.

@@ -74,6 +74,16 @@ noche) / Claude Code. **Rama:** `a/T12-distancia-conocida-y-banco`, apilada sobr
 **Límites.** La emulación de distancia conocida usa la referencia de un cuadro entero, no una
 medición de cinta sobre un objeto: es optimista. Rangos de las cámaras hermanas supuestos.
 
+**Agregado al cerrar la noche (entrenamientos que habían quedado corriendo).**
+- **Segunda semilla de la U-Net de incertidumbre** (`v2-s1`): AUSE 0,291 limpio y 0,369
+  desalineado en InStereo2K val (semilla 0: 0,276 y 0,361; izquierda-derecha: 0,276 y 0,341).
+  **Corrige la entrada de abajo:** el «empate» con izquierda-derecha era la mejor de dos
+  semillas. Queda cerca, sin superarlo. Cobertura del intervalo de 90 %: 0,96 y 0,85.
+- **Ablación con corrección de disparidad** (`v2-delta-s0`): el error de CREStereo no cambia
+  (0,625 → 0,624 px limpio; 3,657 → 3,662 px desalineado) y el AUSE tampoco (0,300 y 0,365).
+  Era lo esperado: el aporte de esta red es b, no d.
+- Cada corrida, ~77 min en la Mac.
+
 **Bloqueo físico.** Todo lo que sigue necesita a Bauty con la cámara: grabar `s1` del banco
 (calibrar b en la ELP y medir precisión real por objeto), pares con la cámara apretada y
 distancia medida, y la segunda unidad ELP.
