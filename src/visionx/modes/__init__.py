@@ -51,7 +51,9 @@ def build_handlers(
             on_event=on_event,
             assistant=assistant,
         ),
-        Mode.SEARCH: SearchHandler(geometry, spoken, settings, memory, on_event),
+        Mode.SEARCH: SearchHandler(
+            geometry, spoken, settings, memory, on_event, assistant=assistant
+        ),
         Mode.DISTANCE: DistanceHandler(
             geometry, spoken, settings, memory, on_event, assistant=assistant
         ),

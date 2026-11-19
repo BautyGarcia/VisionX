@@ -177,6 +177,19 @@ class Controller:
                     self._say(Say(phrase), calib_id, now)
                 self.history.append((None, interp))
                 return None
+            active_handler = self.handlers.get(self.active.mode) if self.active else None
+            awaiting = getattr(active_handler, "awaiting_choice", None)
+            if (
+                awaiting is not None
+                and awaiting()
+                and interp.rule in ("pregunta", "sin-regla")
+                and len(interp.utterance.split()) <= 8
+            ):
+                # «la verde», «la de la mesa»: elige entre las opciones que se describieron.
+                interp = Interpretation(
+                    interp.utterance, Mode.CHOOSE, interp.utterance.strip(), "elegir-por-como-es"
+                )
+                order.update(modo=Mode.CHOOSE, objetivo=interp.target, regla=interp.rule)
             if not interp.ok:
                 self._on_event("orden", order)
                 # Aclarar no interrumpe lo que estaba en curso (puede ser un error del STT).

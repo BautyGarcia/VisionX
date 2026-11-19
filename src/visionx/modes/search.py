@@ -25,6 +25,7 @@ Todo lo que se dice sale con prioridad SHORT: el bip y la dirección deben sonar
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from collections.abc import Callable
 from dataclasses import replace
@@ -63,8 +64,12 @@ class SearchHandler:
         settings: ModeSettings | None = None,
         memory: TargetMemory | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        assistant: Any = None,
     ) -> None:
         self.geometry = geometry
+        # Con asistente, al ver varios iguales: «Veo una botella verde a la izquierda y una
+        # transparente a la derecha. ¿Cuál querés?» y se puede elegir «la verde».
+        self.assistant = assistant
         self.spoken = spoken
         self.s = settings or ModeSettings()
         self.memory = memory or TargetMemory()
@@ -97,6 +102,14 @@ class SearchHandler:
         # Lo que trae la frase que se está por decir (lo arma `_guide_fact`).
         self._fact_where: str | None = None
         self._fact_measure: Measure | None = None
+        # Opciones descriptas por el asistente: (ángulo al preguntar, descripción) por objeto.
+        if getattr(self, "_options_job", None) is not None:
+            self._options_job.cancel()
+        self._options_job: Any = None
+        self._options_start_ns = 0
+        self._options_angles: list[float] = []
+        self._options: list[tuple[float, str]] = []
+        self._options_question: str | None = None
 
     # -- interfaz ModeHandler --------------------------------------------------------------
 
@@ -145,16 +158,21 @@ class SearchHandler:
         if fresh and seen.frame.key != self._last_seen_key:  # type: ignore[union-attr]
             self._last_seen_key = seen.frame.key  # type: ignore[union-attr]
             cands = candidates(seen, label, self.geometry)  # type: ignore[arg-type]
-            says += self._on_frame(cands, name, now_ns)
+            says += self._on_frame(cands, name, now_ns, seen.frame)  # type: ignore[union-attr]
+        says += self._options_ready(name, now_ns)
         if not fresh:
             self._choices = []
             self._single_since = None
-        if self.state == CHOOSING and self._choices and self._can_ask(now_ns):
-            says.append(
-                self._ask(
-                    f"¿Cuál {name}? Decí izquierda, derecha, centro o la más cercana.", now_ns
-                )
+        if (
+            self.state == CHOOSING
+            and self._choices
+            and self._options_job is None
+            and self._can_ask(now_ns)
+        ):
+            again = self._options_question or (
+                f"¿Cuál {name}? Decí izquierda, derecha, centro o la más cercana."
             )
+            says.append(self._ask(again, now_ns))
         if self.state == GUIDING and self.target is not None:
             # "Perdí" necesita evidencia de ausencia: frames frescos que cubran lost_s de video
             # sin el objetivo, medido en tiempo de FRAME. Si el sistema se atrasa (no llegan
@@ -194,8 +212,12 @@ class SearchHandler:
             self._event("fin", {"motivo": "llegada"})
         return [s for s in says if s.text_or_sound], done
 
+    def awaiting_choice(self) -> bool:
+        """¿Está preguntando «¿cuál?» con opciones descriptas (se puede elegir «la verde»)?"""
+        return self.state == CHOOSING and bool(self._options)
+
     def choose(self, command: Command, choice: str, view: View, now_ns: int) -> list[Say]:
-        """Respuesta a "la de la izquierda" / "la más cercana" mientras se eligen iguales."""
+        """Respuesta a "la de la izquierda" / "la más cercana" / "la verde" (con opciones)."""
         name = self.spoken(command.target or "")
         if self.state == GUIDING:
             return [Say(f"Ya te estoy guiando hacia {name}.")]
@@ -207,6 +229,14 @@ class SearchHandler:
         if not self._choices:
             return [Say(f"No veo {name} ahora. Sigo buscando.")]
         chosen: Candidate | None
+        if choice not in ("izquierda", "derecha", "centro", "cerca"):
+            option = self._match_option(choice)
+            if option is None:
+                return [Say("No entendí cuál. Decí cómo es o de qué lado está.")]
+            angle, text = option
+            chosen = min(self._choices, key=lambda c: abs(c.angle_h_deg - angle))
+            self._event("eleccion", {"opcion": text, "angulo_h": round(chosen.angle_h_deg, 1)})
+            return self._acquire(chosen, name, now_ns)
         if choice == "izquierda":
             chosen = self._choices[0]
         elif choice == "derecha":
@@ -224,7 +254,65 @@ class SearchHandler:
 
     # -- interno ---------------------------------------------------------------------------
 
-    def _on_frame(self, cands: list[Candidate], name: str, now_ns: int) -> list[Say]:
+    def _match_option(self, utterance: str) -> tuple[float, str] | None:
+        """La opción que comparte más palabras con lo dicho («la verde» -> «verde»)."""
+        from visionx.voice.commands import clean
+
+        said = set(clean(utterance).split()) - {"la", "el", "de", "que", "esta", "los", "las"}
+        scored = [
+            (len(said & set(clean(text).split())), angle, text) for angle, text in self._options
+        ]
+        best = max(scored, default=(0, 0.0, ""))
+        if best[0] == 0 or sum(1 for s in scored if s[0] == best[0]) > 1:
+            return None
+        return best[1], best[2]
+
+    def _ask_options(self, cands: list[Candidate], frame, now_ns: int) -> bool:
+        """Pedir al asistente cómo distinguir los iguales. False si no hay asistente."""
+        if self.assistant is None or not self.assistant.available or frame is None:
+            return False
+        g = self.geometry
+        shown = cands[: self.s.max_listed]
+        lines = []
+        for i, c in enumerate(shown, 1):
+            where = horizontal(c.angle_h_deg, self.s)
+            x = (g.cx + g.fx * math.tan(math.radians(c.angle_h_deg))) / g.width
+            lines.append(f"{i}: {self.spoken(c.label)} {where} (al {100 * x:.0f} % del ancho)")
+        self._options_job = self.assistant.submit(
+            self.request_id or 0, "opciones", frame.left, objects=lines
+        )
+        self._options_start_ns = now_ns
+        self._options_angles = [c.angle_h_deg for c in shown]
+        self._last_choice_ns = now_ns  # que no salga la pregunta fija mientras se consulta
+        self._event("opciones-pedido", {"objetos": lines})
+        return True
+
+    def _options_ready(self, name: str, now_ns: int) -> list[Say]:
+        job = self._options_job
+        if job is None or not job.done.is_set():
+            return []
+        if job.error is None and now_ns < self._options_start_ns + int((job.total_s or 0) * 1e9):
+            return []  # replay: todavía no pasó lo que tardó la API
+        from visionx.assistant.core import parse_options
+
+        self._options_job = None
+        found, question = (
+            parse_options(job.raw, len(self._options_angles)) if not job.error else ({}, None)
+        )
+        self._event("opciones", {"descripciones": found, "pregunta": question, "error": job.error})
+        if self.state != CHOOSING:
+            return []
+        if found:
+            self._options = [(self._options_angles[i], found[i]) for i in sorted(found)]
+            self._options_question = (
+                question or "¿Cuál querés? " + ", ".join(f"la {d}" for _, d in self._options) + "."
+            )
+            return [self._ask(self._options_question, now_ns)]
+        listed = len(self._options_angles)
+        return [self._ask(f"Veo {listed} {plural(name)}. ¿Cuál? "
+                          "Decí izquierda, derecha, centro o la más cercana.", now_ns)]  # fmt: skip
+
+    def _on_frame(self, cands: list[Candidate], name: str, now_ns: int, frame=None) -> list[Say]:
         if self.state == GUIDING and self.target is not None:
             match = self.target.match(cands, self.s)
             if match is not None:
@@ -269,6 +357,13 @@ class SearchHandler:
         if len(cands) > 1:
             self.state, self._choices = CHOOSING, cands
             self._event("varios", {"cantidad": len(cands)})
+            if (
+                self._options_job is None
+                and not self._options
+                and self._ask_options(cands, frame, now_ns)
+            ):
+                return [Say(BIP, valid_until_ns=received + int(self.s.max_age_s * 1e9),
+                            fact_received_ns=received)]  # fmt: skip
             listed = min(len(cands), self.s.max_listed)
             more = "o más " if len(cands) > listed else ""
             return (

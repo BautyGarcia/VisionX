@@ -1841,3 +1841,91 @@ def test_sonar_style_speaks_only_key_moments():
     said = [t for _, t in out]
     assert said == ["sonido:bip", "Taza a la izquierda."]  # solo encontrarla
     assert h.sonar_target(int(5.9 * SEC))[0] > -1  # el sonar sabe dónde está
+
+
+class OptionsAssistant:
+    """Asistente falso para «¿cuál?»: describe dos botellas."""
+
+    available = True
+
+    def __init__(self, raw="1: verde\n2: transparente\nPREGUNTA: Veo una botella verde a la "
+                 "izquierda y una transparente a la derecha. ¿Cuál querés?"):  # fmt: skip
+        from visionx.assistant import AssistantJob
+
+        self._cls, self._raw, self.calls = AssistantJob, raw, []
+
+    def submit(self, request_id, kind, image, **kw):
+        job = self._cls(request_id, kind)
+        job.raw, job.total_s = self._raw, 0.5
+        job.done.set()
+        self.calls.append((kind, kw))
+        return job
+
+
+def test_parse_options_needs_every_object():
+    from visionx.assistant.core import parse_options
+
+    found, q = parse_options("1: verde\n2: transparente\nPREGUNTA: ¿Cuál querés?", 2)
+    assert found == {0: "verde", 1: "transparente"} and q == "¿Cuál querés?"
+    assert parse_options("1: verde", 2)[0] == {}  # falta una: pregunta sin descripciones
+
+
+def test_search_asks_with_descriptions_and_understands_la_verde():
+    a = OptionsAssistant()
+    h, c = search(), cmd(Mode.SEARCH, "bottle")
+    h.assistant = a
+    h.start(c, View(), 0)
+    two = [("bottle", -20, 1), ("bottle", 20, 2)]
+    out, _ = run(h, c, [joint(0.1, 1, two), joint(0.2, 2, two)])
+    assert [t for _, t in out] == ["sonido:bip"]  # consulta en curso: sin pregunta fija
+    kind, kw = a.calls[0]
+    assert kind == "opciones" and kw["objects"][0].startswith("1: botella un poco a la izquierda")
+    out, _ = run(h, c, [joint(0.8, 8, two)])
+    assert [t for _, t in out] == [
+        "Veo una botella verde a la izquierda y una transparente a la derecha. ¿Cuál querés?"
+    ]
+    assert h.awaiting_choice()
+    says = h.choose(c, "la verde", View(joint(0.9, 9, two)), int(0.9 * SEC))
+    assert h.state == "guiando" and h.target.angle_h_deg == pytest.approx(-20, abs=0.1)
+    assert texts(says)[-1].startswith("Botella")
+    assert texts(h.choose(c, "la azul", View(joint(1, 10, two)), SEC))  # ya guía: lo dice
+
+
+def test_controller_routes_la_verde_to_the_choice_instead_of_a_question():
+    from visionx.app.controller import Controller
+    from visionx.voice.commands import CommandParser
+
+    class Sink:
+        def __init__(self):
+            self.events = []
+
+        def submit(self, e):
+            self.events.append(e)
+
+        def cancel(self, rid):
+            pass
+
+        def cancel_all(self):
+            pass
+
+    calls = []
+
+    class Chooser:
+        def start(self, command, view, now):
+            return []
+
+        def tick(self, command, view, now):
+            return [], False
+
+        def awaiting_choice(self):
+            return True
+
+        def choose(self, command, choice, view, now):
+            calls.append(choice)
+            return []
+
+    ctl = Controller(CommandParser(CATALOG, questions=True), Sink(),
+                     handlers={Mode.SEARCH: Chooser()})  # fmt: skip
+    ctl.handle_text("Buscá la botella.")
+    ctl.handle_text("La verde.")
+    assert calls == ["La verde."] and ctl.active.mode is Mode.SEARCH
