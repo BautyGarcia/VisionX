@@ -488,7 +488,7 @@ def _mp3(seconds: float = 0.3, rate: int = 24_000) -> bytes:
     """MP3 real de un tono, codificado con PyAV: lo que devolvería Edge."""
     import io
 
-    import av
+    av = pytest.importorskip("av")  # viene con faster-whisper (extra voz); CI core no lo tiene
 
     buf = io.BytesIO()
     with av.open(buf, "w", format="mp3") as out:
