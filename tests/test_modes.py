@@ -1770,3 +1770,37 @@ def test_free_question_goes_to_the_assistant_with_the_question():
     off = describe(assistant=FakeAssistant(available=False))
     said = texts(off.start(cmd(Mode.DESCRIBE, "¿Qué es?", t_s=1), View(seen, None), int(1.1 * SEC)))
     assert said == ["Ahora no puedo responder preguntas: no tengo conexión."]
+
+
+def test_lateral_and_body_height_phrases():
+    from visionx.modes.common import body_height_phrase, lateral_phrase
+
+    assert lateral_phrase(1.1, -15, S) == "unos 30 centímetros a tu izquierda"
+    assert lateral_phrase(1.1, 3, S) == "al frente"  # menos de side_min_m: no se dice
+    assert lateral_phrase(2.0, -35, S) == "1,4 metros a tu izquierda"
+    assert body_height_phrase(1.1, 0) == "a la altura de tu pecho"
+    assert body_height_phrase(1.1, -25) == "a la altura de tu cintura"
+    assert body_height_phrase(3.0, -25) == "cerca del piso"
+
+
+def test_distance_with_assistant_passes_measured_numbers_and_waits_one_sentence():
+    a = FakeAssistant(("Tenés una taza blanca sobre un taburete, a 1,1 metros, al frente.",))
+    h = DistanceHandler(G, CATALOG.spoken, S, assistant=a)
+    c = cmd(Mode.DISTANCE, "cup", t_s=1)
+    m = joint(1.1, 11, [("cup", 0, 3, 1.07, SPEAK)], measured=True)
+    assert texts(h.start(c, View(None, m), int(1.2 * SEC))) == []  # consultando
+    kind, kw = a.calls[0]
+    assert kind == "distancia"
+    assert kw["objects"] == ["taza: a 1,1 metros; al frente; a la altura de tu pecho"]
+    says, done = h.tick(c, View(None, m), int(1.8 * SEC))
+    assert texts(says) == ["Tenés una taza blanca sobre un taburete, a 1,1 metros, al frente."]
+    assert done
+
+
+def test_distance_falls_back_to_the_plain_answer_when_the_assistant_fails():
+    h = DistanceHandler(G, CATALOG.spoken, S, assistant=FakeAssistant(error="sin red"))
+    c = cmd(Mode.DISTANCE, "cup", t_s=1)
+    m = joint(1.1, 11, [("cup", 0, 3, 1.07, SPEAK)], measured=True)
+    h.start(c, View(None, m), int(1.2 * SEC))
+    says, done = h.tick(c, View(None, m), int(1.3 * SEC))
+    assert texts(says) == ["Taza al frente, a 1,1 metros."] and done

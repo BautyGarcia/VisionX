@@ -60,6 +60,9 @@ KINDS = {
     "describir": "DESCRIBIR: en 3 frases cortas como máximo, lo más cercano o importante primero "
     "(obstáculos y lo que se puede usar), sin detalles decorativos.",
     "pregunta": "PREGUNTA: respondé la pregunta con lo que ves.",
+    "distancia": "DISTANCIA: respondé en UNA sola frase qué es el objeto (color, sobre qué está o "
+    "al lado de qué) y, tal cual, la distancia, el costado y la altura medidos de la lista. Con "
+    "varios, uno por uno de izquierda a derecha, breve. Sin números que no estén en la lista.",
 }
 
 

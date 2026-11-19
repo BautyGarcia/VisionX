@@ -52,7 +52,9 @@ def build_handlers(
             assistant=assistant,
         ),
         Mode.SEARCH: SearchHandler(geometry, spoken, settings, memory, on_event),
-        Mode.DISTANCE: DistanceHandler(geometry, spoken, settings, memory, on_event),
+        Mode.DISTANCE: DistanceHandler(
+            geometry, spoken, settings, memory, on_event, assistant=assistant
+        ),
         Mode.READ: ReadHandler(
             settings=ReadingSettings.from_config(cfg),
             on_event=on_event,

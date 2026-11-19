@@ -15,6 +15,7 @@ sección `modes` de la config para poder ajustarlos sin tocar código.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, fields, replace
 from typing import Any
 
@@ -65,6 +66,8 @@ class ModeSettings:
     preempt_min_s: float = 0.6
     # Después de la primera frase, la guía no repite el nombre: «Un poco a la izquierda.»
     short_guide: bool = True
+    # Distancia con detalle (con asistente): costado en cm si está corrido al menos esto.
+    side_min_m: float = 0.15
     # Metros nuevos durante la guía: se dicen solos («A 2 metros.») si cambiaron al menos esto
     # (lo mayor de los dos). Evita repetir la frase entera por un redondeo o por el borde del
     # rango (2,95 «a 3 metros» contra 3,05 «más de 3 metros»).
@@ -292,6 +295,38 @@ def direction(angle_h_deg: float, s: ModeSettings, angle_v_deg: float | None = N
     del centro no se dice nada, para no alargar la guía ni hacerla cambiar a cada paso.
     """
     return horizontal(angle_h_deg, s) + vertical(angle_v_deg, s)
+
+
+def lateral_phrase(z_m: float, angle_h_deg: float, s: ModeSettings) -> str:
+    """Corrimiento a un costado medido: X = Z·tan(ángulo). «al frente» si es menor que
+    side_min_m; si no, «unos 30 centímetros a tu izquierda» o «1,2 metros a tu derecha»."""
+    x = z_m * math.tan(math.radians(angle_h_deg))
+    if abs(x) < s.side_min_m:
+        return "al frente"
+    side = "derecha" if x > 0 else "izquierda"
+    if abs(x) < 1.0:
+        return f"unos {int(round(abs(x) * 20) * 5)} centímetros a tu {side}"
+    return f"{meters(abs(x), s, approx=False)} a tu {side}"
+
+
+# Altura respecto de la cámara (al pecho, nivelada): y = Z·tan(ángulo vertical), + = arriba.
+# Bandas para una persona de ~1,70 m con la cámara a ~1,3 m del piso.
+BODY_BANDS = (
+    (0.45, "más arriba de tu cabeza"),
+    (0.2, "a la altura de tu cabeza"),
+    (-0.2, "a la altura de tu pecho"),
+    (-0.55, "a la altura de tu cintura"),
+    (-0.95, "a la altura de tus rodillas"),
+)
+
+
+def body_height_phrase(z_m: float, angle_v_deg: float) -> str:
+    """«a la altura de tu cintura»: dónde queda el objeto respecto del cuerpo."""
+    y = z_m * math.tan(math.radians(angle_v_deg))
+    for limit, phrase in BODY_BANDS:
+        if y >= limit:
+            return phrase
+    return "cerca del piso"
 
 
 def meters(z_m: float, s: ModeSettings, *, approx: bool = True) -> str:
