@@ -5,6 +5,31 @@ sistema sea **interactivo**: que la guía de buscar reaccione al girar y que las
 rápido. Escrita el 19/11 (Tomás / Claude Code); se completa con los datos que mida Bauty y la
 decisión va a [BITACORA](BITACORA.md). Cómo correr la app en sí: [PRUEBA-EN-VIVO](PRUEBA-EN-VIVO.md).
 
+## Instrucciones para el agente (leer primero)
+
+Objetivo: medir `C0`…`C4` en la Mac, registrar **todas** las métricas y proponer la config
+ganadora según el criterio. No cambiar código ni el criterio; si algo no se puede medir, anotarlo
+en `notas` y seguir.
+
+1. `git switch main && git pull`; crear la rama `a/velocidad-medicion` (o `b/…` si la corre Tomás).
+2. Comprobar que existan `configs/local.yaml` (cámara y audio de la Mac), los pesos de YOLO y
+   CREStereo, y la key en `~/.visionx/anthropic_api_key` (ver [PRUEBA-EN-VIVO](PRUEBA-EN-VIVO.md)).
+3. Una sola vez: la sección **B** (CREStereo sobre clips, 3 y 4 iteraciones).
+4. Para cada `C` en `C0 C1 C2 C3 C4`, en ese orden: sección **A** (clips) y sección **C** (vivo,
+   con la persona siguiendo el guion; pedirle que avise al terminar).
+5. Completar **una fila por config** en `datasets/velocidad/resultados.csv` con los números
+   exactos que imprimen los comandos (sin redondear de más ni estimar). Dejar vacío lo que no
+   se midió y explicarlo en `notas`.
+6. Copiar `outputs/velocidad/` a Drive `VisionX-artefactos/velocidad/<fecha>/`.
+7. Escribir la entrada en [BITACORA](BITACORA.md): equipo, commit, la tabla completa, qué config
+   cumple el criterio, cuál gana y por qué, y cualquier error. Si gana una config, proponer en el
+   mismo PR el cambio en `configs/default.yaml` (o solo en `configs/local.yaml` de la Mac si
+   depende de la Mac, como `device: mps`).
+8. Commit y PR con la planilla, la BITACORA y el cambio de config propuesto. No subir
+   `outputs/`, pesos ni la key.
+
+Terminado = las 5 filas completas (o justificadas), los crudos en Drive y la entrada en BITACORA.
+
 ## Por qué 4 fps (primera prueba en vivo, 19/11)
 
 | Pieza | Medido en vivo | Límite propio |
