@@ -26,10 +26,13 @@ vivo. Eso es esta prueba.
 git switch main && git pull
 uv sync --locked --extra ml --extra deteccion --extra voz --extra ocr --extra ia
 uv run python -m visionx.voice descargar --whisper small
+uv run python -m visionx.voice descargar --whisper-mlx small   # Mac: Whisper en la GPU (MLX)
 uv run python -m visionx.detection descargar --modelo yolo26s-seg
 uv run python -m visionx.reading descargar
 uv run python scripts/profundidad/descargar_crestereo.py   # ya hecho en la Mac de Bauty
 ```
+
+En la Mac, con `--whisper-mlx` bajado, la app usa sola Whisper en la GPU: al arrancar imprime `voz a texto: whisper-small-mlx` (si dice `whisper-small@…` está en CPU; forzar con `audio.stt.backend: mlx` en `configs/local.yaml` para ver el error).
 
 `uv sync` deja solo los extras que se nombran: si se corre sin `--extra ia`, el asistente queda
 apagado.
