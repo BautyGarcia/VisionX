@@ -1,0 +1,35 @@
+# Planilla de una escena del banco ELP (T04). Copiar a recordings/banco-sN-eMM/escena.yaml y
+# completar a mano en el momento. Protocolo: docs/TECNICO.md, "Protocolo de grabación del banco ELP".
+formato: visionx-banco-elp
+version: 1
+escena: banco-s1-e01          # mismo nombre que la carpeta de la grabación
+sesion: s1                    # s1, s2 = desarrollo; s3, s4, s5 = test (fijado el 17/11)
+fecha: "2026-11-__"
+lugar: ""                     # p. ej. "living, pared norte"
+iluminacion: ""               # día por ventana / lámparas / contraluz / mixta
+calentamiento_min: 0          # minutos transmitiendo antes de la primera escena de la sesión
+camara_nivelada: true
+referencia_cinta: vidrio      # la línea del piso está bajo el vidrio de las lentes
+midio: ""                     # quién midió
+contenido:                    # qué exige la sesión (marcar lo que cumple esta escena)
+  superficie_lisa_grande: false
+  reflejos_o_contraluz: false
+  objetos_de_la_app: []       # p. ej. [botella, silla]
+  damero: false
+foto_armado: ""               # nombre del archivo de la foto del teléfono
+puntos:
+  - id: 1                     # número escrito en el sticker
+    sobre: ""                 # qué es: "pared", "botella verde", "respaldo de la silla"
+    superficie: lisa          # lisa | textura | reflejo | objeto
+    clase_app: null           # clase de la app si el sticker está sobre un objeto, o null
+    cinta_m: 0.000            # profundidad axial leída, en metros, SIN sumar los 13 mm
+    repeticiones_m: []        # solo en el punto que se mide tres veces por sesión
+    nota: ""
+  - id: 2
+    sobre: ""
+    superficie: lisa
+    clase_app: null
+    cinta_m: 0.000
+    repeticiones_m: []
+    nota: ""
+desvios: ""                   # cualquier cosa que no salió según el protocolo
