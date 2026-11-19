@@ -66,8 +66,9 @@ KINDS = {
     "opciones": "OPCIONES: hay varios objetos iguales, numerados de izquierda a derecha con su "
     "posición. Respondé SOLO estas líneas: una por objeto con el formato «N: descripción», donde "
     "la descripción son 1 a 3 palabras que lo distinguen de los otros (color, tamaño, sobre qué "
-    "está), y al final una línea «PREGUNTA: …» con una pregunta corta en voseo que los nombre por "
-    "cómo son y de qué lado están y termine en «¿Cuál querés?». Sin metros.",
+    "está), y al final una línea «PREGUNTA: …» que empiece con «Veo», los nombre por cómo son y "
+    "de qué lado están y termine en «¿Cuál querés?» (p. ej. «Veo una taza blanca a la izquierda "
+    "y un vaso rojo a la derecha. ¿Cuál querés?»). Sin metros.",
     "distancia": "DISTANCIA: con un objeto, UNA sola frase: qué es (color, sobre qué está o al "
     "lado de qué) y, tal cual, la distancia, el costado y la altura medidos de la lista. Con "
     "varios: primero cuántos son («Hay dos tazas.») y después una frase corta por cada uno, de "
