@@ -1,7 +1,11 @@
 # VisionX — qué queremos construir y qué falta hacer
 
-Actualizado: **2 de noviembre de 2026**. Material interno para Tomás, Bauty y sus agentes.
-Entrega académica: **10 de diciembre de 2026**, confirmada por Tomás.
+Actualizado: **18 de noviembre de 2026**, por el pivote de T12 a «CREStereo adaptable»
+([nota del 18/11](VisionX_Nota_Bauty_CREStereo.pdf)). Material interno para Tomás, Bauty y
+sus agentes.
+Entrega académica: **10 de diciembre de 2026**, confirmada por Tomás. La nota del 18/11
+menciona congelar el 4/12, entrega el 7/12 y exposición el 12/12: esa diferencia está
+**pendiente de confirmar** y no cambia la fecha oficial.
 
 Este archivo contiene el plan y el estado de las tareas. [TECNICO](TECNICO.md) explica cómo
 funciona cada parte. [BITACORA](BITACORA.md) cuenta lo que pasó realmente, con evidencia,
@@ -24,18 +28,33 @@ VisionX busca ayudar a una persona con baja visión a **encontrar un objeto, ori
 El dashboard, una pantalla de diagnóstico, es para nosotros y para explicar la demo;
 el usuario no necesita mirarlo.
 
-La investigación central es **SpatialDepth-Fusion**, una CNN propia: una red que aprende
-patrones locales en imágenes. Combina la profundidad clásica de dos cámaras con la
-estimación de una red monocular preentrenada, Depth Anything V2 Small. Además estima
-incertidumbre para estudiar cuándo conviene responder y cuándo abstenerse.
+Desde el 18/11 la investigación central es **CREStereo adaptable** (decisión de Bauty después
+de hablar con el profesor; diseño en [TECNICO](TECNICO.md#crestereo-adaptable)). Se toma
+CREStereo, una red de estéreo preentrenada que queda congelada, y se la envuelve con dos redes
+propias: una **red de alineación** antes y una **U-Net de incertidumbre** después. No se busca
+mejorar la precisión de CREStereo, sino hacerla más útil: que reciba el par crudo de una cámara
+estéreo y devuelva profundidad en metros con incertidumbre, en varias cámaras. Hoy es **solo
+planificación**: no hay código, pesos ni mediciones de este sistema.
 
-La pregunta es si podemos mejorar una combinación fija de ambas fuentes con una red
-compacta y obtener distancias útiles en una cámara USB económica. No sabemos todavía
-si ganará: medir y explicar un resultado negativo también forma parte del trabajo científico.
+Criterio de éxito, escrito antes de medir. Con calibración buena: igualar a «rectificación con
+OpenCV + CREStereo»; empatar es lo correcto, es un control de no empeorar. Con calibración
+imperfecta o incompleta: degradarse menos que ese camino; esa curva de robustez es el resultado
+principal. Frente al método clásico de autorrectificación con correspondencias: empatar o ganar
+en precisión o en tiempo; si pierde, la red de alineación no se justifica y queda el clásico.
+No es «sin calibrar»: es corrección en línea alrededor de un perfil de cámara conocido, más un
+camino degradado para cámaras desconocidas. No sabemos todavía si ganará: medir y explicar un
+resultado negativo también forma parte del trabajo científico.
+
+Reemplaza como investigación central a **SpatialDepth-Fusion**, la CNN propia que combinaba el
+estéreo clásico (SGBM) con la monocular preentrenada Depth Anything V2 Small. Fusion ganó en
+InStereo2K val, pero fuera de dominio empató con la regla fija B5 (BITACORA 2026-11-17). Queda
+como resultado negativo documentado y como comparador; no se borra.
 
 **Alcance completo comprometido:** cuatro modos USB; evaluación contra cuatro modelos
-preentrenados; Fusion; incertidumbre; Lite mediante destilación; Fusion-FFS; portátil con
-Raspberry/batería y alerta de cercanía. La entrega de diciembre prioriza USB, Fusion y
+preentrenados; CREStereo adaptable; Fusion, ahora como comparador; incertidumbre; Lite mediante
+destilación; Fusion-FFS; portátil con Raspberry/batería y alerta de cercanía. Lite y Fusion-FFS
+se redefinen sobre la base nueva (maestro CREStereo; FFS como estéreo de base alternativo):
+decisión pendiente de Bauty. La entrega de diciembre prioriza USB, CREStereo adaptable y
 evaluación. Lo restante continúa después si no está aceptado; no se elimina por ser dos personas.
 SLAM y memoria persistente de objetos siguen fuera del alcance acordado: no construiremos
 un mapa acumulado ni diremos dónde quedó algo que ya no está visible.
@@ -67,25 +86,32 @@ Formato de trabajo: informe total de hasta ocho páginas y póster vertical A0/A
 ## Recorrido y decisiones
 
 Una imagen estéreo contiene dos vistas simultáneas. La captura las separa y la calibración
-las lleva a una geometría conocida. Desde ahí se ejecutan profundidad y detección:
+las lleva a una geometría conocida. Desde ahí se ejecutan profundidad y detección.
+El diagrama muestra el flujo **previsto** desde el pivote del 18/11; todavía no existe en código:
 
 ```mermaid
 flowchart LR
-    C[Cámara USB o replay] --> R[Par rectificado]
-    R --> S[SGBM: estéreo clásico]
-    R --> M[Depth Anything: monocular congelada]
-    S --> A[Alineación a escala estéreo]
-    M --> A
-    S --> B[B4: combinación fija]
-    A --> B
-    B --> F[Fusion: corrección e incertidumbre]
+    C[Cámara USB o replay] --> X[Par crudo]
+    K[Calibración: completa, perfil, ficha mínima o nada] --> G[Capa geométrica: mapas base, rayos y estiramiento]
+    X --> N[Red de alineación propia: cada tanto]
+    G --> N
+    X --> R[Un remap por cuadro: par alineado]
+    G --> R
+    N --> R
+    R --> E[CREStereo congelado: disparidad]
+    E --> U[U-Net de incertidumbre propia]
+    U --> Z[Cuenta final: metros e incertidumbre]
     R --> D[Detección y máscaras]
     D --> P[Objeto, dirección y distancia]
-    F --> P
+    Z --> P
     P --> O[Modo solicitado y audio]
     R --> L[OCR o descripción a pedido]
     L --> O
 ```
+
+El flujo anterior (SGBM y Depth Anything alineados, combinación fija B4 y Fusion) sigue en el
+código como comparador. SGBM (B0) queda además como respaldo previsto del modo continuo si
+CREStereo no entra en la compuerta de latencia (ver [T12](#tareas)).
 
 Una máscara señala los píxeles de un objeto. Sirve para medir su superficie y evitar tomar
 el fondo dentro de una caja. La política por objeto decide entre metros, dirección,
@@ -95,8 +121,11 @@ una descripción; las distancias siempre salen de las mediciones estructuradas.
 | Tema | Decisión de trabajo y motivo | Alternativa y qué la decidiría |
 |---|---|---|
 | Aplicación | Monolito modular: una aplicación con partes separadas; fácil de ejecutar y seguir | Más procesos solo si una medición demuestra necesidad; no microservicios por rutina |
-| Monocular | Depth Anything V2 Small relativa, preentrenada y congelada | Variante métrica como experimento aparte; no asumir que reemplaza calibración |
-| Fusión | U-Net residual sobre B4; conservar referencia F0 de diez canales | F1 agrega máscara monocular; F2/F3 exploran calidad del ajuste/distancia a anclas |
+| Estéreo de base | Desde el 18/11: CREStereo preentrenado (`crestereo_eth3d`) y congelado, sin tocar ninguna capa; previsto, sin medir en MPS | Otro estéreo de base, o un alumno destilado (T17 con CREStereo como maestro), si la compuerta de latencia no da; el modo continuo usaría B0 sobre el par corregido |
+| Alineación | Red propia antes de CREStereo: estima roll, pitch, yaw y razón de focal con confianza, cada tanto y en segundo plano | Método clásico con correspondencias (SIFT/ORB, RANSAC) como comparador obligatorio y respaldo; si la red no empata o gana en precisión o tiempo, queda el clásico |
+| Cámaras soportadas | Cuatro niveles: cámara propia (muy bueno); otra unidad ELP con el perfil incluido (relativamente bueno); cámara distinta con datos (aceptable, con metros); cámara distinta sin datos (modo relativo, sin metros) | La escala no sale de las imágenes: la da un dato o una distancia conocida. Fuera de alcance: ojo de pez y ojos no sincronizados. El chequeo «¿conozco esta cámara?» hay que medirlo con una cámara distinta real |
+| Monocular | Depth Anything V2 Small sale de la app con el pivote del 18/11; sigue en los comparadores B4, B5 y Fusion | Monocular métrica solo como experimento exploratorio de escala sin datos; no asumir que reemplaza calibración |
+| Fusión | Reemplazada el 18/11: la U-Net residual sobre B4 (F0/F1/F3) queda como resultado negativo y comparador. La red propia de salida pasa a ser una U-Net de incertidumbre (b de Laplace) que reutiliza su infraestructura | Chequeo izquierda-derecha como comparador obligatorio de la incertidumbre; corrección de disparidad Δd solo como ablación |
 | Ejecución | Interactivo y comparación científica separados | El interactivo prioriza actualidad; la comparación procesa los mismos pares sin descartarlos |
 | Resolución | Medir 640×360, 960×540 y 1280×720 por ojo | Elegir por precisión/cobertura/latencia, no por el preset del YAML |
 | Detección | Evaluar YOLO26n-seg y referencia YOLO11n-seg | Modelo mayor si ayuda a objetos pequeños; YOLOE para categorías nuevas con máscaras |
@@ -118,9 +147,9 @@ para empezar: voz puede avanzar con ejemplos; los comparadores con pares públic
 | Base reproducible | Leer el mismo par en Windows/Mac y generar salidas simuladas consistentes, con IDs y errores claros |
 | USB clásico | Cámara calibrada, SGBM y metros con referencia física; audio/cancelación básicos |
 | Cuatro modos base | Buscar/guiar, distancia, leer y describir por USB; pueden empezar con proveedor clásico |
-| Investigación | Datos y protocolo fijados; B4, Fusion entrenada, ablaciones y cuatro comparadores |
-| Entrega académica | Cuatro modos con Fusion integrada, evaluación trazable, informe, póster y respaldo offline |
-| VisionX completo | También Lite, Fusion-FFS, portátil y alerta con sus pruebas; no se tilda al cerrar diciembre |
+| Investigación | Datos y protocolo fijados; B4, B5 y Fusion entrenada como comparadores; CREStereo adaptable (alineación e incertidumbre) con su curva de robustez, ablaciones mínimas y cuatro comparadores (papel de T14 pendiente de decisión) |
+| Entrega académica | Cuatro modos con CREStereo adaptable integrado, o su respaldo según el orden de caída de T12; evaluación trazable, informe, póster y respaldo offline |
+| VisionX completo | También Lite y Fusion-FFS (redefinidas sobre la base nueva, decisión pendiente), portátil y alerta con sus pruebas; no se tilda al cerrar diciembre |
 
 ### Base y pulido de los cuatro modos
 
@@ -141,11 +170,21 @@ demostración simulada con una versión funcional aceptada sobre hardware.
 | 2–5 noviembre | Cerrar planificación; base/replay, captura/calibración inicial y preparación de datos/comparadores |
 | 6–12 noviembre | USB clásico, cuatro modos base y protocolo fijado |
 | 13–19 noviembre | Piloto/overfit, entrenamiento Fusion y ejecución de comparadores |
-| 20–26 noviembre | Integración, ablaciones, incertidumbre y fallos |
-| 27 noviembre–3 diciembre | Test reservado, reproducción cruzada, tablas e informe |
-| 4–9 diciembre | Correcciones verificadas, tres ensayos y respaldo |
-| 10 diciembre | Entrega académica |
+| 19–21 noviembre | Compuerta de latencia: wrapper de CREStereo en MPS y tabla de latencia (640×352, 960×544 y 1280×720; 2, 4 y 10 iteraciones; una y dos pasadas; arranque en caliente). Estimador clásico; curva de CREStereo sin adaptar perturbando la calibración en clips crudos ELP; CREStereo sobre `cinta-s7` contra B0/B5/Fusion. Acá se decide si CREStereo queda como base |
+| 22–26 noviembre | Generador de perturbaciones con yaw y cámaras virtuales; red de alineación |
+| 27–30 noviembre | U-Net de incertidumbre; integración en `DepthEstimator` |
+| 1–3 diciembre | Evaluación entre cámaras, banco ELP y ablaciones mínimas |
+| 4 diciembre | Congelar |
+| 5–9 diciembre | Correcciones verificadas, tres ensayos y respaldo (sin cambios por el pivote) |
+| 10 diciembre | Entrega académica. La nota del 18/11 dice entrega 7/12 y exposición 12/12: pendiente de confirmar |
 | Continuidad | Capacidades pendientes del alcance completo, con nuevas fechas basadas en evidencia |
+
+Las filas desde el 19/11 se reemplazaron el 18/11 por el pivote de T12. Antes decían: 20–26/11
+«Integración, ablaciones, incertidumbre y fallos»; 27/11–3/12 «Test reservado, reproducción
+cruzada, tablas e informe»; 4–9/12 «Correcciones verificadas, tres ensayos y respaldo», que se
+conserva del 5 al 9. El test público reservado para B5 y Fusion (decisión del 17/11), la
+reproducción cruzada, las tablas y el informe siguen en T15/T16; todavía no tienen fecha nueva
+en este calendario y su ventana anterior se superpone con el trabajo de T12.
 
 Si una fecha falla, registrar causa, impacto y nuevo paso en BITACORA. Una demora no convierte
 una capacidad en descartada ni autoriza afirmar que se probó algo que no se hizo.
@@ -164,22 +203,22 @@ si hay código integrado pero falta recepción, escribir ambos hechos sin oculta
 |---|---|---|---|---|
 | T01 | Base reproducible, contratos y artefactos | A+B | Parcial: base publicada; recepción/almacén y utilidades pendientes | Ninguna |
 | T02 | Captura USB, grabación y replay | B | Hecha: captura, grabación, replay y rectificación (PR #17); M2 con la ELP en Mac: 10 min, 52 fps guardados, 31 256/31 256 pares íntegros, 2,7 % descartados, memoria estable 500–780 MB; 12 clips de desarrollo en Drive (BITACORA 2026-11-14). ELP en Windows sin probar | Ninguna |
-| T03 | Calibración y validación física | B con evaluación A | Hecha: calibración s6 (PR #13) + corrección de disparidad 0,5275 px verificada con cinta 1–3 m (control 1,5 m: −5 mm), `configs/calib/elp-2026-11-11-corregida.yaml` (BITACORA 2026-11-13). Estabilidad de δ entre días asumida, no medida | Ninguna |
-| T04 | Datos, GT, particiones y protocolo | A con capturas B | Parcial: datos públicos integrados (PR #16): MiddEval3-H, ETH3D e InStereo2K (1221 de 2050 pares: part1/5/6 no disponibles) auditados y con manifiesto; protocolo y partición por tramos fijados (BITACORA 2026-11-13). Falta el banco ELP (escenas por sesión y test físico reservado) | Ninguna |
-| T05 | Estéreo, monocular, alineación y B0–B4 | A | Hecha con software: B0–B4 (PR #21, #22), ajuste en InStereo2K val, parámetros congelados, test público una vez y latencia M9 en Mac (PR 3). En MiddEval3, B4 pierde contra B0. Pendiente con el banco ELP (T04): umbrales de alineación a 1280×720 y `min_coverage` (BITACORA 2026-11-14) | Ninguna |
+| T03 | Calibración y validación física | B con evaluación A | Hecha: calibración s6 (PR #13) + corrección de disparidad 0,5275 px verificada con cinta 1–3 m (control 1,5 m: −5 mm), `configs/calib/elp-2026-11-11-corregida.yaml` (BITACORA 2026-11-13). Estabilidad de δ entre días asumida, no medida. Con el pivote del 18/11 esta calibración pasa a ser el perfil ELP previsto en T12 | Ninguna |
+| T04 | Datos, GT, particiones y protocolo | A con capturas B | Parcial: datos públicos integrados (PR #16): MiddEval3-H, ETH3D e InStereo2K (1221 de 2050 pares: part1/5/6 no disponibles) auditados y con manifiesto; protocolo y partición por tramos fijados (BITACORA 2026-11-13). Falta el banco ELP (escenas por sesión y test físico reservado). Pivote 18/11: datos públicos con imágenes crudas de otras cámaras (KITTI raw, EuRoC, Middlebury 2014 `imperfect`) a confirmar; clips ELP de desarrollo, nunca las sesiones reservadas, previstos para entrenar la alineación | Ninguna |
+| T05 | Estéreo, monocular, alineación y B0–B4 | A | Hecha con software: B0–B4 (PR #21, #22), ajuste en InStereo2K val, parámetros congelados, test público una vez y latencia M9 en Mac (PR 3). En MiddEval3, B4 pierde contra B0. Pendiente con el banco ELP (T04): umbrales de alineación a 1280×720 y `min_coverage` (BITACORA 2026-11-14). Pivote 18/11: B0 queda como comparador y respaldo previsto del modo continuo; B4 como comparador «antes», fuera de la app | Ninguna |
 | T06 | Detección, máscaras y seguimiento | B | Parcial: código integrado (PR #18): YOLO-seg, IDs ByteTrack, fake, catálogo en español y CLI, con tests sin cámara. Sobre clips ELP rectificados (BITACORA 2026-11-14): máscaras sobre el par rectificado revisadas a ojo en un cuadro; con cámara en mano el ID no sobrevive a la reaparición y muchas detecciones quedan sin ID; mochila casi no detectada. Falta: comparación 26 vs 11 en Mac, 3 clips anotados a mano y decidir el ajuste de ByteTrack | Ninguna |
 | T07 | Ejecución interactiva/científica y dashboard | B | En curso: pipeline, controlador, dashboard, comparación y traza con tests; sobrecarga de 10 min estable; SGBM B0–B2 de T05 integrado y probado sobre clips ELP (vaso 0,54 m contra 0,50 m de cinta; botella 1,07 m contra 1,00 m), con SGBM a 0,7–1,3 s por frame en CPU Windows (BITACORA 2026-11-14). Falta: ventana/voz/ELP en vivo y latencia en Mac | Tomás / Claude Code, rama `b/T07-ejecucion`, `src/visionx/app/`, `tests/test_app.py`, `recordings/` local; CPU |
 | T08 | Voz, audio y cancelación | B | Parcial: código integrado (PR #19): reglas (62/62 frases escritas), salida con prioridad/cancelación, Piper, faster-whisper y botón, con tests sin dispositivos; bucle con voz sintética 24–38/61 (BITACORA 2026-11-14). Falta micrófono/parlantes: frases dichas por personas, latencia y cancelación audibles, AirPods | Ninguna |
 | T09 | Buscar/guiar y medir distancia | B con espacial A | En curso: buscar/guiar (con vertical), elegir entre iguales y distancia como modos de T07; detector por defecto yolo26s @960 y ubicación provisoria por capa cercana (BITACORA 2026-11-15). En clips ELP: vaso 0,5 / taza 1,1 / botella 1,0 / bolso 2,9 m contra cinta 0,50/1,00/1,00/3; silla seguida de 2,6 a 0,6 m con «Llegaste»; abstención ante pared. Demos en Drive `demos/t09/`. Ubicación de A entregada en `depth/spatial/` (`build_locator`; mismos metros que la provisoria en los clips con cinta, BITACORA 2026-11-17); falta adoptarla en `app/`. Falta: M1 en la Mac (latencia de yolo26s @960 y audio real), M7/M8 con clips anotados | Tomás / Claude Code, rama `b/T09-mejoras` (apilada sobre `b/T09-buscar`, PR #25), `src/visionx/modes/`, `src/visionx/app/` (controlador y `spatial.py`), `tests/test_modes.py`, secciones `modes`/`spatial_provisional`/`detection` de `configs/default.yaml`; CPU |
 | T10 | Leer texto | B | Pendiente | Ninguna |
 | T11 | Describir escenas | B | Pendiente | Ninguna |
-| T12 | Canales, CNN, entrenamiento e integración Fusion | A con carga B | En curso: Fusion implementada (canales F0/F1/F3, U-Net residual con NLL, caché, entrenamiento, paquete, `FusionEstimator`) y control fijo B5. En InStereo2K val: B4 2,05 / B5 1,80 / candidato F3 sobre B4 1,68 px de EPE, repetido con 2 semillas; latencia M9 en Mac 365 ms a 1280×720 (BITACORA 2026-11-16 y 2026-11-17). Fuera de dominio (`midd2014extra`, 13 pares): B5 le gana a B4 y Fusion empata con B5. Test público reservado para la ventana final (decisión 17/11). Falta: ELP, ablaciones mínimas de TECNICO, recepción en la app y test una vez | Bauty / Claude Code, rama `a/T12-fusion`, `src/visionx/depth/fusion/`, `src/visionx/depth/stereo.py` (error L/R), `align.py`/`hybrid.py` (control B5, desde el 16/11), `tests/test_fusion_*.py`, sección `fusion` de `configs/default.yaml`, `configs/fusion-entrenamiento.yaml`; GPU/MPS de la Mac, `data/cache/fusion/` y `outputs/fusion/` |
-| T13 | Incertidumbre y política por objeto | A con uso B | Pendiente | Ninguna |
-| T14 | Cuatro comparadores preentrenados | A | Pendiente | Ninguna |
-| T15 | Evaluación final y reportes | A+B | Pendiente | Ninguna |
+| T12 | CREStereo adaptable: alineación, incertidumbre e integración (reemplaza Fusion) | A con carga B | En curso, replanificada el 18/11 (pivote; BITACORA 2026-11-18). Del sistema nuevo hoy hay **solo planificación**: sin código, pesos ni mediciones; primer paso, la compuerta de latencia de CREStereo en MPS (19–21/11). Cerrado en calidad de comparador: Fusion implementada (canales F0/F1/F3, U-Net residual con NLL, caché, entrenamiento, paquete, `FusionEstimator`) y control fijo B5 (PR #28). En InStereo2K val: B4 2,05 / B5 1,80 / candidato F3 sobre B4 1,68 px de EPE, repetido con 2 semillas; latencia M9 en Mac 365 ms a 1280×720 (BITACORA 2026-11-16 y 2026-11-17). Fuera de dominio (`midd2014extra`, 13 pares): B5 le gana a B4 y Fusion empata con B5. Test público reservado para B5 y Fusion en la ventana final (decisión 17/11); no sirve como evidencia del sistema nuevo. De Fusion quedaron sin hacer: medición en la ELP y test una vez (siguen previstos como comparador), ablaciones mínimas y recepción en la app | Bauty / Claude Code, rama `a/T12-crestereo-adaptable`; por ahora solo `docs/ROADMAP.md`, `docs/TECNICO.md` y `docs/BITACORA.md`. Previsto, todavía sin usar: `src/visionx/depth/crestereo_adapt/`; GPU/MPS de la Mac y Kaggle. Reemplaza la reserva anterior de la rama `a/T12-fusion` |
+| T13 | Incertidumbre y política por objeto | A con uso B | Pendiente. Pivote 18/11: usaría la b de Laplace de la U-Net de incertidumbre de T12 y la confianza de la alineación; comparador obligatorio, el chequeo izquierda-derecha | Ninguna |
+| T14 | Cuatro comparadores preentrenados | A | Pendiente. Pivote 18/11: con CREStereo como estéreo de base cambia su papel; los cuatro siguen en el alcance y qué correr y cuándo es decisión pendiente de Bauty | Ninguna |
+| T15 | Evaluación final y reportes | A+B | Pendiente. Pivote 18/11: la evidencia principal pasa a ser el banco ELP con cinta y la curva de robustez; MiddEval3 y ETH3D no sirven para el sistema nuevo y siguen reservados para B5 y Fusion | Ninguna |
 | T16 | Informe, póster, reproducción y entrega | A+B | Pendiente | Ninguna |
-| T17 | Pseudoetiquetas y Lite | A | Pendiente | Ninguna |
-| T18 | Fusion-FFS | A | Pendiente | Ninguna |
+| T17 | Pseudoetiquetas y Lite | A | Pendiente. Pivote 18/11: se redefine con CREStereo como maestro; el alumno destilado es además la alternativa si CREStereo no sirve como base. Decisión pendiente de Bauty | Ninguna |
+| T18 | Fusion-FFS | A | Pendiente. Pivote 18/11: se redefine con FFS como estéreo de base alternativo. Decisión pendiente de Bauty | Ninguna |
 | T19 | Raspberry, transporte, audio y energía | B | Pendiente | Ninguna |
 | T20 | Alerta de cercanía | B con política A | Pendiente | Ninguna |
 
@@ -278,14 +317,49 @@ La reserva documental de esta reorganización se registra en BITACORA; no inicia
 - **Salida/aceptación:** treinta escenas anotadas, afirmaciones sin respaldo contabilizadas,
   cero distancias generadas como medición y plantilla sin internet. M10.
 
-### T12 — Fusion: entradas, entrenamiento y uso
+### T12 — CREStereo adaptable: alineación, incertidumbre e integración
 
-- **Inicio:** interfaces/ejemplos; entrenamiento real requiere T04/T05 y presupuesto aprobado.
-- **Hacer:** un preprocesamiento público y caché invalidable; F0/F1, U-Net residual y cabeza b.
-  Probar overfit, piloto, semillas, reanudación y selección en validación; preparar paquete e inferencia.
-- **Salida/aceptación:** M5, canales/unidades auditados, checkpoint/hash/config/model card y
-  paridad offline/aplicación. B cambia B4 por Fusion por configuración, sin copiar notebooks.
-  Ablaciones y F2/F3 se eligen por validación; no se declara que once canales ganan por definición.
+Replanificada el 18/11 ([nota del 18/11](VisionX_Nota_Bauty_CREStereo.pdf); diseño en
+[TECNICO](TECNICO.md#crestereo-adaptable)). Este bloque reemplaza a «Fusion: entradas,
+entrenamiento y uso»; lo hecho de Fusion queda como comparador (ver tabla de estado). Todo lo
+que sigue es **previsto**: no hay código, pesos ni mediciones.
+
+- **Inicio:** compuerta de latencia (19–21/11). Wrapper de CREStereo congelado en MPS y tabla de
+  latencia por resolución e iteraciones, con arranque en caliente; estimador clásico con
+  correspondencias; curva de CREStereo sin adaptar perturbando la calibración en clips crudos
+  ELP; CREStereo sobre `cinta-s7` contra B0/B5/Fusion. Ahí se decide si CREStereo queda como
+  base. Si el modo continuo no entra en ≤ 250 ms P95, el continuo usa B0 sobre el par corregido
+  y CREStereo queda para la distancia precisa. Si no sirve como base, la alternativa es un
+  alumno destilado (T17), que reemplazaría a la red de alineación como contribución.
+- **Hacer:** capa geométrica sin pesos (mapas base, rayos y estiramiento; un solo remap por
+  cuadro). Generador de perturbaciones con yaw y cámaras virtuales. Red de alineación propia
+  (roll, pitch, yaw, razón de focal y confianza; corre cada tanto; arranca en cero) contra el
+  estimador clásico. U-Net de incertidumbre propia (b de Laplace) con la infraestructura de
+  Fusion, contra el chequeo izquierda-derecha. Flujo al conectar una cámara: perfil ELP,
+  «¿conozco esta cámara?», distancia conocida y modo relativo. Estimadores `cre_adapt` y
+  `cre_adapt_preciso` con el contrato `DepthEstimator` existente. CREStereo nunca recibe
+  gradiente; el port sin licencia y los pesos no se commitean: se descargan con script.
+- **Orden de caída si algo se atrasa:** *núcleo*: CREStereo, alineación (red o clásica),
+  incertidumbre, cámaras tipo ELP y distancia conocida. *Segundo escalón*: calibración como
+  entrada con FiLM y cámaras distintas. *Exploratorio*: distorsión estimada desde las imágenes,
+  escala sin datos con monocular métrica y adaptadores dentro de CREStereo. Lo que no entre
+  continúa después; no se elimina.
+- **Salida/aceptación:** con calibración buena, paridad con «OpenCV + CREStereo». Curva de
+  robustez con calibración degradada (resultado principal), también con descalibración real:
+  precinto del 09/11, calibración vieja del 04/11 y una segunda unidad ELP antes de la expo.
+  Empate o ventaja frente al clásico; si pierde, queda el clásico. Test de identidad: en cero el
+  sistema es igual a «rectificación base + CREStereo». Distancias con cinta en el banco ELP por
+  rango, yaw reportado aparte, latencia M9 en la Mac y ablaciones mínimas de TECNICO. Paquete
+  con checkpoint/hash/config/model card. MiddEval3 y ETH3D no cuentan como evidencia de este
+  sistema.
+- **Carga B — PROPUESTA por coordinar con Tomás; no está definida:** estados que la app tendría
+  que decir o mostrar («ajustando la cámara», «no reconozco esta cámara», «no puedo medir con
+  esta cámara»); comando «calibrar distancia»; carga de datos de una cámara desconocida
+  (calibración o ficha mínima); mediana por objeto ponderada por 1/b, «no estoy seguro»,
+  latencia de punta a punta y ensayo en la Mac. El modo relativo sin metros es un cambio
+  semántico de la salida de profundidad: según AGENTS requiere versión, fixture y migración;
+  hoy rige schema 3 y no se define en esta migración. A no toca `src/visionx/app/**` ni
+  `src/visionx/modes/**`; en `shared/contracts.py`, solo campos opcionales con valor por defecto.
 
 ### T13 — Incertidumbre y política por objeto
 
@@ -294,10 +368,17 @@ La reserva documental de esta reorganización se registra en BITACORA; no inicia
   aparte, con cobertura, dispersión, escala y edad; fijar rango/abstención/redondeo.
 - **Salida/aceptación:** curvas M6/M7, thresholds congelados antes del test. No trasladar b
   de píxeles a una supuesta probabilidad por objeto; informar si la hipótesis falla.
+- **Pivote 18/11 (previsto, sin medir):** la b por píxel saldría de la U-Net de incertidumbre de
+  T12, no de la cabeza de Fusion. Se compara contra el chequeo izquierda-derecha, también en la
+  ELP. La incertidumbre en metros sumaría la confianza de la alineación. La abstención saldría
+  de ahí: alta en un objeto, «no estoy seguro»; alta en toda la imagen varios segundos, «no
+  puedo medir con esta cámara».
 
 ### T14 — Comparadores preentrenados
 
-- **Inicio:** una fixture pública; preparar entornos sin esperar a que Fusion termine.
+- **Inicio:** una fixture pública; preparar entornos sin esperar a que T12 termine.
+- **Pivote 18/11:** con CREStereo como estéreo de base cambia el papel de estos comparadores.
+  Los cuatro siguen en el alcance; qué correr y cuándo es decisión pendiente de Bauty.
 - **Checklist:** MonSter; DEFOM-Stereo; FoundationStereo; Fast-FoundationStereo.
 - **Hacer:** registrar origen/commit/pesos/licencia/backend, resolver incompatibilidades con una
   ruta viable y evaluar mismos frames/GT. Entornos externos separados del núcleo si lo requieren.
@@ -311,6 +392,13 @@ La reserva documental de esta reorganización se registra en BITACORA; no inicia
   cámara/audio/red/pesos ausentes. ROI manual ayuda a separar error detector de error depth.
 - **Salida/aceptación:** M4/M6–M10; CSV por escena, cobertura/fallos y diferencias pareadas;
   figuras/tablas regenerables. No tocar thresholds con test ni seleccionar solo escenas ganadoras.
+- **Pivote 18/11 (previsto):** se suma CREStereo adaptable con sus comparadores: techo (OpenCV
+  con calibración completa + CREStereo), piso (perfil o ficha sin corrección), clásico y «antes»
+  (B0, B5 y Fusion con cinta). Pruebas: paridad, curva de robustez, descalibración real,
+  condicionamiento, otras cámaras con datos públicos crudos (a confirmar), cinta por rango y
+  latencia M9. La evidencia principal pasa a ser el banco ELP con cinta. MiddEval3 y ETH3D no
+  sirven para el sistema nuevo (los pesos `crestereo_eth3d` probablemente los vieron; no está
+  documentado) y siguen reservados para B5 y Fusion; InStereo2K es dudoso para CREStereo.
 
 ### T16 — Entrega académica y reproducción
 
@@ -327,6 +415,10 @@ La reserva documental de esta reorganización se registra en BITACORA; no inicia
   sin DA en inferencia. Comparar con la misma arquitectura sin destilar y calibrar su incertidumbre.
 - **Salida/aceptación:** manifiestos, aceptación por escena y M11 del pipeline completo a misma
   cobertura. Cinco mil frames similares no son cinco mil escenas independientes.
+- **Pivote 18/11:** se redefine con CREStereo como maestro en lugar de Fusion. Si CREStereo no
+  sirve como base por latencia, el alumno destilado sería la alternativa y reemplazaría a la red
+  de alineación como contribución (las dos no entran en el calendario). Decisión pendiente de
+  Bauty; hasta entonces las líneas de arriba describen el plan anterior. No se elimina.
 
 ### T18 — Fusion-FFS
 
@@ -335,6 +427,9 @@ La reserva documental de esta reorganización se registra en BITACORA; no inicia
   Cambiar proveedor no es intercambiar un mapa conservando canales con significado incorrecto.
 - **Salida/aceptación:** comparación contra FFS solo, mismo soporte y costes completos M4–M6/M9;
   paquete con versión. No sustituir el proveedor de demo sin recepción.
+- **Pivote 18/11:** se redefine sobre la base nueva, con FFS como estéreo de base alternativo a
+  CREStereo. Decisión pendiente de Bauty; hasta entonces las líneas de arriba describen el plan
+  anterior. No se elimina.
 
 ### T19 — Portátil, transporte y energía
 
@@ -360,7 +455,8 @@ limitación y próximo paso. Solo se actualiza la tabla de estado cuando el hech
 Durante esta revisión documental no se comienza ninguna implementación.
 
 Paralelismo útil: T02/T03 en hardware; T04/T05/T14 con datos públicos; T06–T11 con replay;
-T12 sobre contratos y ejemplos. El entrenamiento largo espera datos/preprocesamiento correctos.
+T12 (CREStereo adaptable desde el 18/11) sobre contratos y ejemplos, con sus dos redes propias
+entrenadas por separado. El entrenamiento largo espera datos/preprocesamiento correctos.
 No duplicar tres veces una misma etapa para que cada agente tenga su propia infraestructura.
 
 Entregar al otro significa: versión de código, artefacto/hash, comando real y salida esperada.
@@ -374,7 +470,7 @@ archivo ni estados adicionales:
 | I01 | T06–T09: primera demo objeto/audio |
 | I02 | T02/T03/T05: USB, calibración y metros |
 | I03 | T04/T05/T07: B4 y protocolo para entrenar |
-| I04 | T12: paquete Fusion recibido en la aplicación |
+| I04 | T12: paquete CREStereo adaptable recibido en la aplicación (hasta el 18/11 era el paquete Fusion, que queda como comparador) |
 | I05 | T08–T11 y política T13: cuatro modos USB |
 | I06 | T14/T15: resultados científicos reproducibles |
 | I07 | T17–T20: continuidad completa |

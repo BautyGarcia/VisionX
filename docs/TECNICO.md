@@ -1,18 +1,23 @@
 # VisionX — cómo funciona cada parte y cómo la vamos a comprobar
 
-Actualizado: **2 de noviembre de 2026**. Manual interno: explica términos y motivos para que
+Actualizado: **18 de noviembre de 2026**. Manual interno: explica términos y motivos para que
 podamos seguir el código cuando se implemente. No da por hecho que conozcamos las siglas.
 
 [ROADMAP](ROADMAP.md) contiene tareas y estados. [BITACORA](BITACORA.md) contiene resultados
 reales y problemas. Aquí viven las especificaciones: una prueba descrita **no fue ejecutada**
 por estar escrita. En esta reorganización no se implementan modelos ni se hacen mediciones.
 
+**Cambio del 18/11.** La línea central de profundidad (T12) pasa de Fusion a
+[CREStereo adaptable](#crestereo-adaptable). Es planificación: no hay código, pesos ni
+mediciones del sistema nuevo. Lo anterior no se borra; donde cambia de papel, se dice.
+
 ## Indice
 
 - [Mapa y conceptos](#mapa-y-conceptos)
 - [Cámara y calibración](#camara-y-calibracion) — T02/T03
 - [Profundidad y alineación](#profundidad-y-alineacion) — T05
-- [Entradas y CNN Fusion](#entradas-y-cnn-fusion) — T12
+- [CREStereo adaptable](#crestereo-adaptable) — T12 desde el 18/11, planificado
+- [Entradas y CNN Fusion](#entradas-y-cnn-fusion) — T12 hasta el 17/11; hoy comparador
 - [Incertidumbre y objetos](#incertidumbre-y-objetos) — T09/T13
 - [Detección y cuatro modos](#deteccion-y-cuatro-modos) — T06/T09–T11
 - [Ejecución y audio](#ejecucion-y-audio) — T07/T08/T19
@@ -29,28 +34,42 @@ entre ellas; ese desplazamiento se llama **disparidad**, se mide en píxeles y p
 profundidad si conocemos la cámara. **Monocular** usa una sola imagen y aprende pistas visuales
 de forma y posición; una predicción relativa no proporciona por sí sola la escala en metros.
 
-**Depth Anything V2 Small** es la red preentrenada que aporta el mapa monocular. Congelada
-significa que usamos sus pesos aprendidos sin modificarlos durante el entrenamiento de Fusion.
-Nuestra **CNN**, red convolucional, recibe mapas/imágenes y aprende cómo combinarlos.
-No estamos entrenando desde cero todo el conocimiento visual del sistema.
+**Recorrido principal desde el 18/11 (planificado, sin implementar):** par crudo → capa
+geométrica y red de alineación → **CREStereo** congelado → U-Net de incertidumbre → metros con
+incertidumbre. CREStereo es una red de estéreo preentrenada por otros; las dos redes que la
+rodean son nuestras. Detalle en [CREStereo adaptable](#crestereo-adaptable). El recorrido
+anterior, SGBM → monocular alineado → B4 → Fusion, **no se borra**: B0–B5 y Fusion quedan como
+comparadores, y B0 además como respaldo del modo continuo.
+
+**Depth Anything V2 Small** es la red preentrenada que aporta el mapa monocular en el recorrido
+anterior. Congelada significa que usamos sus pesos aprendidos sin modificarlos durante el
+entrenamiento de Fusion. Nuestra **CNN**, red convolucional, recibe mapas/imágenes y aprende
+cómo combinarlos. No estamos entrenando desde cero todo el conocimiento visual del sistema.
+Con el cambio del 18/11, Depth Anything sale de la app; como mucho queda para un experimento
+de escala sin datos.
 
 | Componente | Entrada | Salida | Si no puede resolverlo |
 |---|---|---|---|
 | Fuente | USB o grabación identificada | Par izquierdo/derecho y tiempos | Error de dispositivo; None solo fin normal de replay |
 | Rectificación | Par y calibración del modo correcto | Par alineado, geometría y zona útil | Rechazar calibración incompatible |
-| SGBM | Dos ojos rectificados | Disparidad, máscara válida y chequeos | Huecos explícitos, no cero metros |
-| Monocular | Imagen izquierda | Mapa relativo float | Error de modelo distinto de escena sin objetos |
-| Alineación | Monocular + anclas estéreo fiables | Monocular en unidades de disparidad + diagnóstico | No alineado y fallback estéreo |
-| B4 | Estéreo aceptado + monocular alineado | Combinación fija y su validez | Abstenerse donde ninguna fuente es fiable |
-| Fusion | Canales y B4 de ese par | Disparidad corregida y escala b | Estado/motivo y máscara, sin inventar valores |
+| Capa geométrica (prevista) | Calibración, perfil o ficha mínima de la cámara | Mapas de rectificación base, de rayos y de estiramiento | Sin datos de la cámara: modo relativo, sin metros |
+| Red de alineación (prevista) | Par reducido y calibración opcional | Corrección de un ojo respecto del otro, con confianza | Confianza baja: probar otro perfil o tratarla como cámara desconocida |
+| CREStereo (previsto) | Par alineado | Disparidad | No se le pide confianza: la da la U-Net de incertidumbre |
+| U-Net de incertidumbre (prevista) | Disparidad, izquierda, error fotométrico y estiramiento | Escala b por píxel | b alta: «no estoy seguro» o «no puedo medir con esta cámara» |
+| SGBM (B0: comparador y respaldo) | Dos ojos rectificados | Disparidad, máscara válida y chequeos | Huecos explícitos, no cero metros |
+| Monocular (comparador) | Imagen izquierda | Mapa relativo float | Error de modelo distinto de escena sin objetos |
+| Alineación monocular (comparador) | Monocular + anclas estéreo fiables | Monocular en unidades de disparidad + diagnóstico | No alineado y fallback estéreo |
+| B4 (comparador) | Estéreo aceptado + monocular alineado | Combinación fija y su validez | Abstenerse donde ninguna fuente es fiable |
+| Fusion (comparador) | Canales y B4 de ese par | Disparidad corregida y escala b | Estado/motivo y máscara, sin inventar valores |
 | Detector | Imagen izquierda de referencia | Clases, cajas y máscaras | Detección vacía si no ve; error si falla el modelo |
 | Ubicación espacial | Detección + profundidad compatibles | Dirección, Z y política por objeto | Dirección/reencuadre/abstención |
 | Controlador | Orden y resultados de su pedido | Eventos de audio cancelables | Descartar vencidos o cancelados |
 | OCR | Frame elegido | Texto y bloques | Pedir encuadre o informar que no pudo leer |
 | Descripción | Imagen y hechos medidos | Plantilla o texto contextual | Plantilla local si falla VLM/red |
 
-La salida de Fusion se combina con detecciones; no es necesario que las cuatro modalidades
-esperen a que exista una CNN entrenada para desarrollar su recorrido básico.
+La salida de profundidad (antes la de Fusion; desde el 18/11, la prevista de CREStereo
+adaptable) se combina con detecciones; no es necesario que las cuatro modalidades esperen a que
+exista una red entrenada para desarrollar su recorrido básico.
 
 ## Camara y calibracion
 
@@ -188,6 +207,12 @@ resolución, offset y comienzo de la búsqueda.
 
 ## Profundidad y alineacion
 
+**Papel desde el 18/11.** Lo de esta sección está implementado y no cambia; cambia para qué se
+usa. B0 queda como comparador y respaldo del modo continuo. B4 y B5 quedan como comparadores
+«antes» en el informe y no corren en la app. Depth Anything sale de la app. «Alineación» acá es
+la del mapa monocular con el estéreo, no la de un ojo respecto del otro que describe
+[CREStereo adaptable](#crestereo-adaptable).
+
 ### SGBM y controles B0–B4 — T05
 
 **SGBM** es un algoritmo clásico de correspondencia estéreo de OpenCV. Busca qué píxel del
@@ -292,7 +317,489 @@ y residuos P50/P95, con un motivo cuando se rechaza. B3/B4 en `HybridMatcher` (o
 aceptada, B4 queda solo estéreo (PARTIAL) y B3 no responde. Umbrales provisorios en
 `depth.alineacion`.
 
+## CREStereo adaptable
+
+**Estado al 18/11: solo planificación.** No hay código, pesos, entrenamientos ni mediciones de
+este sistema. Todo lo que sigue es diseño previsto o hipótesis, salvo donde dice «medido» o
+«verificado». Lo decidió Bauty el 18/11, después de hablar con el profesor. El origen es la
+[nota del 18/11](VisionX_Nota_Bauty_CREStereo.pdf); el diseño se aparta de ella en varios
+puntos ([diferencias](#diferencias-con-la-nota-de-origen)) y, donde difieren, vale este manual.
+
+### Qué cambia y por qué — T12
+
+T12 deja de ser «Fusion» (la U-Net que corrige una mezcla de SGBM y monocular, descripta en
+[Entradas y CNN Fusion](#entradas-y-cnn-fusion)) y pasa a ser **CREStereo adaptable**.
+**CREStereo** (Li et al., CVPR 2022) es una red de estéreo que ya entrenaron otros: recibe dos
+imágenes rectificadas y devuelve la disparidad de cada píxel. La usamos **congelada**, sin
+cambiarle ningún peso, y la envolvemos con dos redes propias: una antes, que acomoda las
+imágenes, y otra después, que dice cuánto creerle al resultado.
+
+Motivos:
+- **Medido (BITACORA 2026-11-17):** fuera de dominio (`midd2014extra`, 13 pares) Fusion empata
+  con la regla fija B5. La ventaja que tenía en InStereo2K val no se trasladó.
+- **Idea del profesor:** tomar una red de estéreo preentrenada y adaptarla por la entrada y por
+  la salida, para que sirva en varias cámaras sin que el usuario calibre ni rectifique, con la
+  calibración «en la memoria de la red».
+
+**No se busca mejorar la precisión de CREStereo.** Se busca hacerla más útil: que reciba el
+**par crudo** (las dos imágenes tal como salen de la cámara, sin rectificar) y devuelva
+profundidad en metros con incertidumbre.
+
+Pedido del profesor, informado por Bauty y sin documento de la cátedra: que en nuestra cámara
+ande muy bien; en cámaras del mismo tipo, relativamente bien; en cámaras con otra distorsión,
+al menos aceptable. Ofreció llevar a la exposición otra unidad igual a la nuestra para probarlo.
+
+Cómo decirlo sin prometer de más: no es «sin calibrar». Es **corrección en línea alrededor de
+un perfil de cámara conocido**, más un camino degradado para cámaras desconocidas.
+- **Perfil de cámara:** calibración de referencia de un modelo de cámara, usada como punto de
+  partida. El de la ELP sale de nuestra calibración (`elp-2026-11-11-corregida.yaml`).
+- **Corrección en línea** o **autorrectificación:** estimar cómo está ubicado un ojo respecto
+  del otro usando las imágenes, mientras la cámara funciona, en vez de hacerlo una sola vez con
+  un tablero.
+
+Cuidado con la palabra *alineación*. En [Profundidad y alineación](#profundidad-y-alineacion)
+significa llevar el mapa monocular a unidades de disparidad. En esta sección significa acomodar
+un ojo respecto del otro, para que un mismo punto caiga en la misma fila de las dos imágenes.
+
+### Criterio de éxito
+
+Se escribe antes de medir.
+
+| Situación | Qué tiene que pasar | Qué papel tiene |
+|---|---|---|
+| Calibración buena | Igualar a «rectificación con OpenCV + CREStereo» | Control de no empeorar, no el resultado principal. Empatar es el resultado correcto |
+| Calibración imperfecta o incompleta | Degradarse menos que ese camino | **Resultado principal:** la curva de robustez |
+| Frente al método clásico de autorrectificación con correspondencias | Empatar o ganar en precisión o en tiempo | Si pierde, la red de alineación no se justifica y queda el clásico |
+
+La **curva de robustez** muestra cómo cambia el error cuando se empeora la calibración de a
+pasos. Una **correspondencia** es un mismo punto de la escena encontrado en las dos imágenes.
+
+### Niveles de uso
+
+| Caso | Qué da el usuario | Qué estima el sistema | Resultado buscado |
+|---|---|---|---|
+| Cámara propia | Nada: calibración completa ya guardada | Correcciones chicas de alineación | Muy bueno |
+| Otra unidad del mismo modelo (ELP) | Nada: se usa el perfil ELP que va dentro del modelo | Alineación de esa unidad | Relativamente bueno |
+| Cámara distinta, con datos | Calibración completa, o ficha mínima, o apuntar a un objeto a distancia conocida | Alineación; distorsión aproximada | Aceptable, con metros |
+| Cámara distinta, sin datos | Nada | Alineación | Modo relativo, **sin metros** |
+
+- **Ficha mínima:** separación entre lentes y ángulo de visión, sacados de la hoja del
+  fabricante.
+- **Modo relativo:** el sistema dice cerca/lejos y dirección, pero no metros.
+
+Límites físicos que se declaran:
+- La escala (separación entre lentes) no se ve en las imágenes. Un error de escala con una lente
+  parecida **no lo detecta el sistema**; solo lo corrige el dato o la distancia conocida.
+- En un par estéreo con ojos casi paralelos, la focal tampoco sale de las imágenes.
+- Fuera de alcance: ojo de pez y cámaras sin los dos ojos sincronizados.
+- En gran angular distinto de la ELP, sin calibración, se espera peor resultado en los bordes.
+
+### Arquitectura de tres redes
+
+```text
+par crudo L, R  +  calibración (completa | perfil del modelo | ficha mínima | nada)
+      |
+[1] Capa geométrica (sin pesos; una vez por cámara; en caché)
+    mapas de rectificación base, mapa de rayos, mapa de estiramiento
+      |
+[2] Red de alineación (PROPIA; ~1 vez por segundo, en segundo plano)
+    L y R reducidos -> roll, pitch, yaw, razón de focal + confianza
+    -> filtro en el tiempo -> se compone con los mapas de [1]
+      |
+[3] Un solo remap por cuadro -> L', R' alineados
+      |
+[4] CREStereo congelado -> disparidad
+      |
+[5] U-Net de incertidumbre (PROPIA; cada cuadro) -> b por píxel (Laplace)
+      |
+[6] Cuenta final: Z = f·B / (d + doffs); incertidumbre en metros a partir de b
+    y de la confianza de [2]
+      |
+    DepthResult para la app, en la grilla izquierda rectificada (donde YOLO dibuja máscaras)
+```
+
+Un **remap** es remuestrear la imagen con una tabla que dice de qué lugar de la imagen original
+sale cada píxel nuevo (`cv2.remap`). Los números entre corchetes se usan en el resto de la
+sección.
+
+Tres redes: dos propias y una ajena.
+
+| Red | De quién | Cuándo corre | Qué responde |
+|---|---|---|---|
+| Red de alineación | Propia | Al conectar y cada tanto | Cómo están girados los ojos y si conozco esta cámara |
+| CREStereo | Ajena, congelada | Cada cuadro | Cuánto se corrió cada punto entre las dos imágenes |
+| U-Net de incertidumbre | Propia | Cada cuadro | Cuánto creerle a cada punto |
+
+### Capa geométrica
+
+Son los pasos [1] y [6]: cuentas, sin pesos que aprender.
+
+- **Mapas base:** `cv2.stereoRectify` + `initUndistortRectifyMap` a partir del perfil o de la
+  calibración. Ya existe `calibration.rectify_maps()`.
+- **Mapa de rayos:** para cada píxel de la imagen rectificada, la dirección en el espacio hacia
+  la que mira (un rayo de largo 1). Es una de las formas en que la calibración entra a las redes.
+- **Mapa de estiramiento:** cuánto agranda la rectificación cada zona de la imagen. Donde más
+  estira, menos resolución real hay. Va como canal a la U-Net de incertidumbre.
+- **Un solo remap:** la corrección de [2] se compone con los mapas base. Así cada cuadro se
+  remuestrea una vez y no se interpola dos veces.
+- **La corrección se aplica solo al ojo derecho.** El izquierdo pasa únicamente por el mapa
+  base, así que la grilla izquierda rectificada no se mueve y las máscaras del detector siguen
+  valiendo sobre ella.
+- **Metros:** con la geometría existente, `Z = f·B / (d + doffs)`
+  ([De disparidad a metros](#de-disparidad-a-metros)).
+- **Incertidumbre en metros:** `sigma_Z ≈ Z² · sigma_d / (f·B)`. `sigma_d` es el error esperado
+  de disparidad en px y se forma con b (por píxel) y con la parte global que aporta [2].
+
+### Red de alineación
+
+Es la primera red propia, el paso [2]. Los giros de un ojo respecto del otro se nombran así:
+**roll**, sobre el eje óptico; **pitch**, hacia arriba o abajo; **yaw**, hacia los costados. La
+**razón de focal** compara cuánto agranda un ojo respecto del otro.
+
+- **Forma:** de la familia U-Net. Un mismo codificador procesa los dos ojos (pesos compartidos).
+  En el nivel más bajo hay una **capa de correlación**, que compara lo que ve un ojo con lo que
+  ve el otro corrido a distintas posiciones; la ventana es 2D, con rango horizontal amplio y
+  vertical chico. Después, un decodificador chico.
+- **Salida paramétrica:** roll, pitch, yaw y razón de focal de la derecha, con una confianza.
+- **Salida para cámaras con otra distorsión:** un residual denso **solo vertical**, es decir,
+  una corrección chica por píxel que mueve en vertical. No hay residual horizontal porque
+  cambiaría la disparidad sin garantía métrica.
+- **La geometría la hace una cuenta:** los parámetros pasan a una rotación u **homografía** (la
+  transformación que mueve los píxeles como si la cámara hubiera girado) con la K de la cámara,
+  en forma cerrada y diferenciable: una fórmula directa por la que se puede propagar el
+  gradiente al entrenar. La red aprende a emparejar, no la óptica.
+- **Condicionamiento:** la calibración entra con **FiLM/AdaLN** y con el mapa de rayos. FiLM
+  hace que un dato externo regule cada capa de la red con dos números por canal: γ, que
+  multiplica, y β, que suma. AdaLN hace lo mismo normalizando antes. Va inicializado en cero:
+  al empezar, el dato externo no cambia nada.
+- **Calibración opcional:** en el entrenamiento se oculta a veces. «Sin dato» significa «cámara
+  tipo ELP».
+- **Arranca en cero:** al inicio el sistema es idéntico a «rectificación base + CREStereo». Hay
+  un **test de identidad obligatorio** que lo comprueba.
+- **Cuándo corre:** no en cada cuadro. Alrededor de una vez por segundo, en segundo plano, y su
+  salida se filtra en el tiempo. Costo por cuadro: cero.
+
+**Punto débil conocido: el yaw.** Casi no deja disparidad vertical y se confunde con
+profundidad, así que se observa mal; y es el giro que más mueve los metros. Con f ≈ 602 px a
+1920 de ancho (la K del ojo izquierdo; ya rectificada, ≈ 601 px) y B ≈ 59,8 mm, 0,05° de yaw
+son ~0,5 px de disparidad: del orden del corrimiento δ = 0,5275 px medido con cinta (BITACORA
+2026-11-12/13). Por eso el paso de distancia conocida es parte del sistema.
+
+### CREStereo congelado
+
+Es el paso [4]: la red ajena, usada como caja negra entre las dos propias. Si la latencia no da,
+se puede cambiar por otro estéreo.
+
+- **Pesos:** los publicados `crestereo_eth3d`, en modo evaluación, sin gradiente y sin tocar
+  ninguna capa.
+- **Entrada:** alto y ancho múltiplos de 16. Se rellena replicando el borde y después se recorta.
+- **Salida:** un flujo de 2 canales; la disparidad es el canal 0. El canal vertical se entrenó
+  con objetivo cero (verificado en `train.py` del repo original), así que **no sirve** como
+  medida de desalineación.
+- **Tolerancia propia** (inferida de la aumentación con la que se entrenó, no medida): imagen
+  derecha rotada ±0,1° y corrida ±2 px en vertical.
+- **Licencia:** el original de Megvii es Apache-2.0. El port a PyTorch
+  (ibaiGorordo/CREStereo-Pytorch) **no tiene licencia** (issue #22 abierto). No se commitea en
+  este repo público: se descarga con un script y con el commit fijado. Los pesos tampoco se
+  commitean. Ver [Reproducibilidad](#reproducibilidad).
+
+**Descartado: modificar la primera y la última capa de CREStereo.** La primera es una
+convolución 7×7 compartida por los dos ojos: no puede remuestrear la imagen, que es lo que hace
+falta para alinear. Entrenarla exige retropropagar por toda la red, y el original se entrenó en
+8 GPUs con batch 16. Poner adaptadores FiLM dentro de CREStereo queda como experimento opcional
+en Kaggle.
+
+### U-Net de incertidumbre
+
+Es la segunda red propia, el paso [5]. Corre en cada cuadro, a media resolución, condicionada
+igual que la red de alineación.
+
+- **Entradas:** la disparidad de CREStereo, la imagen izquierda, el error fotométrico (la
+  izquierda contra la derecha deformada según esa disparidad) y el mapa de estiramiento.
+- **Salida:** b de Laplace por píxel, la misma escala de error que explica
+  [Incertidumbre y objetos](#incertidumbre-y-objetos).
+- **Pérdida:** verosimilitud negativa de Laplace, la NLL que ya usa Fusion.
+- **Corrección de disparidad Δd:** inicializada en cero. Queda como ablación, no como objetivo.
+- **Qué reutiliza de Fusion:** `loss.py`, `train.py`, `cache.py`, `package.py`, el patrón de
+  `estimator.py` y el comando de latencia.
+- **Comparador obligatorio:** el chequeo izquierda-derecha. La función ya existe en `stereo.py`,
+  donde hoy se calcula sobre los mapas de SGBM. Para CREStereo haría falta una segunda pasada
+  con el par invertido, que duplica el costo: se prevé solo para la evaluación, no para la app.
+  Cómo obtenerlo está por definir.
+
+### Memoria por cámara
+
+Así entiende este diseño «la calibración en la memoria de la red». Falta confirmar con el
+profesor que se refería a esto ([Decisiones abiertas](#decisiones-abiertas)).
+
+- **Fija por cámara, en caché:** mapas base, rayos, estiramiento, y los γ y β de FiLM.
+- **Estado que se actualiza:** la corrección estimada y su confianza.
+- **Perfiles:** el de la ELP va incluido en el paquete del modelo. Los de otras cámaras se
+  guardan al configurarlas; su formato y ubicación están por diseñar.
+
+### Flujo al conectar una cámara
+
+1. Carga un perfil: primero el de la ELP; después los guardados.
+2. Prepara y guarda las tablas para enderezar (los mapas de [1]).
+3. La red de alineación intenta alinear con lo que la cámara tenga adelante y devuelve
+   corrección y confianza. Mientras tanto la app dice «ajustando la cámara» y no da metros.
+4. Chequeo «¿conozco esta cámara?» con esa confianza. Alta: sigue. Baja: prueba otros perfiles.
+   Si ninguno cierra: cámara desconocida.
+5. Cámara desconocida: cargar datos, o apuntar a un objeto a distancia conocida, o seguir en
+   modo relativo sin metros. El resultado se guarda como perfil nuevo.
+6. En uso: la alineación se revisa cada tanto; si la confianza cae, vuelve al chequeo. La
+   abstención sale de la incertidumbre: alta en un objeto → «no estoy seguro»; alta en toda la
+   imagen durante varios segundos → «no puedo medir con esta cámara».
+
+El chequeo del paso 4 es la parte menos probada: hay que medirlo con una cámara distinta real.
+Idea sin probar para el error de escala: un chequeo de sentido común con objetos de tamaño
+conocido (una persona de 4 m indica escala mala).
+
+### Entrenamiento y generador de perturbaciones
+
+CREStereo nunca recibe gradiente. Las dos redes propias se entrenan por separado y en paralelo.
+
+**Generador de perturbaciones.** Viene de la nota y se extiende. Parte de pares ya rectificados
+y simula dos cosas: una cámara «verdadera» perturbada (movida respecto de lo que se cree) y una
+calibración nominal (lo que el sistema cree). Todo se hace con OpenCV, de forma exacta.
+Extensiones respecto de la nota:
+- incluye **yaw**;
+- sortea una **cámara virtual por muestra** (focal, punto principal, distorsión y rotación
+  entre ojos), para que el condicionamiento vea muchas cámaras;
+- incluye «hermanas simuladas» de la ELP: variaciones chicas alrededor de su calibración;
+- incluye casos irrecuperables, para que la incertidumbre aprenda a decir «no sé».
+
+**Red de alineación.** Se entrena en la Mac. La respuesta correcta es la perturbación misma, así
+que **no necesita disparidad GT** ni pasar por CREStereo. Sirve cualquier par estéreo, incluidos
+clips propios de la ELP de **desarrollo**; nunca las sesiones reservadas del banco.
+
+**U-Net de incertidumbre.** Primero se precalculan en Kaggle las salidas de CREStereo sobre
+pares perturbados que tienen GT. Después se entrena con la pérdida de Laplace.
+
+**Tests obligatorios del generador:**
+- sin perturbación, el campo de desplazamientos es cero;
+- ida y vuelta (perturbar y deshacer) con error medio < 0,1 px en zonas texturadas;
+- semillas reproducibles.
+
+**Riesgos de entrenamiento:**
+- que la red aprenda huellas de la deformación sintética (bordes negros, interpolación) en vez
+  de geometría;
+- que el error residual de nuestra propia calibración quede como sesgo en las etiquetas;
+- que CREStereo ya haya visto los datasets públicos y la incertidumbre salga optimista: no está
+  documentado con qué datos se entrenó `crestereo_eth3d`;
+- que el rango real de variación entre unidades ELP sea distinto del simulado: no se conoce.
+
+### Evaluación del sistema nuevo
+
+Sistemas a comparar:
+
+| Nombre | Qué es | Papel |
+|---|---|---|
+| Techo | OpenCV con calibración completa + CREStereo | Referencia de paridad |
+| Piso | Perfil o ficha sin corrección + CREStereo | Qué pasa sin corregir |
+| Clásico | Corrección estimada con correspondencias (SIFT/ORB, RANSAC, minimizar la disparidad vertical) + CREStereo. Base: `scripts/calibracion/control.py` | Comparador obligatorio y respaldo |
+| Sistema | El propuesto | Lo que se evalúa |
+| Antes | B0 (SGBM), B5 y Fusion, medidos con cinta | Lo que había hasta el 17/11 |
+
+SIFT y ORB son métodos clásicos que encuentran puntos reconocibles en una imagen para
+emparejarlos con la otra.
+
+Pruebas previstas, ninguna ejecutada:
+1. **Paridad** con calibración buena (control).
+2. **Curva de robustez** degradando la calibración de a pasos (resultado principal).
+3. **Descalibración real, no solo simulada:** capturas del precinto del 09/11 (2,5 px reales),
+   la calibración vieja del 04/11 y una segunda unidad ELP conseguida **antes** de la expo.
+4. **Condicionamiento:** calibración cambiada (darle a la ELP la de otra cámara y ver que
+   empeora), cámara nunca vista en el entrenamiento y vector apagado.
+5. **Otras cámaras** con datos públicos de imágenes crudas (KITTI raw, EuRoC, Middlebury 2014
+   `imperfect`): disponibilidad y formato **a confirmar**.
+6. **Distancias con cinta** en el banco ELP, por rango de distancia.
+7. **Latencia** en la Mac con el protocolo M9 ([Pruebas previstas](#pruebas-previstas)).
+
+Métricas:
+- **Disparidad y profundidad:** EPE y bad-k donde hay GT; AbsRel; error por objeto contra cinta,
+  por rango.
+- **Alineación:** disparidad vertical residual en px (cuánto queda corrido un punto entre filas
+  después de corregir); error por parámetro en grados, con **el yaw aparte** y su efecto en
+  metros.
+- **Latencia:** P50/P95.
+- **Incertidumbre:** curvas de calibración, cobertura de intervalos y sparsification/AUSE
+  **contra el chequeo izquierda-derecha**, medida también en la ELP. Sparsification es el
+  descarte progresivo de los píxeles menos confiables, la misma idea que riesgo-cobertura.
+
+**Consecuencia sobre el test público.** MiddEval3 y ETH3D no sirven para el sistema nuevo:
+los pesos `crestereo_eth3d` probablemente los vieron (ETH3D por el nombre del checkpoint,
+Middlebury según la nota; no está documentado). Siguen reservados para B5 y Fusion (decisión del
+17/11). InStereo2K es dudoso para CREStereo. La evidencia real principal pasa a ser el banco ELP
+con cinta ([Datos y comparación](#datos-y-comparacion)).
+
+### Latencia y compuerta
+
+No se encontró ningún reporte de CREStereo en MPS (búsqueda del 18/11): **no está medido**.
+Reportes de terceros, no oficiales y en otro hardware: 595 ms a resolución KITTI con 20
+iteraciones en una RTX 5060 Ti (issue #32 del port); menos de 1 fps a 384×512 en una GTX 1050 Ti
+(issue #3 de Megvii). No son tiempos de la Mac. Operaciones con riesgo en MPS: `F.unfold`,
+`einsum` y el muestreo con `gather`.
+
+Palancas, todas a medir:
+- **Arranque en caliente:** usar la disparidad del cuadro anterior como punto de partida
+  (`flow_init`). El port saltea entonces las etapas gruesas y corre solo la de 1/4.
+- **Resolución y pocas iteraciones** en modo continuo; pasada completa para la distancia a
+  pedido.
+- **Inferencia por zonas:** una pasada global chica y una segunda a resolución nativa solo en el
+  recorte del objeto. A 640 de ancho, 3 m son ~4 px de disparidad; a 1920, ~12 px.
+- **Cambiar el estéreo de base.**
+
+**Compuerta** (viene de la nota): una condición fijada de antemano que decide el camino.
+- Si el modo continuo no entra en ≤ 250 ms P95, el continuo usa B0 sobre el par corregido y
+  CREStereo queda para la distancia precisa.
+- Si CREStereo no sirve como base, la alternativa es un **alumno destilado** (T17 con CREStereo
+  como maestro). Reemplazaría a la red de alineación como contribución: las dos cosas no entran
+  en el calendario.
+
+### Orden de trabajo, orden de caída y ablaciones
+
+Fechas objetivo, **todavía no evidencia**; el estado vigente está en [ROADMAP](ROADMAP.md).
+- **19–21/11:** wrapper de CREStereo en MPS; tabla de latencia {640×352, 960×544, 1280×720} ×
+  iteraciones {2, 4, 10}, con una y dos pasadas y con arranque en caliente; estimador clásico;
+  curva de CREStereo pelado perturbando la calibración al rectificar clips crudos de la ELP;
+  CREStereo sobre `cinta-s7` contra B0/B5/Fusion. **Acá se decide si CREStereo queda como base.**
+- **22–26/11:** generador con yaw y cámaras virtuales; red de alineación.
+- **27–30/11:** U-Net de incertidumbre; integración en `DepthEstimator`.
+- **1–3/12:** evaluación entre cámaras, banco ELP, ablaciones mínimas.
+- **4/12:** congelar.
+
+Orden de caída si algo se atrasa:
+- **Núcleo:** CREStereo, alineación (red o clásica), incertidumbre, cámaras tipo ELP y distancia
+  conocida.
+- **Segundo escalón:** calibración como entrada con FiLM y cámaras distintas.
+- **Exploratorio:** distorsión estimada desde las imágenes; escala sin datos con monocular
+  métrica; adaptadores dentro de CREStereo.
+
+No se elimina alcance: lo que no entre continúa después, como dice ROADMAP.
+
+**Ablaciones mínimas:** sin red de alineación; alineación clásica en lugar de la red; sin
+condicionamiento; sin mapa de rayos; sin yaw; sin incertidumbre global; con y sin Δd.
+
+### Qué pasa con lo que ya existe
+
+| Ya existe | Destino |
+|---|---|
+| B0 (SGBM) | Comparador y respaldo del modo continuo |
+| Chequeo izquierda-derecha | Referencia simple para la incertidumbre |
+| B4, B5 | Comparadores «antes» en el informe; no corren en la app |
+| Fusion (la red) | Resultado negativo documentado y comparador; no se borra |
+| Infraestructura de Fusion | Se reutiliza para la U-Net de incertidumbre |
+| Métricas, adaptadores, auditorías | Se reutilizan |
+| Calibración ELP (`elp-2026-11-11-corregida.yaml`) | Perfil ELP dentro del modelo |
+| `control.py` (SIFT del fondo) | Base del estimador clásico |
+| `offset_cinta.py`, `cinta-s7` | Paso de distancia conocida y primera prueba de precisión |
+| Capturas del precinto (09/11) | Prueba de descalibración real |
+| `depth/spatial`, registro de estimadores, `DepthResult` | Sin cambios |
+| Depth Anything | Sale de la app; como mucho, experimento de escala sin datos |
+
+Se pierde como pieza del producto: el ajuste fino de B4/B5 y los entrenamientos de Fusion v2; y
+el test público reservado como evidencia del sistema nuevo.
+
+### Dónde vive y contrato con la app
+
+- **Paquete previsto:** `src/visionx/depth/crestereo_adapt/` (área A).
+- **Registro:** en `app/depth_registry.py`, con el contrato `DepthEstimator` existente. Ese
+  archivo hoy está en la rama `b/beta-integracion`, no en `main`.
+- **Estimadores previstos:** `cre_adapt` (continuo) y `cre_adapt_preciso` (a pedido).
+- **`DepthResult`:** `disparity_px`, `valid_mask`, `doffs`, `depth_m`, `uncertainty` con
+  `UncertaintyKind.LAPLACE_B` (el contrato ya lo soporta), `status` y `reason`, `inference_ms`.
+- **Qué no se toca:** `src/visionx/app/**` ni `src/visionx/modes/**`, que son del lado de Tomás.
+  En `shared/contracts.py`, solo campos opcionales con valor por defecto.
+
+**Interfaz que afecta a Tomás: PROPUESTA, por coordinar. No está definida ni acordada.**
+- **Quién rectifica:** hoy `RectifiedSource` (`camera/rectified.py`) entrega el par ya
+  rectificado al detector y a la profundidad. La nota prevé dos etapas: en la primera el
+  estimador consume ese par tal cual y solo corrige el ojo derecho; en la segunda acepta el par
+  crudo y aplica él mismo los mapas. La segunda cambia qué entrega la captura.
+- **Alta del estimador:** el registro vive en `src/visionx/app/`, que es del lado de Tomás;
+  agregar `cre_adapt` ahí se coordina con él.
+- **Estados nuevos** que la app tendría que decir o mostrar: «ajustando la cámara», «no
+  reconozco esta cámara» y «no puedo medir con esta cámara».
+- **Comando nuevo:** «calibrar distancia» (apuntar a un objeto a distancia conocida).
+- **Carga de datos** de una cámara desconocida: calibración o ficha mínima.
+- **Modo relativo sin metros:** es un cambio semántico de la salida de profundidad. Según
+  AGENTS, eso requiere versión, fixture y migración; hoy rige schema 3
+  ([Contratos](#contratos)). No se define en esta migración documental.
+- **Ya previsto en la nota del lado de la app:** mediana por objeto ponderada por 1/b, «no estoy
+  seguro», latencia de punta a punta y ensayo en la Mac.
+
+### Diferencias con la nota de origen
+
+La [nota del 18/11](VisionX_Nota_Bauty_CREStereo.pdf) es el punto de partida. El diseño de este
+manual cambia lo siguiente:
+
+| Tema | En la nota | En este diseño |
+|---|---|---|
+| Forma de la red de alineación | U-Net sobre las imágenes concatenadas, con un MLP global | Se agrega una capa de correlación |
+| Yaw | Excluido por inobservable | **Entra**, en la red y en el generador, y se informa aparte |
+| Residual denso | 2 canales | Solo vertical |
+| Cómo se aplica la corrección | Un `grid_sample` por cuadro | Se compone con los mapas: un solo remap |
+| Mapa de estiramiento | No estaba | Canal nuevo para la U-Net de incertidumbre |
+| Generador de perturbaciones | Base | Extendido: yaw, cámara virtual por muestra, hermanas simuladas de la ELP y casos irrecuperables |
+| Fechas | Congelar 4/12, entrega 7/12, expo 12/12 | No cambia la fecha oficial del ROADMAP (10/12); la diferencia queda pendiente de confirmar |
+
+Un **MLP** es una red chica de capas densas; `grid_sample` es la función de PyTorch que
+remuestrea una imagen según un campo de posiciones. Se conservan de la nota la compuerta de
+latencia y lo previsto del lado de la app.
+
+### Decisiones abiertas
+
+- **Fecha de entrega:** ROADMAP dice 10/12, confirmada por Tomás. La nota dice congelar 4/12,
+  entrega 7/12 y expo 12/12. **Sin resolver:** no se cambia la fecha oficial; la diferencia
+  queda anotada como pendiente de confirmar.
+- **T14 (cuatro comparadores preentrenados):** con CREStereo como base cambia su papel. Queda en
+  el alcance; qué correr y cuándo lo decide Bauty y está pendiente.
+- **T17 (Lite) y T18 (Fusion-FFS):** se redefinen sobre la base nueva (maestro CREStereo; FFS
+  como estéreo de base alternativo). Pendiente de decisión; no se eliminan.
+- **Qué quiso decir el profesor con «la calibración en la memoria de la red»:** capa geométrica
+  calculada + condicionamiento, que es lo adoptado, o una deformación aprendida desde la
+  calibración, que queda como comparación si sobra tiempo. A confirmar con él.
+- **Cámara del TP2** (`docs/i308-calib-tp2-antiguo/`): si era otra unidad, ya es un banco de
+  prueba «mismo modelo, otra unidad». Falta saberlo.
+- **Segunda unidad ELP:** pedirla antes de la expo.
+- **Sin medir ni documentar:** la latencia de CREStereo en MPS y los datasets con los que se
+  entrenó el checkpoint.
+
+### Fuentes revisadas
+
+Revisadas el 18/11 por subagentes de búsqueda, leyendo; **no se ejecutó nada**.
+
+- **CREStereo:** [paper CVPR 2022](https://openaccess.thecvf.com/content/CVPR2022/papers/Li_Practical_Stereo_Matching_via_Cascaded_Recurrent_Network_With_Adaptive_Correlation_CVPR_2022_paper.pdf);
+  [repo original](https://github.com/megvii-research/CREStereo) (Apache-2.0; `train.py` y
+  `dataset.py`); [port a PyTorch](https://github.com/ibaiGorordo/CREStereo-Pytorch) (sin
+  licencia; issues #22 y #32).
+- **Rectificación en línea:** Dang, Hoffmann y Stiller, TIP 2009;
+  [DSR, 3DV 2018](https://arxiv.org/abs/1809.09763);
+  [Flow-Guided Online Stereo Rectification, Kumar et al., CVPR 2024](https://openaccess.thecvf.com/content/CVPR2024/html/Kumar_Flow-Guided_Online_Stereo_Rectification_for_Wide_Baseline_Stereo_CVPR_2024_paper.html),
+  que usa volumen de correlación y es el antecedente más cercano a la red de alineación.
+- **Incertidumbre en estéreo:** [SEDNet, CVPR 2023](https://arxiv.org/abs/2304.00152).
+- **Condicionar por cámara** (solo en profundidad monocular):
+  [CAM-Convs, CVPR 2019](https://arxiv.org/abs/1904.02028);
+  [UniDepth, CVPR 2024](https://arxiv.org/abs/2403.18913).
+- **FiLM:** [Perez et al., AAAI 2018](https://arxiv.org/abs/1709.07871). **AdaLN-Zero:**
+  [Peebles y Xie, DiT, ICCV 2023](https://arxiv.org/abs/2212.09748).
+- **Lo que no se encontró:** ningún estudio que mida cuánto se degrada un estéreo moderno frente
+  a una desalineación controlada. Esa curva hay que producirla.
+- **Ensayo de preguntas** (no es opinión de la cátedra): tres agentes con perfil de profesor,
+  sin contexto, recibieron la misma presentación. Coincidieron en: decir «corrección en línea»
+  y no «sin calibrar»; agregar el comparador clásico; reportar el yaw aparte; probar con
+  descalibración real; conseguir la segunda cámara antes de la expo; comparar la incertidumbre
+  contra izquierda-derecha. Sugirieron recortar FiLM y otras cámaras; **no se adopta**, porque
+  el profesor real pidió varias cámaras.
+
 ## Entradas y CNN Fusion
+
+**Aviso (18/11).** Fusion ya no es la línea central de T12: la reemplaza
+[CREStereo adaptable](#crestereo-adaptable). Esta sección se conserva completa porque Fusion
+queda como **resultado negativo documentado** (fuera de dominio empató con la regla fija B5,
+BITACORA 2026-11-17) y como comparador. Su infraestructura (`loss.py`, `train.py`, `cache.py`,
+`package.py` y el patrón de `estimator.py`) se reutiliza para la U-Net de incertidumbre.
 
 ### Preprocesamiento compartido — T12
 
@@ -462,6 +969,23 @@ No resolverlo recortando el extremo y afirmando la misma cobertura nominal.
 **AUSE** compara ese descarte con un orden ideal que conoce el error real; se fijan grilla y
 normalización antes de comparar. Un intervalo del 90% debe contener el GT aproximadamente
 ese porcentaje de veces en datos independientes; un número b positivo no demuestra calibración.
+
+**De dónde sale b desde el 18/11 (previsto, sin implementar).** En la línea central, b ya no
+sale de la cabeza de Fusion: la produce la **U-Net de incertidumbre**, que mira la disparidad de
+CREStereo ([CREStereo adaptable](#crestereo-adaptable)). Lo de arriba sigue valiendo y se agrega:
+- **Dos partes.** b es por píxel. La red de alineación aporta además una confianza global: si
+  los ojos quedaron mal alineados, toda la imagen es menos confiable. Las dos forman `sigma_d`,
+  el error esperado de disparidad en px. La fórmula para combinarlas todavía no está escrita.
+- **A metros.** `sigma_Z ≈ Z² · sigma_d / (f·B)`. Es la aproximación de
+  [De disparidad a metros](#de-disparidad-a-metros), buena para errores chicos frente a
+  `d + doffs`. Para un intervalo con cobertura nominal sigue la regla de convertir los extremos.
+- **Contra qué se compara.** El chequeo izquierda-derecha es el comparador obligatorio. La
+  hipótesis de M6, ordenar errores y abstenerse mejor que L/R, se evalúa contra él con
+  sparsification/AUSE, curvas de calibración y cobertura de intervalos, también en la ELP.
+- **Abstención.** Incertidumbre alta en un objeto → «no estoy seguro». Alta en toda la imagen
+  durante varios segundos → «no puedo medir con esta cámara».
+
+La b de Fusion queda para Fusion como comparador.
 
 ### Pasar de píxeles a un objeto — T09/T13
 
@@ -820,7 +1344,9 @@ Medir los bytes y CPU reales; «USB 2» o «Wi-Fi» en una ficha no es un benchm
 
 Analizar zona central y excluir piso con método declarado; exigir persistencia y profundidad
 reciente, priorizar audio y espaciar avisos. Suspender ante mapas viejos o sin cobertura. Probar
-por USB antes de wearable si ayuda. Elegir B4/Fusion/Lite según medidas, no exigir Lite de antemano.
+por USB antes de wearable si ayuda. Elegir el estimador de profundidad según medidas (desde el
+18/11, B4 y Fusion son comparadores: ver [CREStereo adaptable](#crestereo-adaptable)), no exigir
+Lite de antemano.
 Evaluar obstáculos/falsas alarmas en recorridos controlados; no declarar navegación autónoma.
 
 ## Datos y comparacion
@@ -960,6 +1486,25 @@ denso del fondo. Separar ROI manual, máscara predicha y superficie realmente re
 Usar aumentos que simulen compresión/iluminación de ELP si la validación muestra utilidad;
 guardar parámetros y comparar sin ese aumento. No deformar geometría, GT o máscaras por separado.
 
+**Datos nuevos previstos para CREStereo adaptable (18/11).** Nada de esto está descargado,
+grabado ni auditado. Detalle del uso en [CREStereo adaptable](#crestereo-adaptable).
+- **Clips ELP de desarrollo, para entrenar la red de alineación.** Esa red aprende de
+  perturbaciones simuladas cuya respuesta se conoce: no necesita disparidad GT y le sirve
+  cualquier par estéreo. Por eso puede usar clips propios de la ELP aunque no tengan GT densa.
+  Solo de **desarrollo**: nunca las sesiones reservadas del banco (`s3`, `s4` y `s5`).
+- **Pares con GT, para la U-Net de incertidumbre.** Se perturban y se precalcula sobre ellos la
+  salida de CREStereo, en Kaggle. Riesgo declarado: no está documentado con qué datos se entrenó
+  `crestereo_eth3d`; si ya los vio, la incertidumbre puede salir optimista.
+- **Imágenes crudas de otras cámaras, para evaluar:** KITTI raw, EuRoC y Middlebury 2014
+  `imperfect`. Disponibilidad y formato **a confirmar**. «Crudas» significa sin rectificar.
+- **Descalibración real, para evaluar:** las capturas del precinto del 09/11 (2,5 px reales), la
+  calibración vieja del 04/11 y una segunda unidad ELP, a conseguir antes de la expo.
+
+**Consecuencia sobre el test público (18/11).** MiddEval3 y ETH3D no sirven para el sistema
+nuevo, porque los pesos `crestereo_eth3d` probablemente los vieron (no está documentado).
+Siguen reservados para B5 y Fusion (decisión del 17/11). InStereo2K es dudoso para CREStereo.
+La evidencia real principal del sistema nuevo pasa a ser el banco ELP con cinta.
+
 ### Comparadores — T14
 
 | Modelo | Qué nos permite estudiar | Ruta de trabajo |
@@ -989,12 +1534,26 @@ Sin información suficiente, no afirmar que una prueba es completamente libre de
 - **Licencias:** MonSter y FoundationStereo permiten solo uso no comercial/académico.
 - **Hardware:** ninguno de los cuatro documenta CPU ni MPS. Se ejecutan en GPU NVIDIA.
 
+**Desde el 18/11: papel por decidir.** Con CREStereo como estéreo de base de la línea central
+([CREStereo adaptable](#crestereo-adaptable)), cambia el papel de estos cuatro comparadores.
+T14 **sigue en el alcance**. Qué correr y cuándo lo decide Bauty y está pendiente; hasta
+entonces, lo de arriba describe el plan anterior. A tener en cuenta al decidir: MiddEval3 y
+ETH3D no sirven como evidencia del sistema nuevo, porque los pesos `crestereo_eth3d`
+probablemente los vieron (no está documentado).
+
 ### Ablaciones y evaluación final — T12/T15
 
 Una **ablación** quita una pieza para comprobar su aporte. Mantener presupuesto comparable,
 mismos splits, reglas de validez y semillas registradas. Mínimas: sin monocular también en B4;
 sin confianza clásica; sin incertidumbre/pérdida NLL. Agregar sin RGB, F0/F1, canales extra,
 compuerta residual y compresión si el piloto justifica esos experimentos. No usar test para elegirlos.
+
+**Desde el 18/11 (previsto).** Las ablaciones de arriba son las de Fusion y quedan para Fusion
+como comparador. Las mínimas de [CREStereo adaptable](#crestereo-adaptable) son: sin red de
+alineación; alineación clásica en lugar de la red; sin condicionamiento; sin mapa de rayos; sin
+yaw; sin incertidumbre global; con y sin Δd. Los sistemas, pruebas y métricas de su evaluación
+están en esa sección. Las reglas generales de acá (mismos splits, cobertura junto al error,
+congelar antes de evaluar, no elegir con test) valen igual.
 
 Medir error y cobertura propios de cada método y error en soporte común. **Cobertura** es
 qué parte del GT válido recibió respuesta; un método no gana borrando sus píxeles difíciles.
@@ -1020,6 +1579,12 @@ no presentar el mismo test reutilizado como una segunda confirmación independie
 - Lo ideal es usarlo en la ventana del calendario (27/11–3/12), junto con la incertidumbre
   (T13) y los comparadores (T14) sobre los mismos pares.
 
+**Qué cambia el 18/11.** El test público sigue reservado, con estas mismas condiciones, para B5
+y Fusion. No sirve para CREStereo adaptable: los pesos `crestereo_eth3d` probablemente vieron
+MiddEval3 y ETH3D (no está documentado). Por el mismo motivo, tampoco es evidencia limpia para
+la incertidumbre nueva de T13. La evidencia real
+principal del sistema nuevo es el banco ELP con cinta.
+
 ### Lite y Fusion-FFS — T17/T18
 
 **Destilación** entrena un alumno usando salidas de un teacher. Lite omitirá DA en inferencia;
@@ -1033,6 +1598,15 @@ contra la misma red sin destilación y calibrar su propia incertidumbre; no here
 Fusion-FFS sustituye el proveedor estéreo por FFS, con canales/confianza adecuados a ese método.
 Comparar contra **FFS solo**, contando FFS + monocular + ajuste + CNN. No es una mejora de
 SGBM ni un cambio gratuito de pesos. Mantener paquete/versión propios y registrar resultados.
+
+**Desde el 18/11: redefinición pendiente.** Las dos tareas siguen en el alcance y se redefinen
+sobre la base nueva ([CREStereo adaptable](#crestereo-adaptable)). La decisión es de Bauty y no
+está tomada; hasta entonces, lo de arriba describe el plan anterior. Lo previsto:
+- **T17 (Lite):** el maestro pasaría a ser CREStereo. Además, T17 aparece en la compuerta de
+  latencia: si CREStereo no sirve como base, la alternativa es un alumno destilado, que
+  reemplazaría a la red de alineación como contribución (las dos cosas no entran en el
+  calendario).
+- **T18 (Fusion-FFS):** FFS pasaría a ser un estéreo de base alternativo a CREStereo.
 
 ## Contratos
 
@@ -1145,6 +1719,11 @@ Casos de M1: presente, ausente, duplicado, perdido, cancelado, vencido, máscara
 inválida. Añadir modelo/peso ausente, cámara/audio desconectados, error de red, salida fuera de
 orden y cancelación durante OCR/inferencia/TTS. Los fakes no validan precisión del detector.
 
+**Desde el 18/11.** M5 se escribió para Fusion y sigue valiendo para Fusion como comparador. M6
+vale también para la b nueva. Los criterios propios de
+[CREStereo adaptable](#crestereo-adaptable) (criterio de éxito, test de identidad, tests del
+generador y pruebas de evaluación) están en esa sección y todavía no tienen código M.
+
 ### Entender las métricas
 
 - **EPE:** media del error absoluto de disparidad, en px. **bad-2:** porcentaje con error >2 px
@@ -1170,6 +1749,9 @@ orden y cancelación durante OCR/inferencia/TTS. Los fakes no validan precisión
   cobertura.
 - **Para T13:** AUSE y riesgo-cobertura.
 - No cambiar esta elección después de ver resultados de validación o test.
+- **Desde el 18/11:** estas métricas no cambian. «Fusion contra B4» define el resultado de
+  Fusion, que queda como comparador. La línea central se juzga con el criterio de éxito de
+  [CREStereo adaptable](#crestereo-adaptable), escrito antes de medir.
 
 No mezclar GT válido y predicción válida. Un fallo tiene cobertura/fallo explícitos, no EPE cero.
 IC95%, intervalo estadístico de comparación, por bootstrap de escenas/grupos; no remuestrear
@@ -1218,6 +1800,18 @@ de interacción a nube por rutina.
 - **Por qué no T4 para FoundationStereo:** midió 10,5 GB a media resolución de Middlebury y usa
   flash-attn, que probablemente no soporta esa generación de GPU. Está sin verificar.
 - Registrar horas y gasto de cada corrida.
+
+**CREStereo adaptable (previsto, 18/11).**
+- **Código de CREStereo:** el original de Megvii es Apache-2.0, pero el port a PyTorch
+  (ibaiGorordo/CREStereo-Pytorch) **no tiene licencia** (issue #22 abierto). No se commitea en
+  este repo público: se descarga con un script, con el commit fijado.
+- **Pesos** `crestereo_eth3d`: fuera del repo, como todos los pesos.
+- **MPS:** no se encontró ningún reporte de CREStereo en MPS (búsqueda del 18/11); su latencia
+  en la Mac está sin medir. Operaciones con riesgo: `F.unfold`, `einsum` y el muestreo con
+  `gather`. Vale la regla de arriba: no ocultar un fallback a CPU como rendimiento de GPU.
+- **Dónde se entrena:** la red de alineación, en la Mac. Para la U-Net de incertidumbre, las
+  salidas de CREStereo se precalculan en Kaggle. Los adaptadores FiLM dentro de CREStereo son un
+  experimento opcional, también en Kaggle.
 
 ### Artefactos compartidos
 
@@ -1313,6 +1907,14 @@ sincronizar alcance/números con evidencia antes de presentarlos de nuevo.
 | VLM / LLM | Modelo de visión y lenguaje / modelo de lenguaje |
 | Request / TTL / timeout | Pedido identificado / vigencia / límite de espera |
 | CI / PR / worktree | Verificación automática / propuesta de cambio / copia de trabajo aislada del mismo Git |
+| Perfil de cámara / ficha mínima | Calibración de referencia de un modelo de cámara, usada como punto de partida / separación entre lentes y ángulo de visión, sacados de la hoja del fabricante |
+| Roll / pitch / yaw | Giros de un ojo respecto del otro: sobre el eje óptico / hacia arriba o abajo / hacia los costados |
+| Autorrectificación / corrección en línea | Estimar esa posición relativa con las imágenes mientras la cámara funciona |
+| Alineación (dos usos) | Llevar el mapa monocular a unidades de disparidad (B3–B5) / acomodar un ojo respecto del otro (CREStereo adaptable) |
+| FiLM / AdaLN | Forma de que un dato externo (la calibración) regule cada capa de una red: un número que multiplica y otro que suma por canal / lo mismo, normalizando antes |
+| Mapa de rayos / mapa de estiramiento | Dirección en el espacio que mira cada píxel / cuánto agranda la rectificación cada zona de la imagen |
+| Arranque en caliente | Usar la disparidad del cuadro anterior como punto de partida |
+| Modo relativo | Cerca/lejos y dirección, sin metros |
 
 Al introducir otro término o decisión, explicarlo aquí o en su sección antes de usarlo como
 conocimiento supuesto. Actualizar BITACORA si cambian motivos, resultados o bloqueos.
