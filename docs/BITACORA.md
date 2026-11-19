@@ -51,10 +51,10 @@ cómo entiende Sonnet el resultado de la red y con qué datos con verdad de refe
 **Decisiones de Tomás.**
 - **Tres niveles de certeza** decididos por código (precisa / aproximada / no segura) a partir
   del intervalo del 90 % por objeto; Sonnet solo los dice y se verifica que no agregue números.
-- **Mini dataset:** escenas sintéticas de Replica renderizadas con la geometría de la ELP (con
-  variantes de cámara hermana y distinta) + Booster (real, con máscaras revisadas a mano), los
-  dos a cargo de Tomás / Claude Code; el banco ELP con cinta sigue siendo de Bauty. El medidor
-  láser queda como mejora si hay uno en la facultad.
+- **Mini dataset: A + C.** A = escenas sintéticas de Replica renderizadas con la geometría de la
+  ELP (con variantes de cámara hermana y distinta), primero y completo, a cargo de Tomás / Claude
+  Code. C = el banco ELP de Bauty, con medidor láser si se consigue en la facultad. Booster queda
+  descartado por ahora.
 
 **Hecho.** [INCERTIDUMBRE-Y-GT](INCERTIDUMBRE-Y-GT.md): contrato (qué tiene que entregar la
 profundidad: b calibrada, intervalo por objeto, confianza y estados de cámara,
@@ -71,8 +71,8 @@ redistribuir. Habitat-Sim no corre en Windows: el renderizador se decide en la f
 **Límites.** Los umbrales de los niveles (10 % y 25 %) son iniciales y se ajustan en val. El
 sintético tiene brecha de dominio: el banco ELP sigue siendo la prueba real.
 
-**Próximo paso.** Claude Code: factibilidad del render de Replica y primeras vistas; descarga de
-Booster. Bauty: intervalo por objeto en el ubicador y factor de b.
+**Próximo paso.** Claude Code: factibilidad del render de Replica y el conjunto A completo.
+Bauty: intervalo por objeto en el ubicador y factor de b.
 
 ## 2026-11-19 (noche) — Decisión T12: la red de entrada estima el campo de corrección (opción a); devolución de la cátedra
 
