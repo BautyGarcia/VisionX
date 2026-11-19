@@ -1744,7 +1744,7 @@ def test_describe_with_assistant_uses_measured_meters_and_the_mode_clock():
               measured=True)  # fmt: skip
     assert texts(h.start(c, View(None, m), int(1.2 * SEC))) == []  # consultando
     kind, kw = a.calls[0]
-    assert kind == "describir" and "silla al frente, a 1,6 metros" in kw["objects"]
+    assert kind == "describir" and "silla al frente, a 1,6 metros (medida precisa)" in kw["objects"]
     assert texts(h.tick(c, View(None, m), int(1.6 * SEC))[0]) == []  # todavía no pasó 0,5 s
     says, done = h.tick(c, View(None, m), int(2.3 * SEC))
     assert texts(says) == ["Adelante tenés una silla a 1,6 metros.", "A tu derecha, una persona."]
@@ -1794,7 +1794,9 @@ def test_distance_with_assistant_passes_measured_numbers_and_waits_one_sentence(
     assert texts(h.start(c, View(None, m), int(1.2 * SEC))) == []  # consultando
     kind, kw = a.calls[0]
     assert kind == "distancia"
-    assert kw["objects"] == ["taza: a 1,1 metros; al frente; a la altura de tu pecho"]
+    assert kw["objects"] == [
+        "taza: a 1,1 metros (medida precisa); al frente; a la altura de tu pecho"
+    ]
     says, done = h.tick(c, View(None, m), int(1.8 * SEC))
     assert texts(says) == ["Tenés una taza blanca sobre un taburete, a 1,1 metros, al frente."]
     assert done
