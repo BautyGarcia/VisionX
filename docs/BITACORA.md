@@ -40,10 +40,58 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-18 — T12: modo continuo, clásico acumulado y descalibración real
+
+**Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-continuo-y-descalibracion`
+(local al escribir esto). Sigue a la entrada de abajo, integrada en el PR #32.
+
+**Objetivo.** Cerrar tres pendientes de la compuerta: cuánto erra el modo continuo, si el
+clásico mejora juntando puntos de varios pares y qué pasa con una descalibración real.
+
+**Hecho (código).** En `crestereo_adapt`: comandos `coherencia` (continuo contra preciso por
+rango de distancia) y `descalibracion` (clásico sobre pares reales, con el damero como control);
+`robustez` suma el clásico acumulado y lee pares repartidos sin cargar el clip entero; la
+homografía de corrección gira alrededor del centro del ojo derecho (`cx + doffs`). Un test nuevo.
+
+**Evidencia.** Misma Mac y calibración que la entrada de abajo. `uv run --extra ml pytest`: 680
+aprobados; `ruff` correcto. Artefactos en `outputs/profundidad/20261118-23*`. Tablas en
+[TECNICO](TECNICO.md#compuerta-lo-medido-el-1811).
+- **Continuo contra preciso** (`dev-1114-escenas`, 72 pares en 6 tramos): mediana por píxel de
+  6,2 / 6,3 / 2,8 / 3,7 % en 0,5–1 / 1–2 / 2–3 / 3–6 m; 960×540 en frío, 2,8 / 2,2 / 1,7 / 2,2 %.
+- **Robustez con escenas variadas** (8 pares del mismo clip): roll 0,25° → sin corregir 7,2 %,
+  clásico de un par 4,2 %, clásico acumulado 2,5 %, corrección exacta 0,35 %. El acumulado queda
+  entre 2 y 4 % en casi todos los niveles; el techo, entre 0,25 y 0,43 %.
+- **Descalibración real** (pares del 09/11 con la calibración del 04/11, tablero de 28 mm):
+  con el precinto, filas del damero de 1,7–3,0 px a menos de 1 px; escala de −2,2/−5,4 % a
+  −2,0/−5,2 % sin estimar yaw y a −3,2/+1,0 % estimándolo. Con el precinto suelto, escala de
+  −3,0/−4,4 % a −0,5/−1,0 % con yaw (+0,11° estimado). Control en la sesión sana s3 (38 pares):
+  la escala mediana pasa de −0,03 % a −0,96 % al estimar yaw.
+
+**Qué cambia.**
+- **El continuo sirve para guiar, no para anunciar metros.** Los metros salen del preciso.
+- **El arranque en caliente no es gratis** con la cámara en movimiento: en 1–2 m da 6,3 % contra
+  3,5 % en frío. Queda por decidir si se usa siempre o solo con la cámara quieta.
+- **Corrige la entrada del 09/11.** Ahí se dio la cámara por recuperada al soltar el precinto
+  porque el desvío vertical volvió a ~0,2 px. La escala seguía en −3 a −4 %: las filas no
+  alcanzan para saber si los metros están bien.
+- **El yaw sí se puede estimar en esta lente**, al revés de lo que suponía la nota, pero con un
+  sesgo de ~0,04° que no aparece en su incertidumbre calculada.
+- **El clásico, aun acumulado, queda diez veces por encima del techo** y con errores chicos
+  empeora lo que había. Ese es el margen que tiene que ganar la red de alineación.
+
+**Límites.** Un clip y un día. La comparación del continuo es por píxel y contra el preciso, no
+contra metros reales ni por objeto. Descalibración real: 3 y 5 pares, y el control usa las fotos
+con las que se hizo esa calibración. El clásico no está ajustado (media resolución, parámetros
+por defecto). Sigue sin existir la regla que decide cuándo aplicar una corrección.
+
+**Próximo paso (Bauty / Claude Code).** Regla de cuándo corregir y clásico ajustado como
+comparador final; generador de etapa 2; red de alineación (22–26/11). Bauty: sesión `s1` del
+banco y pares con distancia medida y la cámara apretada a propósito.
+
 ## 2026-11-18 — T12: compuerta de CREStereo (wrapper, latencia, cinta y robustez)
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-compuerta-crestereo`
-(local, sin commit ni PR al escribir esto).
+(PR #32, integrado).
 
 **Objetivo.** Decidir si CREStereo congelado queda como estéreo de base: que corra en la Mac,
 cuánto tarda, cuánto erra en metros y cuánto lo daña una desalineación.

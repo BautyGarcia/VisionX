@@ -82,9 +82,18 @@ class Correction:
 
 
 def camera_matrix(geometry: StereoGeometry) -> np.ndarray:
-    """K del ojo derecho rectificado. Ignora doffs: el corrimiento del centro no cambia giros."""
+    """K del ojo derecho rectificado.
+
+    Los dos ojos rectificados comparten focal y fila del centro. La columna del centro del
+    derecho es `cx + doffs` (así define `doffs` la geometría). En la ELP `doffs` vale menos de
+    un píxel y casi no cambia nada; en cámaras con los centros muy corridos sí importa.
+    """
     return np.array(
-        [[geometry.fx, 0.0, geometry.cx], [0.0, geometry.fy, geometry.cy], [0.0, 0.0, 1.0]],
+        [
+            [geometry.fx, 0.0, geometry.cx + geometry.doffs],
+            [0.0, geometry.fy, geometry.cy],
+            [0.0, 0.0, 1.0],
+        ],
         dtype=np.float64,
     )
 
