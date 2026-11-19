@@ -6,6 +6,9 @@
 2. [TECNICO](docs/TECNICO.md): sección del componente, entradas/salidas y pruebas previstas.
 3. [BITACORA](docs/BITACORA.md): últimas entradas, bloqueos y cambios de decisión.
 4. `git status` y `git diff`; leer `TRASPASO.md` si existe. No tocar cambios ajenos.
+5. Para instalar y correr la app en vivo en la Mac (ELP, voz, asistente, CREStereo):
+   [PRUEBA-EN-VIVO](docs/PRUEBA-EN-VIVO.md). La key de Claude de VisionX va en
+   `~/.visionx/anthropic_api_key`, **nunca** como `ANTHROPIC_API_KEY`.
 
 **Leer un plan no autoriza implementarlo.** Respetar el pedido concreto de la persona:
 planificación = documentación; implementación = código del alcance solicitado.
