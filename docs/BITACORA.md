@@ -66,6 +66,23 @@ y la app respondió «No reconozco maus».
 **Próximo paso.** Bauty: repetir «¿a qué distancia está…?» con `--traza`; en `latencias` no
 tendría que haber frases `vencido` del pedido después de la primera que sonó.
 
+## 2026-11-19 (noche) — T08: la frase de distancia se cortaba antes de los metros; vigencia a 25 s
+
+Tarea: T08. Persona/agente: Bauty (vivo en la Mac) / Claude Code. Rama: `a/vigencia-distancia`.
+Problema: en vivo, «¿a qué distancia está…?» decía la frase de Claude y se cortaba justo antes
+del número.
+Causa (traza `outputs/beta/voz-cortes.jsonl`, request 3): no son cortes de audio (0 de 7 frases
+con `cortes`). Es la vigencia: `deadlines_s.distance: 10` cuenta desde que Whisper termina, y
+`Controller.tick()` cancela el audio que está sonando al vencer. Claude tuvo el texto a +3,1 s,
+la síntesis de la frase nueva tardó 2,7 s y empezó a sonar a +5,8 s; a +10 s se cortó en «…con
+remera bordó y auriculares, a», antes de «1,6 metros». Lo mismo pasó en el vivo de C0 (la frase
+de distancia figura `cancelado`).
+Hecho: `audio.deadlines_s.distance` de 10 a 25 s en `configs/default.yaml`. Tests de app, modos,
+voz, audio y lectura pasan.
+Límites: es un parche de tiempo. Lo de fondo es de Tomás: que vencer impida empezar una frase
+vieja pero no corte una que ya suena, y que Claude diga los metros primero. Sin repetir en vivo.
+Otro hallazgo: Whisper transcribió «mouse» como «maus» y la app respondió «No reconozco maus».
+
 ## 2026-11-19 (noche) — T08: Whisper en la GPU de la Mac y la respuesta de Claude por tramos
 
 **Tareas:** T08, T11. **Persona/agente:** Tomás (pedido) / Claude Code. **Rama:**
