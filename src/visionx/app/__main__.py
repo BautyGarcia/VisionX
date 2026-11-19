@@ -365,7 +365,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         p.add_argument("--detector", choices=["fake", "yolo"], default="fake")
         p.add_argument(
-            "--profundidad", default="fake", help="fake, ninguna, B0–B5, fusion o depth.estimadores"
+            "--profundidad",
+            default="fake",
+            help="fake, ninguna, B0–B5, fusion, crestereo o depth.estimadores",
         )
         p.add_argument("--fps", type=float, default=30.0, help="ritmo de la fuente sintética")
         p.add_argument("--frames", type=int, default=0, help="cortar la fuente tras N frames")
@@ -378,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--profundidad-precisa",
         default=None,
-        help="B0–B5, fusion, nombre de depth.estimadores o ninguna (default config)",
+        help="B0–B5, fusion, crestereo-preciso, depth.estimadores o ninguna (default config)",
     )
     p.add_argument("--segundos", type=float, default=0.0, help="0 = hasta q o fin de la fuente")
     p.add_argument("--sin-ventana", action="store_true")

@@ -9,9 +9,15 @@ from visionx.shared.errors import InvalidInput
 from visionx.shared.geometry import StereoGeometry
 from visionx.shared.interfaces import DepthEstimator
 
+# CREStereo congelado de A (T12, `depth.crestereo`): nombre en la app -> sección de la config.
+CRESTEREO = {"crestereo": "continuo", "crestereo-preciso": "preciso"}
+
 
 def build_estimator(name: str, cfg: dict[str, Any], geometry: StereoGeometry) -> DepthEstimator:
-    """Armar B0–B5, Fusion o una entrada de ``depth.estimadores``.
+    """Armar B0–B5, Fusion, CREStereo o una entrada de ``depth.estimadores``.
+
+    ``crestereo`` y ``crestereo-preciso`` arman CREStereo de A con ``load_estimator`` y la
+    config completa (secciones ``continuo`` y ``preciso`` de ``depth.crestereo``).
 
     ``fusion`` arma el paquete de ``depth.fusion.paquete`` con ``load_estimator`` de A
     (config completa). Una entrada ``{tipo: fusion, paquete: carpeta}`` arma otro paquete
@@ -53,9 +59,12 @@ def build_estimator(name: str, cfg: dict[str, Any], geometry: StereoGeometry) ->
     registry = dcfg.get("estimadores") or {}
     if name == "fusion" and name not in registry:
         return _fusion(name, cfg, geometry, None)
+    if name in CRESTEREO and name not in registry:
+        return _crestereo(name, cfg, geometry, CRESTEREO[name])
     if name not in registry:
         raise InvalidInput(
-            f"estimador de profundidad desconocido {name!r}; use B0–B5, fusion o depth.estimadores"
+            f"estimador de profundidad desconocido {name!r}; "
+            "use B0–B5, fusion, crestereo, crestereo-preciso o depth.estimadores"
         )
     entry = registry[name]
     if not isinstance(entry, dict):
@@ -95,3 +104,14 @@ def _fusion(
         return load_estimator(cfg, geometry, package=package or None)
     except (FileNotFoundError, KeyError, ValueError) as exc:
         raise InvalidInput(f"{name}: no se pudo cargar el paquete de Fusion: {exc}") from exc
+
+
+def _crestereo(name: str, cfg: dict[str, Any], geometry: StereoGeometry, mode: str):
+    """CREStereo de A. Sin código o pesos bajados, A levanta EstimatorError con cómo bajarlos."""
+    try:
+        from visionx.depth.crestereo_adapt.estimator import load_estimator
+    except ImportError as exc:
+        raise InvalidInput(f"{name}: CREStereo necesita el extra ml ({exc})") from exc
+    if "crestereo" not in (cfg.get("depth") or {}):
+        raise InvalidInput(f"{name}: falta la sección depth.crestereo de la config")
+    return load_estimator(cfg, geometry, mode)

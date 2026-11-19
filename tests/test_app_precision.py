@@ -451,6 +451,28 @@ def test_registry_fusion_goes_to_a_loader_with_full_config(monkeypatch, setup_pr
     ]
 
 
+def test_registry_crestereo_goes_to_a_loader_with_full_config(monkeypatch, setup_precision):
+    calls = []
+
+    def load_estimator(cfg, geometry, mode="continuo"):
+        calls.append((cfg, geometry, mode))
+        return FakeDepthEstimator(geometry)
+
+    module = ModuleType("visionx.depth.crestereo_adapt.estimator")
+    module.load_estimator = load_estimator
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    geometry = setup_precision.source.geometry
+    cfg = {"depth": {"crestereo": {}}}
+    build_estimator("crestereo", cfg, geometry)
+    build_estimator("crestereo-preciso", cfg, geometry)
+    assert [(c is cfg, g is geometry, m) for c, g, m in calls] == [
+        (True, True, "continuo"),
+        (True, True, "preciso"),
+    ]
+    with pytest.raises(InvalidInput, match="depth.crestereo"):
+        build_estimator("crestereo", {"depth": {}}, geometry)
+
+
 def test_registry_fusion_without_package_is_invalid(setup_precision):
     pytest.importorskip("torch")
     from visionx.shared.config import load_config

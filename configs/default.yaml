@@ -17,7 +17,7 @@ camera:
 depth:
   compute: [1280, 720]      # resolución por ojo para profundidad
   precisa:
-    estimador: ninguna     # --profundidad-precisa: B0–B5, fusion o depth.estimadores
+    estimador: ninguna     # --profundidad-precisa: B0–B5, fusion, crestereo-preciso o depth.estimadores
     espera_s: 2.0          # margen sobre B4 CPU ~1,1 s; limitada por la vigencia de la orden
     compute: null          # null hereda depth.compute; override solo para la precisa, [ancho, alto]
   estimadores: {}           # nombre: {fabrica: "paquete.modulo:funcion", parámetros libres...}
