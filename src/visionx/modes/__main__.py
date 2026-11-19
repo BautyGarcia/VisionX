@@ -25,6 +25,7 @@ from types import SimpleNamespace
 
 import yaml
 
+from visionx.app.camera_status import CameraStatus, CameraStatusSettings
 from visionx.app.controller import Controller
 from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
 from visionx.modes import build_handlers
@@ -102,6 +103,7 @@ def cmd_simular(args: argparse.Namespace) -> int:
             deadlines_s=deadlines,
             clock=clock,
             on_event=on_event,
+            watchers=[CameraStatus(CameraStatusSettings.from_config(cfg))],
         )
 
     # Capturas del frame que respalda lo dicho, no del frame actual de la cámara: detector
@@ -228,6 +230,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
             deadlines_s=deadlines,
             clock=clock,
             on_event=on_event,
+            watchers=[CameraStatus(CameraStatusSettings.from_config(cfg))],
         )
         return holder["controller"]
 

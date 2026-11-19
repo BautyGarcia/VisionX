@@ -257,6 +257,18 @@ describe:
   wait_measure_s: 4.0       # s; permite segunda observación en ir_lavadero (~3.3 s con estas latencias)
   large_area_fraction: 0.1  # fracción de imagen ocupada por la caja; desempata relevancia sin inferir tamaño real
 
+camera_status:
+  # Estado global de la cámara que manda el estimador (T12 CREStereo adaptable, acordado con Bauty
+  # el 18/11): DepthResult UNMEASURABLE con reason "<código>" o "<código>: detalle". La app dice la
+  # frase una vez si el estado dura hold_s, la recuerda cada repeat_s (0 = nunca) y avisa al volver.
+  frases:
+    alineando: Estoy ajustando la cámara. Esperá un momento para pedirme distancias.
+    camara-desconocida: No reconozco esta cámara. Puedo decirte dónde están las cosas, pero no a cuántos metros.
+    no-medible: Ahora no puedo medir distancias con esta cámara.
+  lista: Listo, ya puedo medir distancias.
+  hold_s: 1.0
+  repeat_s: 60.0
+
 calibration:
   board: charuco
   squares: [11, 8]

@@ -40,6 +40,24 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-18 — T07: la app dice el estado de la cámara que mande CREStereo adaptable
+
+**Tareas:** T07 (para T12). **Persona/agente:** Tomás / Claude Code. **Rama:** `b/beta-integracion`.
+
+**Acordado con Bauty (18/11).** El estimador avisa el estado global de la cámara en cada
+`DepthResult` con `status=UNMEASURABLE` y `reason` = `alineando` | `camara-desconocida` |
+`no-medible`, opcionalmente seguido de «: detalle». Sin cambios de contrato.
+
+**Hecho.** `app/camera_status.py`: observador del controlador que dice la frase de
+`camera_status.frases` cuando el estado dura `hold_s` (1 s), la recuerda cada `repeat_s` (60 s)
+y dice «Listo, ya puedo medir distancias.» al volver a medir. Habla con un `request_id` propio:
+no corta ni vence con la orden activa; «repetí» lo repite. Conectado en `ejecutar` y en las
+demos. Con B0 (siempre VALID) no dice nada. Tests: 8 nuevos, suite 1040 OK.
+
+**Límites.** Sin estimador real que mande los códigos: probado con resultados sintéticos.
+Pendiente del mismo acuerdo: «no estoy seguro» por objeto (umbral de Bauty en el locator),
+«calibrar distancia» (método opcional del estimador) y el par crudo para la etapa 2.
+
 ## 2026-11-18 — T08: voz de la app pasa a Mateo (Edge) con Piper de respaldo
 
 **Tarea:** T08. **Persona/agente:** Tomás (elección) / Claude Code. **Rama:** `b/beta-integracion` (PR #27).

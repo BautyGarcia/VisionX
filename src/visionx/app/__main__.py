@@ -31,6 +31,7 @@ from typing import Any
 import numpy as np
 import yaml
 
+from visionx.app.camera_status import CameraStatus, CameraStatusSettings
 from visionx.app.controller import Controller
 from visionx.app.dashboard import DashboardState, render
 from visionx.app.depth_registry import build_estimator
@@ -210,6 +211,7 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
         ),
         deadlines_s={str(k): float(v) for k, v in (voice_cfg.get("deadlines_s") or {}).items()},
         on_event=on_event,
+        watchers=[CameraStatus(CameraStatusSettings.from_config(cfg))],
     )
     script = load_script(args.ordenes)
     range_m = tuple((cfg.get("depth") or {}).get("range_m", [0.5, 3.0]))

@@ -80,8 +80,12 @@ class Controller:
         deadlines_s: dict[str, float] | None = None,
         clock: Clock | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        watchers: list[Any] | None = None,
     ) -> None:
         self.parser = parser
+        # Observadores fuera de las órdenes (p. ej. app.camera_status): observe(view, now) ->
+        # list[Say]. Hablan con un request_id propio: no cortan ni vencen con el modo activo.
+        self.watchers = list(watchers or [])
         self.output = output
         self.latest_view = latest_view
         self.handlers = handlers or {}
@@ -243,6 +247,11 @@ class Controller:
                 observe = getattr(observer, "observe", None)
                 if observe is not None:
                     observe(view, now)
+            for watcher in self.watchers:
+                for say in watcher.observe(view, now):
+                    request_id = self._new_id()
+                    self._on_event("aviso", {"request_id": request_id, "texto": say.text_or_sound})
+                    self._say(say, request_id, now)
             command = self.active
             if command is None:
                 return
