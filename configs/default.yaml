@@ -101,6 +101,30 @@ depth:
       gradient_gain: 0.25     # Sobel 3x3 del gris/255 por esta ganancia, tope 1
     paquete: ""               # carpeta de un paquete (outputs/fusion/paquetes/<nombre>); vacío = sin Fusion
     cache_root: data/cache/fusion   # ingredientes por muestra (estéreo, monocular, alineación); fuera de Git
+  # CREStereo adaptable (T12 desde el 18/11, src/visionx/depth/crestereo_adapt/). CREStereo
+  # preentrenado y CONGELADO: no se le cambia ningún peso. Código y pesos se bajan una vez con
+  # `scripts/profundidad/descargar_crestereo.py`; quedan fuera de Git (el port no tiene licencia).
+  crestereo:
+    port_dir: third_party/crestereo
+    port_commit: b6c7a9fe8dc2e9e56ba7b96f4677312309282d15   # ibaiGorordo/CREStereo-Pytorch
+    weights: weights/crestereo/crestereo_eth3d.pth
+    weights_sha256: 2271ab615015a73edd4759b0f7b25a4d82ffb654270b92d3811237da3d63aa6d
+    device: auto              # auto | mps | cuda | cpu
+    max_disp: 256             # el que usa el script de prueba del port; no cambia los pesos
+    # Dos modos. Valores PROVISORIOS hasta cerrar la tabla de latencia M9 (compuerta de T12).
+    continuo:                 # cuadro a cuadro: buscar y guiar
+      compute: [640, 360]     # por ojo; adentro se rellena a múltiplos de 16 y se recorta
+      iters: 4
+      passes: 2               # 1: una pasada | 2: media resolución y después completa. Solo pesa
+                              # en los cuadros en frío, y ahí cuesta lo mismo que una pasada
+      warm_start: true        # parte de la disparidad del cuadro anterior
+      warm_reset_every: 30    # cada tantos cuadros vuelve a arrancar en frío
+    preciso:                  # a pedido, sobre un par congelado: distancia
+      compute: [1280, 720]
+      iters: 4                # 4 con dos pasadas mide como 10 en cinta-s7 y tarda menos de la mitad
+      passes: 2
+      warm_start: false
+      warm_reset_every: 0
 
 detection:
   # yolo26s + 960 px (BITACORA T09 mejoras): en clips ELP detecta la taza blanca a 1 m y el bolso
