@@ -9,11 +9,13 @@ from typing import Any
 
 from visionx.app.controller import Say
 from visionx.app.runtime import View
+from visionx.assistant import Delivery
 from visionx.modes.common import ModeSettings, closing_due, closing_text, speech_s
 from visionx.reading import RapidReader, ReadingSettings, TextReader, reading_order
 from visionx.reading.core import framing_hint, spoken_chunks
 from visionx.reading.worker import ReadingWorker, ReadJob
 from visionx.shared.contracts import Command, Priority, StereoFrame
+from visionx.voice.commands import READ_ALL
 
 
 class ReadHandler:
@@ -25,8 +27,15 @@ class ReadHandler:
         *,
         prewarm: bool = False,
         mode_settings: ModeSettings | None = None,
+        assistant: Any = None,
     ) -> None:
         self.s = settings or ReadingSettings()
+        # Asistente (Claude): con el OCR de la imagen elegida dice qué es el objeto y lo más
+        # importante que dice («Adelante tenés una caja de TITA…»). «Leé todo» y cualquier falla
+        # del asistente usan la lectura por bloques de siempre.
+        self.assistant = assistant
+        self._delivery: Any = None
+        self._fallback: list[str] = []
         self._timing = replace(
             mode_settings or ModeSettings(),
             speech_base_s=self.s.speech_base_s,
@@ -67,6 +76,9 @@ class ReadHandler:
         if self._job is not None:
             self._job.cancelled.set()
         self._chunks.clear()
+        if self._delivery is not None:
+            self._delivery.job.cancel()
+            self._delivery = None
 
     def close(self) -> None:
         self.cancel()
@@ -80,6 +92,8 @@ class ReadHandler:
         if command.deadline_ns is not None and now_ns >= command.deadline_ns:
             self.cancel()
             return [], True
+        if self._delivery is not None:
+            return self._deliver(command, now_ns)
         closing = closing_text(
             command,
             command.issued_ns,
@@ -119,6 +133,26 @@ class ReadHandler:
                     "modelo": self.reader.model_id,
                 },
             )
+            if (
+                command.target != READ_ALL
+                and self.assistant is not None
+                and self.assistant.available
+                and job.selected_image is not None
+            ):
+                lines = [b.text for b in ordered]
+                fallback = spoken_chunks(ordered, self.s) if ordered else []
+                if not ordered:
+                    hint = (
+                        framing_hint(raw, job.selected_shape, self.s) if job.selected_shape else ""
+                    )
+                    fallback = ["No encuentro texto." + (f" {hint}" if hint else "")]
+                kind = "leer"
+                ajob = self.assistant.submit(job.request_id, kind, job.selected_image, ocr=lines)
+                self._delivery = Delivery(ajob, now_ns)
+                self._fallback = fallback
+                self._event("asistente-pedido", {"request_id": job.request_id, "tipo": kind,
+                                                 "ocr": lines})  # fmt: skip
+                return [], False
             if not ordered:
                 hint = framing_hint(raw, job.selected_shape, self.s) if job.selected_shape else ""
                 return self._finish(
@@ -156,6 +190,37 @@ class ReadHandler:
             (self.s.speech_base_s + len(text) * self.s.speech_s_per_char) * 1e9
         )
         return [Say(text, Priority.LONG)], False
+
+    def _deliver(self, command: Command, now_ns: int) -> tuple[list[Say], bool]:
+        d = self._delivery
+        if d.failed:
+            # Sin asistente (red, tope de gasto): lectura por bloques de siempre.
+            self._delivery = None
+            self._event("asistente-error", {"request_id": d.job.request_id, "error": d.job.error})
+            self._chunks.extend(self._fallback)
+            if not self._chunks:
+                return self._finish("No pude leer. Probá de nuevo.", command, now_ns)
+            return [], False
+        says = [Say(s, Priority.LONG) for s in d.ready(now_ns)]
+        if d.finished:
+            self._delivery = None
+            job = d.job
+            self._event(
+                "asistente-respuesta",
+                {
+                    "request_id": job.request_id,
+                    "tipo": job.kind,
+                    "texto": job.text,
+                    "primer_texto_s": job.first_s,
+                    "total_s": job.total_s,
+                    "usd": job.usd,
+                    "citas_no_confirmadas": job.unconfirmed_quotes,
+                    "ocr": job.ocr,
+                    "error": job.error,
+                },
+            )
+            return says, True
+        return says, False
 
     def _finish(self, text: str, command: Command, now_ns: int) -> tuple[list[Say], bool]:
         closing = closing_text(

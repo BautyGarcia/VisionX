@@ -20,6 +20,16 @@ from visionx.shared.contracts import Command, FrameKey, Mode
 
 CANCEL = "cancelar"
 REPEAT = "repetir"
+READ_ALL = "todo"  # «leé todo»: lectura completa por bloques, sin resumir
+# Preguntas (con asistente): empiezan con interrogativo; «¿qué dice?» sola sigue siendo leer.
+_QUESTION_START = re.compile(
+    r"^(y )?(que|cual|cuales|cuando|cuanto|cuanta|cuantos|cuantas|como|donde|quien|para que|"
+    r"hay|es|esta|tiene|sirve|me sirve)( |$)"
+)
+_READ_ONLY = re.compile(
+    r"^(y )?(que (mas )?dice|que dicen|que pone|que esta escrito)"
+    r"( (aca|esto|eso|ahi|(la|el|esta|este|lo) \w+))?$"
+)
 # Opciones de elección entre varios objetos iguales (las usa T09).
 CHOICES = ("izquierda", "derecha", "centro", "cerca")
 
@@ -153,8 +163,11 @@ class CommandParser:
     """Interpreta frases en español con reglas fijas. No tiene estado: la misma frase da
     siempre la misma interpretación."""
 
-    def __init__(self, catalog: ObjectResolver) -> None:
+    def __init__(self, catalog: ObjectResolver, *, questions: bool = False) -> None:
         self.catalog = catalog
+        # Con el asistente (Claude) disponible, lo que no es una orden es una pregunta libre
+        # sobre lo que la cámara tiene adelante: Mode.DESCRIBE con la frase como objetivo.
+        self.questions = questions
 
     def parse(self, utterance: str) -> Interpretation:
         text = clean(utterance)
@@ -163,7 +176,9 @@ class CommandParser:
             return Interpretation(utterance, None, None, "vacio", "No escuché nada.")
 
         # Cancelar va primero: tiene que funcionar aunque la frase siga ("pará, pará").
-        if words[0] in _CANCEL_WORDS:
+        # «¿Para qué sirve?» es una pregunta, no «pará» (solo con el asistente).
+        asks_why = self.questions and words[:2] == ["para", "que"] and len(words) >= 3
+        if words[0] in _CANCEL_WORDS and not asks_why:
             return Interpretation(utterance, Mode.CONTROL, CANCEL, "cancelar")
         if _REPEAT.search(text):
             return Interpretation(utterance, Mode.CONTROL, REPEAT, "repetir")
@@ -183,6 +198,11 @@ class CommandParser:
             # Sin objeto es válido: la distancia del objeto que se está guiando o del centro.
             return Interpretation(utterance, Mode.DISTANCE, cls, "distancia")
         if _READ.search(text):
+            if self.questions and "todo" in words:
+                return Interpretation(utterance, Mode.READ, READ_ALL, "leer-todo")
+            if self.questions and _QUESTION_START.match(text) and not _READ_ONLY.search(text):
+                # «¿Cuándo vence lo que dice acá?»: pregunta sobre el texto, no «leé».
+                return Interpretation(utterance, Mode.DESCRIBE, utterance.strip(), "pregunta")
             return Interpretation(utterance, Mode.READ, None, "leer")
         if _DESCRIBE.search(text):
             return Interpretation(utterance, Mode.DESCRIBE, None, "describir")
@@ -190,6 +210,9 @@ class CommandParser:
             cls = find_object(text, self.catalog)
             if cls is not None:
                 return Interpretation(utterance, Mode.SEARCH, cls, "buscar")
+            if self.questions and _QUESTION_START.match(text):
+                # «¿Hay algún lugar para sentarme?»: sin objeto del catálogo es una pregunta.
+                return Interpretation(utterance, Mode.DESCRIBE, utterance.strip(), "pregunta")
             wanted = " ".join(_object_words(text))
             reply = (
                 f"No sé buscar {wanted}. Puedo buscar objetos como taza, botella o celular."
@@ -206,6 +229,8 @@ class CommandParser:
         cls = self.catalog.resolve(text)
         if cls is not None:
             return Interpretation(utterance, Mode.SEARCH, cls, "solo-objeto")
+        if self.questions and len(words) >= 2:
+            return Interpretation(utterance, Mode.DESCRIBE, utterance.strip(), "pregunta")
         return Interpretation(
             utterance,
             None,
@@ -232,6 +257,8 @@ def acknowledgement(interp: Interpretation, catalog: ObjectResolver) -> str | No
     if not interp.ok:
         return interp.reply
     name = catalog.spoken(interp.target) if interp.target else None
+    if interp.rule == "pregunta":
+        return "sonido:ok"  # la respuesta ya arranca en ~1 s: no hacerla esperar con palabras
     match interp.mode:
         case Mode.SEARCH:
             return f"Busco {name}."

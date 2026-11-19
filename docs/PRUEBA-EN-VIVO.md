@@ -1,0 +1,94 @@
+# Prueba en vivo de los 4 modos en la Mac (19/11)
+
+Guía para probar la beta con la ELP, voz y el asistente en la Mac de Bauty (M2 Max). Todo se
+corre desde la raíz del repo, en la rama `b/beta-integracion` (PR #27) hasta que se mergee.
+Resultados y trazas van a `outputs/beta/<fecha>/`; lo medido se anota en BITACORA.
+
+## 1. Preparar (una vez, ~15 min)
+
+```bash
+git fetch origin && git switch b/beta-integracion && git pull
+uv sync --locked --extra ml --extra deteccion --extra voz --extra ocr --extra ia
+uv run python -m visionx.voice descargar --voz es_ES-davefx-medium --whisper small
+uv run python -m visionx.detection descargar --modelo yolo26s-seg
+uv run python -m visionx.reading descargar
+uv run python scripts/profundidad/descargar_crestereo.py      # solo si se prueba CREStereo
+```
+
+**API key de Claude** (leer, describir y preguntas libres). Sin ella la app funciona igual, con
+la lectura y la descripción locales de antes. En `~/.zshrc`, no en el repo:
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+Abrir una terminal nueva después. Cada consulta cuesta ~0,5 centavos de dólar (Sonnet 5.5) y
+queda anotada en `outputs/vlm/gasto.jsonl`; con 5 USD anotados la app deja de consultar
+(`assistant.budget_usd`).
+
+**Caché de voz (Mateo).** La voz necesita internet; las frases frecuentes ya generadas salen al
+instante y también sin red. Copiar la carpeta `voz-cache` de Drive
+(`VisionX-artefactos/voz/cache-mateo/`) a `data/cache/voz/` (debe quedar
+`data/cache/voz/edge_es-UY-MateoNeural/v1/*.npy`). O generarla en la Mac (~5 min, con red):
+`uv run python -m visionx.voice precalentar`.
+
+**`configs/local.yaml`** de la Mac (ignorado por Git):
+
+```yaml
+camera:
+  device: 0            # el índice de la ELP (`uv run python -m visionx.camera modos`)
+audio:
+  input_device: null   # micrófono por defecto; con AirPods, ver `python -m visionx.voice dispositivos`
+  output_device: null
+```
+
+## 2. Comprobaciones rápidas (5 min)
+
+| Qué | Comando | Pasa si |
+|---|---|---|
+| Voz Mateo | `uv run python -m visionx.voice decir "Busco la taza."` | Suena Mateo; la 2.ª vez «síntesis ~1 ms» |
+| Sin red | Apagar el wifi y repetir con otra frase | Habla Piper (davefx); no se cuelga |
+| Asistente | `ejecutar` imprime `asistente: claude-sonnet-5-5` al arrancar | Si dice «apagado», falta la key o el extra `ia` |
+| Cámara | `uv run python -m visionx.camera ver --config configs/local.yaml` | Ojo izquierdo a la izquierda |
+
+## 3. Correr la app
+
+```bash
+uv run python -m visionx.app ejecutar --fuente usb --detector yolo --profundidad B0 \
+  --profundidad-precisa crestereo-preciso --voz --config configs/local.yaml \
+  --traza outputs/beta/1119/vivo-1.jsonl
+```
+
+Si CREStereo no carga o tarda demasiado, usar `--profundidad-precisa B0`. Con la ventana en
+foco: **espacio** = hablar / terminar de hablar, **c** = cancelar, **q** = salir. Auriculares
+puestos (sin parlantes: el micrófono escucharía a la app).
+
+## 4. Qué probar y qué anotar
+
+Anotar por prueba: OK / falla, qué dijo, y el tiempo percibido entre soltar el espacio y la
+primera palabra.
+
+| Modo | Decí | Pasa si |
+|---|---|---|
+| Buscar | «Buscá la taza» (fuera de cuadro), girar despacio hasta encontrarla y acercarse | Bip al verla; «Taza a la izquierda.» y después frases cortas («Un poco a la izquierda.», «Al frente, a 1,2 metros.»); «Llegaste» |
+| Buscar rápido | Con la taza guiada, girar rápido de un lado al otro | La frase vieja se corta y suena la del lado correcto, sin atrasarse |
+| Elegir | Dos botellas, «buscá la botella» → «la de la izquierda» | Pregunta cuál y guía a la elegida |
+| Distancia | Objeto a 0,5 / 1 / 2 / 3 m de cinta: «¿a qué distancia está la taza?» | Error ≤ 10 cm hasta 2 m; abstiene ante una pared |
+| Leer | Envase a 25–50 cm: «leé» | «Adelante tenés … que dice …»: objeto + lo importante. Comillas = texto confirmado por el OCR |
+| Leer todo | «leé todo» | Lectura completa por bloques (sin asistente) |
+| Describir | «describí» / «¿qué hay adelante?» | Frases naturales, sin objetos inventados; metros solo de lo medido |
+| Pregunta | «¿para qué sirve este remedio?», «¿cuándo vence?», «¿de qué color es la taza?», «¿hay algún lugar para sentarme?» | Responde sobre lo que se ve; si no se lee, pide acercar |
+| Seguimiento | Después de leer: «¿y qué más dice?» | Sigue con el mismo objeto (memoria ~2 min) |
+| Control | «cancelar» a mitad de una respuesta; «repetí»; orden nueva a mitad de otra | Corta enseguida; repite; la nueva reemplaza a la vieja |
+| Sin red | Apagar el wifi y pedir «leé» y «describí» | Lee/describe con la versión local; las preguntas dicen que no hay conexión |
+
+Al terminar, subir `outputs/beta/1119/` y `outputs/vlm/gasto.jsonl` a Drive
+`VisionX-artefactos/beta/1119/`.
+
+## 5. Problemas conocidos
+
+- La primera vez que Mateo dice una frase nueva tarda ~1–2 s (red). Lo frecuente está en la caché.
+- El asistente necesita red. Con el wifi del lugar inestable, tener el hotspot del teléfono.
+- Latencias de la Mac sin medir con el asistente: medirlas es parte de esta prueba.
+- `scripts/profundidad/descargar_crestereo.py` falla en Windows al borrar `.git` (archivos de solo
+  lectura); en la Mac no pasa. En Windows: quitar el atributo de solo lectura y borrar `.git` a mano.

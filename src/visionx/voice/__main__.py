@@ -5,6 +5,7 @@
     uv run python -m visionx.voice orden "¿A qué distancia está la taza?"
     uv run python -m visionx.voice frases [tests/fixtures/voz-frases.csv]
     uv run python -m visionx.voice decir "Busco la taza." [--wav salida.wav]
+    uv run python -m visionx.voice precalentar [--hilos 4]   # caché de Edge (Mateo)
     uv run python -m visionx.voice transcribir audio.wav
     uv run python -m visionx.voice bucle [--whisper base small] [--csv X]
     uv run python -m visionx.voice escuchar
@@ -275,6 +276,46 @@ def cmd_escuchar(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_precalentar(args: argparse.Namespace) -> int:
+    """Genera con Edge las frases frecuentes y las deja en la caché en disco (data/cache/voz)."""
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
+    from visionx.shared.config import ROOT
+    from visionx.voice.engines import DiskCachedSynth, EdgeSynth
+    from visionx.voice.warm import frequent_phrases
+
+    cfg = load_config(args.config)
+    s = VoiceSettings.from_config(cfg)
+    phrases = frequent_phrases(cfg, ClassCatalog(COCO_CLASSES).spoken)
+    if args.limite:
+        phrases = phrases[: args.limite]
+    folder = Path(s.tts_cache_dir or "data/cache/voz")
+    folder = folder if folder.is_absolute() else ROOT / folder
+    cache = DiskCachedSynth(EdgeSynth(s), folder)
+    todo = [p for p in phrases if not cache._path(p).is_file()]
+    print(f"{len(phrases)} frases; {len(phrases) - len(todo)} ya en caché; genero {len(todo)}")
+    t0, errors = time.perf_counter(), []
+
+    def one(text: str) -> None:
+        try:
+            DiskCachedSynth(EdgeSynth(s), folder).synthesize(text)
+        except Exception as exc:  # una frase que falla no corta el resto
+            errors.append((text, f"{type(exc).__name__}: {exc}"))
+
+    with ThreadPoolExecutor(max_workers=args.hilos) as pool:
+        for i, _ in enumerate(pool.map(one, todo), 1):
+            if i % 50 == 0:
+                print(f"  {i}/{len(todo)} ({time.perf_counter() - t0:.0f} s)", flush=True)
+    for text, err in errors[:10]:
+        print(f"  error {text!r}: {err}")
+    size = sum(f.stat().st_size for f in cache.folder.glob("*.npy")) / 1e6
+    print(f"listo en {time.perf_counter() - t0:.0f} s: {len(todo) - len(errors)} nuevas, "
+          f"{len(errors)} errores; caché {cache.folder} ({size:.0f} MB)")  # fmt: skip
+    return 1 if errors and len(errors) == len(todo) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m visionx.voice",
@@ -291,6 +332,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--whisper", nargs="+", help="tiny, base, small, medium...")
     p.add_argument("--config")
     p.set_defaults(fn=cmd_descargar)
+
+    p = sub.add_parser("precalentar", help="generar con Edge las frases frecuentes (caché)")
+    p.add_argument("--hilos", type=int, default=4)
+    p.add_argument("--limite", type=int, default=0, help="solo las primeras N (prueba)")
+    p.add_argument("--config")
+    p.set_defaults(fn=cmd_precalentar)
 
     p = sub.add_parser("orden", help="interpretar frases escritas (sin audio)")
     p.add_argument("texto", nargs="+")

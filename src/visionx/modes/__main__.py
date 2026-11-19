@@ -27,6 +27,7 @@ import yaml
 
 from visionx.app.camera_status import CameraStatus, CameraStatusSettings
 from visionx.app.controller import Controller
+from visionx.assistant import build_assistant
 from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
 from visionx.modes import build_handlers
 from visionx.modes.simulate import simulate
@@ -94,12 +95,14 @@ def cmd_simular(args: argparse.Namespace) -> int:
         str(k): float(v) for k, v in ((cfg.get("audio") or {}).get("deadlines_s") or {}).items()
     }
 
+    assistant = build_assistant(cfg)
+
     def make_controller(latest_view, sink, on_event):
         return Controller(
-            CommandParser(catalog),
+            CommandParser(catalog, questions=assistant is not None),
             sink,
             latest_view=latest_view,
-            handlers=build_handlers(cfg, geometry, catalog.spoken, on_event),
+            handlers=build_handlers(cfg, geometry, catalog.spoken, on_event, assistant=assistant),
             deadlines_s=deadlines,
             clock=clock,
             on_event=on_event,
@@ -219,11 +222,15 @@ def cmd_demo(args: argparse.Namespace) -> int:
         str(k): float(v) for k, v in ((cfg.get("audio") or {}).get("deadlines_s") or {}).items()
     }
     holder: dict = {}
+    assistant = build_assistant(cfg)
+    print(f"asistente: {assistant.s.model}" if assistant else "asistente: apagado")
 
     def make_controller(latest_view, sink, on_event):
-        holder["handlers"] = build_handlers(cfg, geometry, catalog.spoken, on_event)
+        holder["handlers"] = build_handlers(
+            cfg, geometry, catalog.spoken, on_event, assistant=assistant
+        )
         holder["controller"] = Controller(
-            CommandParser(catalog),
+            CommandParser(catalog, questions=assistant is not None),
             sink,
             latest_view=latest_view,
             handlers=holder["handlers"],

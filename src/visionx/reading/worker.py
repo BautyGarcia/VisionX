@@ -27,6 +27,7 @@ class ReadJob:
     result: Future = field(default_factory=Future)
     selected_key: object = None
     selected_shape: tuple[int, ...] = ()
+    selected_image: object = None  # la imagen leída: el asistente la mira junto con el OCR
     sharpness: float = -1.0
     early: bool = False
     latest: tuple | None = None
@@ -158,5 +159,6 @@ class ReadingWorker:
                 self._cond.wait(timeout=0.02)
         if job.cancelled.is_set() or self._closed or best is None:
             return []
+        job.selected_image = best
         read_region = getattr(self.reader, "read_region", None)
         return read_region(best, best_box) if read_region else self.reader.read(best)

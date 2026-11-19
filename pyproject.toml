@@ -34,6 +34,9 @@ voz = [
 # OCR T10: RapidOCR actual + ONNX Runtime CPU (Windows/macOS, Python 3.11).
 # Pesos latinos fijados y descargados aparte con `python -m visionx.reading descargar`.
 ocr = ["rapidocr==3.10.0", "onnxruntime>=1.23,<2"]
+ia = [
+    "anthropic>=1.0",
+]
 
 [project.scripts]
 visionx = "visionx.cli:main"

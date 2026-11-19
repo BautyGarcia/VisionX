@@ -202,12 +202,25 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     output, voice = build_output(args, cfg, on_record)
     pipeline = Pipeline(source, detector, depth, spatial, on_event=on_event, precise=precise)
     catalog = ClassCatalog(COCO_CLASSES)
+    from visionx.assistant import build_assistant
+
+    assistant = build_assistant(cfg)
+    print(
+        f"asistente: {assistant.s.model} (necesita internet)"
+        if assistant
+        else "asistente: apagado (sin ANTHROPIC_API_KEY, sin extra ia o tope de gasto)"
+    )
     controller = Controller(
-        CommandParser(catalog),
+        CommandParser(catalog, questions=assistant is not None),
         output,
         latest_view=pipeline.view,
         handlers=build_handlers(
-            cfg, geometry, catalog.spoken, on_event, prewarm_reading=synthetic is None
+            cfg,
+            geometry,
+            catalog.spoken,
+            on_event,
+            prewarm_reading=synthetic is None,
+            assistant=assistant,
         ),
         deadlines_s={str(k): float(v) for k, v in (voice_cfg.get("deadlines_s") or {}).items()},
         on_event=on_event,

@@ -9,6 +9,7 @@ no debe reemplazar el compositor de números/unidades que vive en este módulo.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Literal, Protocol
@@ -24,13 +25,21 @@ from visionx.modes.common import (
     horizontal,
     measure,
     measure_phrase,
+    meters,
     precision_view,
     request_precision,
     speech_s,
 )
 from visionx.modes.target import Target, plural
-from visionx.shared.contracts import Command, FrameKey
+from visionx.shared.contracts import Command, FrameKey, Priority
 from visionx.shared.geometry import StereoGeometry
+
+# Preguntas sobre texto: el asistente corre el OCR antes de consultar (citas verificables).
+_TEXTUAL = re.compile(
+    r"dice|dicen|texto|letra|vence|vencimiento|fecha|precio|marca|dosis|nombre|numero|"
+    r"etiqueta|ingrediente|cuant|cantidad|contiene|capsula|pastilla|comprimido|miligramo|mg\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,8 +226,14 @@ class DescribeHandler:
         describe: DescribeSettings | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         narrator: SceneNarrator | None = None,
+        assistant: Any = None,
     ) -> None:
         self.geometry = geometry
+        # Asistente (Claude): describe en frases naturales y responde preguntas libres
+        # (command.target = la pregunta). Sin él, plantilla local.
+        self.assistant = assistant
+        self._delivery: Any = None
+        self._fallback: list[str] = []
         self.spoken = spoken
         self.s = settings or ModeSettings()
         self.describe = describe or DescribeSettings()
@@ -237,9 +252,115 @@ class DescribeHandler:
         self._answered = False
         self._zones = []
         self._history = {}
+        self._delivery, self._fallback = None, []
+        if command.target:  # pregunta libre
+            return self._ask(command, view, now_ns)
         request_precision(view, command, now_ns, self.s)
         says, _ = self.tick(command, view, now_ns)
         return says
+
+    def cancel(self) -> None:
+        if self._delivery is not None:
+            self._delivery.job.cancel()
+            self._delivery = None
+
+    # -- asistente ---------------------------------------------------------------------------
+
+    def _assistant_ready(self) -> bool:
+        return self.assistant is not None and self.assistant.available
+
+    def _ask(self, command: Command, view: View, now_ns: int) -> list[Say]:
+        question = command.target or ""
+        frame = None
+        recent = (
+            view.original,
+            view.seen.frame if view.seen else None,
+            view.measured.frame if view.measured else None,
+        )
+        for f in recent:
+            if f is not None and now_ns - f.received_ns <= self.s.max_age_s * 2e9:
+                frame = f
+                break
+        if not self._assistant_ready():
+            self._answered = True
+            return [Say("Ahora no puedo responder preguntas: no tengo conexión.")]
+        if frame is None:
+            self._answered = True
+            return [Say("No tengo una imagen reciente para responderte.")]
+        objects = []
+        joint = view.measured
+        if joint is not None and age_s(joint, now_ns) <= self.s.max_measure_age_s:
+            objects = self._measured_objects(joint)
+        job = self.assistant.submit(
+            command.request_id,
+            "pregunta",
+            frame.left,
+            request=question,
+            objects=objects,
+            read_text=bool(_TEXTUAL.search(question)),
+        )
+        self._start_delivery(job, now_ns, [], {"pregunta": question, "objetos": objects})
+        return []
+
+    def _measured_objects(self, joint: Joint) -> list[str]:
+        out = []
+        for c in candidates(joint, None, self.geometry):
+            if c.score < self.describe.min_score:
+                continue
+            where = horizontal(c.angle_h_deg, self.s)
+            m = measure(c.obj, self.s)
+            metres = f", a {meters(m.z_m, self.s)}" if m.ok and m.z_m is not None else ""
+            out.append(f"{self.spoken(c.label)} {where}{metres}")
+        return out[:12]
+
+    def _scene_objects(self, scene: SceneFacts) -> list[str]:
+        z = {m.detection_index: m.z_m for m in scene.measured}
+        out = []
+        for p in scene.presence:
+            metres = f", a {meters(z[p.detection_index], self.s)}" if p.detection_index in z else ""
+            doubt = " (detección dudosa)" if p.confidence != "high" else ""
+            out.append(f"{self.spoken(p.label)} {p.zone}{metres}{doubt}")
+        return out[:12]
+
+    def _start_delivery(self, job: Any, now_ns: int, fallback: list[str], info: dict) -> None:
+        from visionx.assistant import Delivery
+
+        self._delivery, self._fallback = Delivery(job, now_ns), fallback
+        self._on_event("asistente-pedido", {"request_id": job.request_id, "tipo": job.kind, **info})
+
+    def _deliver(self, command: Command, now_ns: int) -> tuple[list[Say], bool]:
+        d = self._delivery
+        if command.deadline_ns is not None and now_ns >= command.deadline_ns:
+            d.job.cancel()
+            self._delivery, self._answered = None, True
+            return [], True
+        if d.failed:
+            self._delivery, self._answered = None, True
+            self._on_event(
+                "asistente-error", {"request_id": d.job.request_id, "error": d.job.error}
+            )
+            fallback = self._fallback or ["No pude responder ahora. Probá de nuevo."]
+            return [Say(p) for p in fallback], True
+        says = [Say(s, Priority.LONG) for s in d.ready(now_ns)]
+        if d.finished:
+            self._delivery, self._answered = None, True
+            job = d.job
+            self._on_event(
+                "asistente-respuesta",
+                {
+                    "request_id": job.request_id,
+                    "tipo": job.kind,
+                    "texto": job.text,
+                    "primer_texto_s": job.first_s,
+                    "total_s": job.total_s,
+                    "usd": job.usd,
+                    "citas_no_confirmadas": job.unconfirmed_quotes,
+                    "ocr": job.ocr,
+                    "error": job.error,
+                },
+            )
+            return says, True
+        return says, False
 
     def _usable(self, joint: Joint | None, command: Command, now_ns: int, age: float) -> bool:
         return (
@@ -249,6 +370,8 @@ class DescribeHandler:
         )
 
     def tick(self, command: Command, view: View, now_ns: int) -> tuple[list[Say], bool]:
+        if self._delivery is not None and command.request_id == self.request_id:
+            return self._deliver(command, now_ns)
         if command.request_id != self.request_id or self._answered:
             return [], True
         if command.deadline_ns is not None and now_ns >= command.deadline_ns:
@@ -470,6 +593,13 @@ class DescribeHandler:
                 reserve=False,
             )
             phrases = [brief] if brief else []
+        if self._assistant_ready():
+            objects = self._scene_objects(self.facts)
+            job = self.assistant.submit(
+                command.request_id, "describir", joint.frame.left, objects=objects
+            )
+            self._start_delivery(job, now_ns, phrases, {"objetos": objects})
+            return [], False
         self._answered = True
         self._event(
             {
