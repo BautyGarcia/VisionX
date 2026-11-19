@@ -82,6 +82,11 @@ class CreStereoMatcher:
         self._previous: Any = None  # flujo del cuadro anterior, en el dispositivo
         self._since_reset = 0
         self.last_stats: dict[str, float] = {}
+        # Subproductos de la última corrida, gratis, que sirven para estimar incertidumbre:
+        #   "vertical"  el canal vertical del flujo (la red lo entrenó hacia cero)
+        #   "half"      la disparidad de la pasada a media resolución, llevada al tamaño final
+        #               (None si esa corrida no tuvo dos pasadas)
+        self.last_extras: dict[str, np.ndarray | None] = {}
 
     def reset(self) -> None:
         """Olvida el cuadro anterior: el próximo par arranca en frío."""
@@ -139,5 +144,13 @@ class CreStereoMatcher:
             self._previous = flow if p.warm_start else None
             # Pasar a NumPy obliga a la GPU a terminar: el tiempo medido afuera es real.
             disparity = flow[0, 0, :h, :w].float().cpu().numpy()
+            vertical = flow[0, 1, :h, :w].float().cpu().numpy()
+            half = None
+            if not warm and init is not None:
+                # La pasada chica mide en sus propios píxeles: al duplicar el tamaño, la
+                # disparidad también se duplica.
+                up = F.interpolate(init[:, :1], size=(ph, pw), mode="bilinear", align_corners=True)
+                half = (2.0 * up)[0, 0, :h, :w].float().cpu().numpy()
+        self.last_extras = {"vertical": vertical, "half": half}
         self.last_stats = {"caliente": float(warm), "alto_red": float(ph), "ancho_red": float(pw)}
         return np.ascontiguousarray(disparity, dtype=np.float32)

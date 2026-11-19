@@ -40,6 +40,75 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 — T12: U-Net de incertidumbre entrenada y estimador con términos de lente
+
+**Tareas:** T12 y T13. **Persona/agente:** Bauty (indicó seguir sin supervisión durante la
+noche) / Claude Code. **Rama:** `a/T12-incertidumbre`, apilada sobre el PR #34.
+
+**Objetivo.** Tener la segunda red propia funcionando y medida contra el comparador simple que
+pedía el diseño: el chequeo izquierda-derecha.
+
+**Hecho (código).**
+- `uncertainty.py`: canales de entrada y `UncertaintyHead` (carga y predicción de b en px).
+- `uncertainty_data.py`: caché de la disparidad de CREStereo por muestra y variante, variantes
+  desalineadas reproducibles y el conjunto de datos de recortes.
+- `uncertainty_train.py`: caché, entrenamiento y evaluación. Reutiliza `FusionNet` y
+  `laplace_nll` de Fusion, no su bucle (está atado a los canales y al caché de Fusion).
+- `uncertainty_metrics.py`: curva de sparsification, AUSE, cobertura de intervalos y NLL.
+- `matcher.py` expone dos subproductos de cada corrida: la pasada a media resolución y el canal
+  vertical. `estimator.py` devuelve b con `UncertaintyKind.LAPLACE_B` si se configura un
+  checkpoint (`depth.crestereo.incertidumbre`, vacío por defecto).
+- `lens.py`: ajuste clásico con resto radial (r², r⁴) y su regla. `classic.py`: el solucionador
+  robusto quedó como función aparte (`robust_fit`) para compartirlo.
+- CLI: `inc-cache`, `inc-entrenar`, `inc-evaluar`; `cinta --incertidumbre`; `hermanas` y
+  `descalibracion` suman la variante con lente.
+- Tests: `tests/test_crestereo_uncertainty.py` (11) y más en los otros dos archivos.
+
+**Evidencia.** Mac M2 Max, MPS, PyTorch 2.15. Corridas en `outputs/crestereo_inc/` (`v1-s0`,
+`v2-s0`), caché en `data/cache/crestereo_inc/` (1,5 GB), artefactos en
+`outputs/profundidad/20261119-*`. Tablas en
+[TECNICO](TECNICO.md#incertidumbre-lo-medido-el-1911).
+- **Caché:** 2238 corridas de entrenamiento y 408 de validación de CREStereo en 26,5 + ~5 min.
+- **Entrenamiento:** 12 épocas, ~77 min cada versión. NLL de validación 2,000 (v1) y 1,911 (v2).
+- **AUSE en InStereo2K val (limpio / desalineado):** v1 0,330 / 0,388; v2 0,276 / 0,361;
+  izquierda-derecha 0,276 / 0,341; fotométrico 1,023 / 0,647.
+- **AUSE en Middlebury 2014 extra (13 pares, limpio / desalineado):** v2 0,139 / 0,307;
+  izquierda-derecha 0,175 / 0,320.
+- **Cobertura del intervalo de 90 % (v2):** 0,95 limpio y 0,82 desalineado en InStereo2K; 0,98 y
+  0,88 en Middlebury.
+- **Latencia con b:** preciso 713 ms de mediana (619 sin b); continuo 144 ms (119 sin b).
+- **ELP, esquinas del damero de `cinta-s7`:** error real 0,05–0,10 px; b predicha 1,0–3,3 px.
+- **Lente en casos reales:** en sesiones sanas el ajuste da r² +0,0007 a +0,0012 y r⁴ −0,0001 a
+  −0,0004; con el precinto la escala queda en −4,7 % y −3,4 % (la regla de cuatro: −2,3 % y
+  −1,2 %).
+- **Lente en cámaras hermanas** (mismos pares y cámaras que la entrada de abajo): ×0,5 →
+  4,1 / 21,3 / 9,7 % (regla de cuatro: 4,0 / 30,5 / 18,5 %); ×1 → 9,4 / 48,7 / 13,2 %
+  (9,6 / 54,7 / 17,2 %). Campo exacto: 0,4–0,9 %.
+
+**Qué pasó en el camino.**
+- **La primera versión perdía contra izquierda-derecha.** Antes de reentrenar se midió cada
+  señal barata sola (24 cuadros de val): el desacuerdo entre las dos pasadas de CREStereo daba
+  AUSE 0,35 sin ninguna red, casi lo mismo que la red v1. Se agregó como canal junto con el
+  canal vertical del flujo, y la v2 alcanzó a izquierda-derecha.
+- **Más parámetros en el clásico no ayudaron con los datos reales.** Los términos radiales le
+  sacan señal al yaw y la escala deja de corregirse.
+
+**Límites.**
+- **b no está calibrada para la ELP.** Sobre el damero sobreestima entre 10 y 30 veces. Sin
+  referencia densa en la cámara real no se puede ajustar ni medir en escenas naturales.
+- Una semilla informada (la segunda y la ablación con corrección quedaron entrenando al
+  escribir esto). La época se eligió con la misma validación que se informa. No hay test limpio:
+  CREStereo probablemente vio InStereo2K y Middlebury.
+- La red está pensada para dos pasadas (modo preciso); en el continuo no está validada.
+- No está conectada la confianza global de la alineación, ni el paso de b a metros ni a un
+  objeto, ni el condicionamiento por calibración. El checkpoint no está empaquetado ni subido.
+
+**Bloqueo físico.** Calibrar y validar b en la ELP necesita el banco con stickers medidos (T04,
+sesiones `s1`–`s2` de desarrollo). Es lo primero que destraba esta línea.
+
+**Próximo paso.** Bauty: grabar `s1`. Claude Code: evaluador por puntos para el banco, y probar
+cuánto recupera «clásico + distancia conocida» en cámaras hermanas.
+
 ## 2026-11-19 — T12: regla de decisión, generador de etapa 2 y cámaras hermanas
 
 **Tarea:** T12. **Persona/agente:** Bauty (indicó seguir sin supervisión durante la noche) /

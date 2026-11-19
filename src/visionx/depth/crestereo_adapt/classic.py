@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import cv2
@@ -107,23 +108,74 @@ def _residuals(
     return pts_l[:, 1] - moved[:, 1]
 
 
-def _jacobian(
-    vector: np.ndarray,
+def epipolar_inliers(
+    pts_l: np.ndarray, pts_r: np.ndarray, params: ClassicParams
+) -> tuple[np.ndarray, np.ndarray]:
+    """Descarta emparejamientos equivocados groseros con RANSAC sobre la geometría epipolar.
+
+    No supone que el par ya esté alineado. Sortea subconjuntos al azar: se fija la semilla para
+    que el mismo par dé siempre lo mismo.
+    """
+    cv2.setRNGSeed(0)
+    _, mask = cv2.findFundamentalMat(pts_l, pts_r, cv2.FM_RANSAC, params.ransac_px, 0.999)
+    if mask is not None and int(mask.sum()) >= params.min_inliers:
+        keep = mask.ravel().astype(bool)
+        return pts_l[keep], pts_r[keep]
+    return pts_l, pts_r
+
+
+def robust_fit(
+    residual: Callable[[np.ndarray], np.ndarray],
+    size: int,
     free: list[int],
-    pts_l: np.ndarray,
-    pts_r: np.ndarray,
-    geometry: StereoGeometry,
-) -> np.ndarray:
-    """Cuánto cambia cada residuo al mover cada parámetro libre (diferencias centradas)."""
-    step = 1e-6
-    columns = []
-    for index in free:
-        delta = np.zeros(4)
-        delta[index] = step
-        plus = _residuals(vector + delta, pts_l, pts_r, geometry)
-        minus = _residuals(vector - delta, pts_l, pts_r, geometry)
-        columns.append((plus - minus) / (2 * step))
-    return np.column_stack(columns)
+    params: ClassicParams,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Cuadrados mínimos robustos de un vector de `size` parámetros; solo se mueven los `free`.
+
+    `residual(vector)` devuelve un residuo por punto. Devuelve (vector ajustado, desvío
+    estándar por parámetro con 0 en los fijos, máscara de puntos coherentes).
+    """
+
+    def jacobian(vector: np.ndarray, rows: np.ndarray | None = None) -> np.ndarray:
+        # Cuánto cambia cada residuo al mover cada parámetro libre (diferencias centradas).
+        step = 1e-6
+        columns = []
+        for index in free:
+            delta = np.zeros(size)
+            delta[index] = step
+            column = (residual(vector + delta) - residual(vector - delta)) / (2 * step)
+            columns.append(column if rows is None else column[rows])
+        return np.column_stack(columns)
+
+    vector = np.zeros(size)
+    for _ in range(params.iterations):
+        r = residual(vector)
+        # Huber: peso 1 para residuos chicos y decreciente para los grandes. La escala sale de
+        # la dispersión robusta de los propios residuos, con piso en `huber_px`.
+        spread = 1.4826 * float(np.median(np.abs(r - np.median(r))))
+        k = max(params.huber_px, 1.345 * spread)
+        weights = np.where(np.abs(r) <= k, 1.0, k / np.maximum(np.abs(r), 1e-12))
+        jac = jacobian(vector)
+        normal = jac.T @ (weights[:, None] * jac)
+        # Amortiguación mínima: evita dividir por cero si un parámetro casi no se observa.
+        normal += 1e-12 * np.trace(normal) * np.eye(len(free))
+        step = np.linalg.solve(normal, -jac.T @ (weights * r))
+        vector[free] += step
+        if float(np.max(np.abs(step))) < 1e-9:
+            break
+
+    r = residual(vector)
+    spread = 1.4826 * float(np.median(np.abs(r - np.median(r))))
+    inlier = np.abs(r) <= max(3.0 * spread, params.huber_px)
+    # Incertidumbre: varianza de los residuos por la inversa de la curvatura del ajuste.
+    jac = jacobian(vector, inlier)
+    dof = max(int(inlier.sum()) - len(free), 1)
+    variance = float(np.sum(r[inlier] ** 2)) / dof
+    covariance = variance * np.linalg.pinv(jac.T @ jac)
+    sigma = np.zeros(size)
+    for position, index in enumerate(free):
+        sigma[index] = math.sqrt(max(float(covariance[position, position]), 0.0))
+    return vector, sigma, inlier
 
 
 def fit_correction(
@@ -160,13 +212,7 @@ def fit_correction(
         return failed(f"solo {matches} pares emparejados (mínimo {p.min_inliers})")
     before = float(np.median(np.abs(pts_l[:, 1] - pts_r[:, 1])))
 
-    # RANSAC epipolar: descarta pares equivocados sin suponer que el par ya está alineado.
-    # Sortea subconjuntos al azar: se fija la semilla para que el mismo par dé siempre lo mismo.
-    cv2.setRNGSeed(0)
-    _, mask = cv2.findFundamentalMat(pts_l, pts_r, cv2.FM_RANSAC, p.ransac_px, 0.999)
-    if mask is not None and int(mask.sum()) >= p.min_inliers:
-        keep = mask.ravel().astype(bool)
-        pts_l, pts_r = pts_l[keep], pts_r[keep]
+    pts_l, pts_r = epipolar_inliers(pts_l, pts_r, p)
 
     # Parámetros libres, en el orden de PARAMETERS: pitch, yaw, roll, log_focal.
     if parameters is not None:
@@ -180,37 +226,14 @@ def fit_correction(
     if not free:  # nada que ajustar: la corrección es "no tocar"
         zero = dict.fromkeys(PARAMETERS, 0.0)
         return AlignmentEstimate(Correction(), zero, matches, len(pts_l), before, before, True)
-    vector = np.zeros(4)
-    weights = np.ones(len(pts_l))
-    for _ in range(p.iterations):
-        r = _residuals(vector, pts_l, pts_r, geometry)
-        # Huber: peso 1 para residuos chicos y decreciente para los grandes. La escala sale de
-        # la dispersión robusta de los propios residuos, con piso en `huber_px`.
-        spread = 1.4826 * float(np.median(np.abs(r - np.median(r))))
-        k = max(p.huber_px, 1.345 * spread)
-        weights = np.where(np.abs(r) <= k, 1.0, k / np.maximum(np.abs(r), 1e-12))
-        jac = _jacobian(vector, free, pts_l, pts_r, geometry)
-        normal = jac.T @ (weights[:, None] * jac)
-        # Amortiguación mínima: evita dividir por cero si un parámetro casi no se observa.
-        normal += 1e-12 * np.trace(normal) * np.eye(len(free))
-        step = np.linalg.solve(normal, -jac.T @ (weights * r))
-        vector[free] += step
-        if float(np.max(np.abs(step))) < 1e-9:
-            break
-
-    r = _residuals(vector, pts_l, pts_r, geometry)
-    spread = 1.4826 * float(np.median(np.abs(r - np.median(r))))
-    inlier = np.abs(r) <= max(3.0 * spread, p.huber_px)
+    vector, deviation, inlier = robust_fit(
+        lambda v: _residuals(v, pts_l, pts_r, geometry), 4, free, p
+    )
     inliers = int(inlier.sum())
-    after = float(np.median(np.abs(r)))
-    # Incertidumbre: varianza de los residuos por la inversa de la curvatura del ajuste.
-    jac = _jacobian(vector, free, pts_l[inlier], pts_r[inlier], geometry)
-    dof = max(inliers - len(free), 1)
-    variance = float(np.sum(r[inlier] ** 2)) / dof
-    covariance = variance * np.linalg.pinv(jac.T @ jac)
+    after = float(np.median(np.abs(_residuals(vector, pts_l, pts_r, geometry))))
     sigma = dict.fromkeys(PARAMETERS, 0.0)
-    for position, index in enumerate(free):
-        value = math.sqrt(max(float(covariance[position, position]), 0.0))
+    for index in free:  # los ángulos se informan en grados; log_focal no tiene unidades
+        value = float(deviation[index])
         sigma[PARAMETERS[index]] = value if index == 3 else math.degrees(value)
 
     correction = Correction.from_vector(vector)
