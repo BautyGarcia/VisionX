@@ -111,7 +111,11 @@ def build_output(args: argparse.Namespace, cfg: dict[str, Any], on_record):
     s = VoiceSettings.from_config(cfg)
     synth = build_synth(s)
     synth.preload(s.preload)
-    output = AudioOutput(synth, SoundDevicePlayer(s.output_device, s.block_ms), on_record=on_record)
+    output = AudioOutput(
+        synth,
+        SoundDevicePlayer(s.output_device, s.block_ms, s.output_latency_s),
+        on_record=on_record,
+    )
     return output, (PushToTalk(s.input_device, s.max_record_s), WhisperTranscriber(s))
 
 

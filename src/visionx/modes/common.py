@@ -100,6 +100,12 @@ class ModeSettings:
     approx_from_m: float = 3.0
     approx_round_m: float = 0.5
     arrive_m: float = 0.6  # al frente y a esta distancia o menos: "llegaste"
+    # La búsqueda termina cuando la persona lo dice («la encontré», «terminá»), no sola: al
+    # llegar avisa y se queda callada; si se aleja más de arrive_m + leave_margin_m, vuelve a
+    # guiar. `end_on_arrival` = el cierre automático anterior (lo usa el banco M1).
+    end_on_arrival: bool = False
+    leave_margin_m: float = 0.4
+    searching_reminder_s: float = 15.0  # sin verlo, «Sigo buscando…» cada tanto; 0 = nunca
     # Distancia: un frame medido vale si llegó a lo sumo esto ANTES de la orden.
     accept_before_s: float = 0.5
     # Elección entre iguales: a lo sumo cuántos se enumeran.

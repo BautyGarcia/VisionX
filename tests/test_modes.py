@@ -58,7 +58,10 @@ from visionx.voice.commands import CommandParser
 
 G = synthetic_geometry()  # 640x360, fx = 608
 CATALOG = ClassCatalog(COCO_CLASSES)
-S = ModeSettings(guide_style="palabras")  # frases de guía; el sonar se prueba aparte
+# Frases de guía (el sonar se prueba aparte) y el cierre al llegar de antes, que sigue
+# disponible para el banco M1; el comportamiento nuevo (termina la persona) va en
+# tests/test_buscar_fin.py.
+S = ModeSettings(guide_style="palabras", end_on_arrival=True)
 SEC = 1_000_000_000
 
 
@@ -2001,4 +2004,55 @@ def test_centrar_describes_support_once_and_arrives():
     assert h.assistant.calls == ["apoyo"]
     near = joint(5.0, 50, [("bottle", 0, None, 0.55, SPEAK)], measured=True)
     says, done = h.tick(c, View(joint(5.1, 51, [("bottle", 0, None)]), near), int(5.1 * SEC))
-    assert done and texts(says)[0].startswith("Llegaste: botella adelante")
+    # Llegar no termina la búsqueda: avisa cómo terminarla (la termina la persona).
+    assert not done and texts(says)[0].startswith("Llegaste: botella adelante")
+    assert texts(says)[0].endswith("Cuando lo tengas, decí: listo.")
+
+
+# --- la búsqueda la termina la persona (Tomás, 19/11) ------------------------------------------
+
+
+def _llegar(h, c):
+    """Centra la taza y la mide a 0,55 m: llega."""
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("cup", 0, None)]), joint(0.2, 2, [("cup", 0, None)])])
+    near = joint(0.3, 3, [("cup", 0, None, 0.55, SPEAK)], measured=True)
+    return h.tick(c, View(joint(0.4, 4, [("cup", 0, None)]), near), int(0.4 * SEC))
+
+
+def test_llegar_no_termina_y_avisa_como_terminar_una_vez():
+    h, c = centrar(), cmd(Mode.SEARCH, "cup")
+    says, done = _llegar(h, c)
+    assert not done
+    assert [t for t in texts(says) if t.startswith("Llegaste")] == [
+        "Llegaste: taza adelante, a 0,6 metros. Cuando lo tengas, decí: listo."
+    ]
+    # Sigue cerca: callado, sin «Perdí» aunque deje de verla.
+    near = joint(1.0, 10, [("cup", 0, None, 0.5, SPEAK)], measured=True)
+    says, done = h.tick(c, View(joint(1.1, 11, [("cup", 0, None)]), near), int(1.1 * SEC))
+    assert not done and texts(says) == []
+    says, done = h.tick(c, View(joint(5.0, 50, []), near), int(5.0 * SEC))
+    assert not done and not any(t.startswith("Perdí") for t in texts(says))
+
+
+def test_si_se_aleja_vuelve_a_guiar_y_la_segunda_llegada_es_corta():
+    h, c = centrar(), cmd(Mode.SEARCH, "cup")
+    _llegar(h, c)
+    far = joint(2.0, 20, [("cup", 0, None, 1.6, SPEAK)], measured=True)
+    says, _ = h.tick(c, View(joint(2.1, 21, [("cup", 0, None)]), far), int(2.1 * SEC))
+    assert texts(says) == ["Está a 1,6 metros, adelante."]  # vuelve a guiar, sin «Centrado»
+    near = joint(5.0, 50, [("cup", 0, None, 0.5, SPEAK)], measured=True)
+    says, done = h.tick(c, View(joint(5.1, 51, [("cup", 0, None)]), near), int(5.1 * SEC))
+    llegadas = [t for t in texts(says) if t.startswith("Llegaste")]
+    assert not done and llegadas and "Cuando lo tengas" not in llegadas[0]
+
+
+def test_sin_verlo_recuerda_que_sigue_buscando():
+    h, c = centrar(searching_reminder_s=10), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    says, done = h.tick(c, View(joint(5.0, 50, [])), int(5.0 * SEC))
+    assert texts(says) == [] and not done
+    says, done = h.tick(c, View(joint(10.1, 101, [])), int(10.1 * SEC))
+    assert texts(says) == ["Sigo buscando taza."] and not done
+    says, _ = h.tick(c, View(joint(15.0, 150, [])), int(15.0 * SEC))
+    assert texts(says) == []  # cada 10 s, no en cada cuadro

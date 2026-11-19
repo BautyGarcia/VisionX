@@ -118,7 +118,7 @@ palabra.
 
 | Modo | Decí / hacé | Pasa si |
 |---|---|---|
-| Buscar | «Buscá la taza» con la taza fuera de cuadro; seguir las instrucciones y acercarse | «Veo taza.» y después «Girá a la izquierda» → «Más a la izquierda» → «Un poco a la izquierda» → «Un poco más abajo»; al centrarla «Centrado. Está a 1,4 metros, adelante.» y una frase de dónde está apoyada; metros cada ~2,5 s al acercarse; «Llegaste». En el dashboard, flecha verde al objetivo |
+| Buscar | «Buscá la taza» con la taza fuera de cuadro; seguir las instrucciones y acercarse | «Veo taza.» y después «Girá a la izquierda» → «Más a la izquierda» → «Un poco a la izquierda» → «Un poco más abajo»; al centrarla «Centrado. Está a 1,4 metros, adelante.» y una frase de dónde está apoyada; metros cada ~2,5 s al acercarse; «Llegaste… Cuando lo tengas, decí: listo.» y se queda callado (si te alejás, vuelve a guiar). **No termina sola:** termina con «la encontré», «listo», «ya está» o «terminá la búsqueda» → «Listo, terminé de buscar taza.»; sin verla, «Sigo buscando taza.» cada 15 s. En el dashboard, flecha verde al objetivo |
 | Elegir | Dos objetos iguales: «buscá la taza» → «la blanca» (o «la de la izquierda») | Pregunta describiéndolos («Veo una taza blanca a la izquierda y un vaso rojo a la derecha. ¿Cuál querés?», ~2 s) y guía a la elegida |
 | Distancia | Objeto a 0,5 / 1 / 2 / 3 m de cinta: «¿a qué distancia está la taza?» | En ~2 s, una frase: qué es, sobre qué está, metros, costado en cm (si está corrido) y altura respecto del cuerpo. Error ≤ 10 cm hasta 2 m |
 | Leer | Envase a 25–50 cm: «leé» | «Adelante tenés … que dice …»; entre comillas solo lo que el OCR confirmó |
@@ -183,6 +183,12 @@ El audio de las demos es estéreo (sonar): escucharlas con auriculares. Subir
 | `depth.precisa.espera_s` | 2,0 | Espera de la distancia precisa antes de usar la continua |
 
 ## 7. Problemas conocidos
+
+- **Voz entrecortada al preguntar distancias** (19/11, con el banco `s1`): el búfer del parlante
+  era mínimo y, mientras corre la profundidad precisa, el audio llegaba tarde. Desde el PR de
+  `b/voz-sin-cortes` el búfer es de 0,2 s (`audio.output_latency_s`). Si todavía se corta,
+  subirlo a 0,4 en `configs/local.yaml` y mirar la línea «voz entrecortada» de
+  `python -m visionx.app latencias --traza …` (cuenta los cortes por frase).
 
 - **Sin internet:** el asistente se apaga (leer y describir vuelven a la versión local) y la voz
   solo dice lo que está en la caché; **una frase nueva sin red no suena** (no hay otra voz). Con

@@ -87,4 +87,11 @@ def summary(rows: list[dict[str, Any]]) -> str:
                      f"máx {v.max():.0f} ms")  # fmt: skip
     if table and not any(o["desde_boton"] for o in table):
         lines.append("- (sin `boton-soltado`: tiempos desde que la orden llegó al controlador)")
+    played = [r for r in rows if r.get("tipo") == "audio" and r.get("started_ns")]
+    cut = [r for r in played if r.get("cortes")]
+    if played and any("cortes" in r for r in played):
+        lines.append(f"- voz entrecortada: {len(cut)} de {len(played)} frases con cortes "
+                     f"({sum(r['cortes'] for r in cut)} cortes en total)")  # fmt: skip
+        for r in cut[:5]:
+            lines.append(f"  - «{r['texto']}»: {r['cortes']} cortes")
     return "\n".join(lines)

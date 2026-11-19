@@ -40,6 +40,66 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T09: la búsqueda la termina la persona
+
+**Tareas:** T09, T08. **Persona/agente:** Tomás (pedido) / Claude Code. **Rama:**
+`b/voz-sin-cortes` (mismo PR que la voz entrecortada).
+
+**Pedido de Tomás.** «La búsqueda va a terminar cuando la persona diga que encontró el objeto o
+que quiere terminar la búsqueda, no la va a terminar sola.»
+
+**Antes.** Terminaba sola al llegar («Llegaste…») y al vencer los 30 s de
+`deadlines_s.search` («No encontré…» / «Terminé de buscar…»).
+
+**Hecho.**
+- Órdenes nuevas: **encontrado** («la encontré», «ya lo tengo», «listo», «ya está», «llegué»,
+  «encontrado») y **terminar** («terminá la búsqueda», «terminar», «fin de la búsqueda», «no
+  busques más»). Cancelar («pará», «basta», «dejá de buscar») sigue igual. Responde «Listo,
+  terminé de buscar taza.»; sin búsqueda activa, «No estoy buscando nada ahora.».
+- «Encontré la taza» sola sigue siendo buscar (Whisper escribe «encontré» por «encontrá»), pero
+  durante una búsqueda de la taza el controlador la toma como encontrado.
+- Llegar ya no cierra: la primera vez dice «Llegaste: taza adelante, a 0,6 metros. Cuando lo
+  tengas, decí: listo.» y se queda callado (sin «Perdí» aunque deje de verla). Si la persona se
+  aleja más de `arrive_m + leave_margin_m` (0,6 + 0,4 m), vuelve a decir los metros.
+- Sin plazo: `deadlines_s.search: 0`. Sin verla, «Sigo buscando taza.» cada
+  `searching_reminder_s` (15 s).
+- El cierre automático de antes sigue disponible (`modes.end_on_arrival: true` o un plazo): lo
+  usa el banco M1, que mide una búsqueda acotada; los tests de guía «palabras» lo fijan.
+- Tests: `tests/test_buscar_fin.py` (20) y tres en `tests/test_modes.py`.
+
+**Límites.** Las frases nuevas no están en la caché de Mateo: la primera vez tardan ~1–2 s
+(`python -m visionx.voice precalentar` las agrega). «Listo» al final de otra cosa no termina
+nada: tiene que ser la frase entera.
+
+## 2026-11-19 (noche) — T08: la voz se entrecortaba al preguntar distancias
+
+**Tareas:** T08. **Persona/agente:** Bauty (Mac, grabando el banco `s1`) lo reportó; Tomás /
+Claude Code. **Rama:** `b/voz-sin-cortes`.
+
+**Problema.** Con la app en vivo, al preguntar la distancia de un objeto la voz se entrecortaba
+mucho.
+
+**Causa (probable, por el código).** `SoundDevicePlayer` abría el parlante con
+`latency="low"` (búfer de pocos ms en la Mac) y escribía bloques de 20 ms desde un hilo de
+Python: el hilo tenía que llegar cada 20 ms sin falta. Preguntar la distancia dispara la
+profundidad precisa (1280×720, ~1,6 s de cómputo en vivo) junto con el detector, la U-Net, Claude
+y la síntesis; el hilo llega tarde, el búfer se vacía y la voz se corta. Coincide con que solo
+pasaba en las preguntas de distancia.
+
+**Hecho.**
+- Búfer del parlante configurable, `audio.output_latency_s: 0.2` (0 = «low» como antes). Cancelar
+  sigue siendo inmediato: `abort()` descarta el búfer. Cada frase arranca ~0,2 s más tarde.
+- Cortes contados por frase (`stream.write` avisa cuando el búfer se vació): van a la traza como
+  `cortes` y `latencias` agrega la línea «voz entrecortada: N de M frases con cortes».
+- Tests: `tests/test_voz_cortes.py` (4).
+
+**Límites.** No reproducido en la Mac todavía: la causa sale del código y del síntoma. Si con
+0,2 s sigue, probar 0,4 y mirar `cortes` en la traza; si aun así se corta, el siguiente paso es
+reproducir desde un callback de PortAudio con la frase entera ya en memoria.
+
+**Próximo paso.** Bauty: pull, repetir la pregunta de distancia con `--traza` y pasar
+`latencias`.
+
 ## 2026-11-19 (noche) — T07: vivo de C0 y C1; C1 gana, pero lo lento no es el detector
 
 Tarea: T07. Persona/agente: Bauty (cámara, guion de VELOCIDAD) / Claude Code (análisis). Rama:
