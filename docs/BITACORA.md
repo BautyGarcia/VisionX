@@ -40,10 +40,67 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 — T12: regla de decisión, generador de etapa 2 y cámaras hermanas
+
+**Tarea:** T12. **Persona/agente:** Bauty (indicó seguir sin supervisión durante la noche) /
+Claude Code. **Rama:** `a/T12-alineacion-clasica-y-generador`.
+
+**Objetivo.** Saber cuánto margen real le queda a la red de alineación: ajustar el comparador
+clásico, y medir qué pasa con una desalineación más parecida a «otra unidad del mismo modelo».
+
+**Hecho (código).**
+- `classic.py`: `fit_correction` acepta qué parámetros ajustar; `DecisionParams`,
+  `significant_parameters` y `fit_significant` (la regla); semilla fija en el RANSAC.
+- `perturb.py`, etapa 2: `CameraModel`, `mismatch_field`, `mismatch_maps`, `parametric_error`,
+  `perturb_right_camera`, `CameraRanges` y `sample_sibling`. Solo el ojo derecho.
+- CLI: `hermanas`; `robustez` y `descalibracion` suman la variante con la regla.
+- Se corrigió el comentario de `Correction.log_focal`, que tenía el signo al revés.
+
+**Evidencia.** Misma Mac y calibración. `uv run --extra ml pytest`: 692 aprobados;
+`ruff` correcto. Artefactos en `outputs/profundidad/20261118-235523-robustez-*`,
+`20261119-000014-hermanas-*` y `*-descalibracion-real`. Tablas en
+[TECNICO](TECNICO.md#compuerta-lo-medido-el-1811).
+- **Sesgo del clásico en sesiones sanas** (respuesta correcta: cero): yaw +0,009° en s6-val,
+  +0,002° en s7 y −0,036° en s3; al aplicarlo, la escala del damero se corre hasta −1 %.
+- **Con la regla, en simulación** (8 pares, `dev-1114-escenas`): roll 0,25° → 0,52 % (sin
+  corregir 7,1 %, techo 0,34 %); focal 0,5 % → 0,29 % (techo 0,28 %); yaw 0,05–0,5° → 2,1–2,6 %.
+- **Con la regla, en pares reales:** precinto −4,8 % → −2,3 % de escala; precinto suelto −3,6 %
+  → −1,2 %; tres sesiones sanas sin cambios (no aplica nada).
+- **Cámaras hermanas** (6 pares, 3 cámaras por nivel): con un décimo de los rangos, sin
+  corregir 3,4–5,8 %, giro y focal exactos 2,1–4,7 %, campo exacto 0,35–0,55 %. Con los rangos
+  completos: 30–69 %, 14–49 % y 0,6–0,9 %.
+
+**Qué cambia.**
+- **El clásico con la regla ya resuelve roll, pitch y focal.** Ahí a una red de alineación le
+  queda muy poco por ganar. Se probaron dos formas de la regla: reajustar solo con los
+  parámetros elegidos descartaba el yaw real del precinto suelto; anular los que no pasan y
+  conservar los demás funcionó en los cinco casos.
+- **El yaw tiene un límite propio** (~0,03°, unos 2 % de profundidad) que no depende del método
+  mientras solo se miren filas. El corrimiento del día siguiente (s7) directamente no se ve.
+- **Para otra unidad, cuatro números no alcanzan.** Hace falta incluir centro óptico y
+  distorsión; con el campo exacto se recupera casi todo.
+- Se intentó estimar cuánto difieren dos cámaras comparando las calibraciones del 04/11 y del
+  11/11 parámetro por parámetro. No sirve: dos juegos de parámetros muy distintos pueden
+  describir casi la misma cámara. Queda sin medir.
+
+**Decisión pendiente (Bauty).** Qué papel tiene la red de alineación con estos resultados.
+Opciones a la vista: (a) que estime la corrección densa o los parámetros de centro y distorsión
+que el clásico de cuatro números no cubre; (b) extender el clásico con esos parámetros y que la
+contribución propia quede en la incertidumbre; (c) las dos, comparadas. No se empezó ninguna.
+
+**Límites.** Los pisos de la regla se eligieron mirando los mismos cinco casos reales. Los
+rangos de las cámaras hermanas son supuestos. La etapa 2 perturba solo el ojo derecho. Un clip,
+pocos pares, referencia = la propia red.
+
+**Bloqueo físico.** Cuánto difieren dos unidades reales solo se sabe con la segunda cámara.
+
+**Próximo paso (Claude Code, sin esperar la decisión).** U-Net de incertidumbre: salidas de
+CREStereo sobre InStereo2K, entrenamiento y evaluación contra el chequeo izquierda-derecha.
+
 ## 2026-11-18 — T12: modo continuo, clásico acumulado y descalibración real
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-continuo-y-descalibracion`
-(local al escribir esto). Sigue a la entrada de abajo, integrada en el PR #32.
+(PR #33, integrado). Sigue a la entrada de abajo, integrada en el PR #32.
 
 **Objetivo.** Cerrar tres pendientes de la compuerta: cuánto erra el modo continuo, si el
 clásico mejora juntando puntos de varios pares y qué pasa con una descalibración real.

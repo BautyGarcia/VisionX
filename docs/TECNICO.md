@@ -672,6 +672,7 @@ uv run --extra ml python -m visionx.depth.crestereo_adapt cinta RUTA/cinta-s7
 uv run --extra ml python -m visionx.depth.crestereo_adapt robustez recordings/CLIP
 uv run --extra ml python -m visionx.depth.crestereo_adapt coherencia recordings/CLIP
 uv run python -m visionx.depth.crestereo_adapt descalibracion CALIBRACION.yaml CARPETA
+uv run --extra ml python -m visionx.depth.crestereo_adapt hermanas recordings/CLIP
 ```
 
 **Latencia** (clip `dev-1114-distancias`, 100 pares en ciclo). La red corre en MPS sin recurrir
@@ -751,8 +752,7 @@ de la cámara y no de la escena, se juntan los puntos de los 8 pares y se ajusta
 
 - Acumular baja el error del clásico a la mitad, pero queda en 2–4 %, unas diez veces el techo.
 - Ese piso casi no depende de cuánto error había: es ruido y sesgo del propio estimador. Con
-  errores de hasta ~0,1° conviene no corregir. Hace falta una regla que aplique la corrección
-  solo cuando supera con claridad su incertidumbre; todavía no existe.
+  errores de hasta ~0,1° conviene no corregir. De ahí sale la regla de decisión de abajo.
 - El clásico no está ajustado: busca puntos a media resolución, con parámetros por defecto.
 
 **Descalibración real** (`descalibracion`, sin red). Pares del 09/11 con la calibración del
@@ -793,6 +793,71 @@ midió con cinta. Mediana, y entre paréntesis el percentil 90.
   3,5 % en frío): cuatro iteraciones no alcanzan a mover del todo la disparidad heredada.
 - Es por píxel y sobre toda la imagen. Por objeto, con la mediana dentro de la máscara, debería
   ser menor; no se midió.
+
+**Regla de decisión** (19/11, `fit_significant`). Se ajusta todo junto y cada parámetro se
+aplica solo si su valor supera dos veces su incertidumbre. La incertidumbre que calcula el ajuste
+es optimista (no ve errores sistemáticos), así que lleva un piso por parámetro, medido corriendo
+el estimador sobre tres sesiones sanas de la ELP, donde la respuesta correcta es cero: roll
+0,02°, pitch 0,01°, yaw 0,04°, focal 0,05 %. Los parámetros que no pasan quedan en cero y los
+que pasan conservan el valor del ajuste completo.
+
+Misma curva que arriba (`dev-1114-escenas`, 8 pares, puntos acumulados), con la regla:
+
+| Error | Sin corregir | Clásico acumulado | Con la regla | Corrección exacta |
+|---|---|---|---|---|
+| roll 0,05° | 1,5 % | 2,0 % | 0,45 % | 0,29 % |
+| roll 0,25° | 7,1 % | 2,4 % | 0,52 % | 0,34 % |
+| roll 1,0° | 39,0 % | 3,0 % | 0,60 % | 0,42 % |
+| pitch 0,25° | 4,5 % | 2,7 % | 0,55 % | 0,35 % |
+| yaw 0,05° | 3,6 % | 2,3 % | 2,4 % | 0,31 % |
+| yaw 0,25° | 15,1 % | 2,0 % | 2,1 % | 0,33 % |
+| focal 0,5 % | 8,2 % | 1,5 % | 0,29 % | 0,28 % |
+| focal 2 % | 25,5 % | 2,6 % | 0,27 % | 0,26 % |
+
+- **Para roll, pitch y focal, el clásico con la regla queda casi en el techo.** El piso de 2–4 %
+  del clásico sin regla venía de aplicar valores falsos de yaw y focal.
+- **El yaw es lo que queda:** ~2 % en todos los niveles, es decir, un error propio del orden de
+  0,03° que la regla no puede sacar. Es el límite de mirar solo filas.
+- Los errores van de a uno por vez, que es el mejor caso para la regla.
+
+Sobre los pares reales del 09/11 y las sesiones sanas:
+
+| Caso | Sin corregir | Con la regla | Qué aplica |
+|---|---|---|---|
+| Con el precinto (3 pares): escala, mediana | −4,8 % | −2,3 % | pitch y yaw |
+| Precinto suelto (5 pares): escala, mediana | −3,6 % | −1,2 % | yaw |
+| Sesión sana s3 (38 pares) | −0,03 % | −0,03 % | nada |
+| Sesión sana s6-val (20 pares, otra calibración) | +0,35 % | +0,35 % | nada |
+| Sesión sana s7 (13 pares, día siguiente) | +1,33 % | +1,33 % | nada |
+
+- La regla corrige los dos casos malos y no toca los tres sanos. **Los pisos se eligieron
+  mirando estos mismos casos:** falta confirmarla con datos que no haya visto.
+- **El corrimiento del día siguiente (s7, +1,33 %) no deja huella en las filas:** el yaw
+  estimado ahí es +0,002°. Ese tipo de corrimiento solo lo arregla la distancia conocida.
+
+**Cámaras hermanas** (19/11, `hermanas`, generador de etapa 2). Simula otra unidad del mismo
+modelo: además de giro y focal, cambian el centro óptico y la distorsión del ojo derecho. Los
+rangos completos (×1) son ±1° de roll y pitch, ±0,5° de yaw, ±2 % de focal, ±8 px de centro y
+±5 % por coeficiente de distorsión; **son supuestos, la variación real entre unidades no se
+conoce.** Tres cámaras sorteadas por nivel, 6 pares; mediana del cambio de profundidad.
+
+| Nivel | Sin corregir | Clásico con regla | Giro y focal exactos | Campo exacto |
+|---|---|---|---|---|
+| ×0,1 | 3,4 / 5,0 / 5,8 % | 3,5 / 5,2 / 3,1 % | 2,1 / 3,9 / 4,7 % | 0,55 / 0,49 / 0,35 % |
+| ×0,25 | 6,5 / 13,5 / 13,9 % | 2,5 / 13,6 / 6,2 % | 4,5 / 9,3 / 10,5 % | 0,63 / 0,60 / 0,37 % |
+| ×0,5 | 12,9 / 27,8 / 25,5 % | 4,0 / 30,5 / 18,5 % | 8,0 / 20,6 / 18,8 % | 0,66 / 0,56 / 0,42 % |
+| ×1 | 31,3 / 69,3 / 30,5 % | 9,6 / 54,7 / 17,2 % | 13,9 / 48,8 / 29,3 % | 0,94 / 0,58 / 0,58 % |
+
+- **Cuatro números no alcanzan para otra unidad.** Aun con el giro y la focal exactos queda la
+  mayor parte del daño; el campo exacto, que cambia de una zona a otra, lo recupera casi todo.
+- Lo que sobra después de giro y focal es el centro óptico (un corrimiento de columnas, igual
+  que el yaw: no se ve en las filas) y la distorsión (que mueve filas y columnas a la vez).
+- **Consecuencia para el diseño:** la corrección para «otra unidad del mismo modelo» tiene que
+  incluir centro y distorsión, no solo roll, pitch, yaw y focal. Y el corrimiento de columnas
+  sigue pidiendo la distancia conocida. Qué forma toma (más parámetros en el ajuste clásico, o
+  la red de alineación con salida densa) es una decisión abierta.
+- Cuánto de esto es real depende de cuánto difieren dos unidades, y eso solo se sabe con la
+  segunda cámara.
 
 **Decisión de la compuerta:** CREStereo queda como estéreo de base. El modo continuo no necesita
 el respaldo de B0 por latencia y sirve para guiar; los metros se anuncian con el modo preciso.
