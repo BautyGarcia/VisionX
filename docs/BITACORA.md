@@ -40,6 +40,31 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-18 — T08: voz de la app pasa a Mateo (Edge) con Piper de respaldo
+
+**Tarea:** T08. **Persona/agente:** Tomás (elección) / Claude Code. **Rama:** `b/beta-integracion` (PR #27).
+
+**Hecho.** Tomás descartó las voces locales (Piper daniela, claude, davefx, sharvard; Kokoro dora,
+alex, santa: «suenan robóticas») y eligió `es-UY-MateoNeural` entre 8 voces neuronales de
+Microsoft Edge en español latino (muestras en `outputs/voz/voces-naturales/`, no versionadas).
+Se descartó clonar la voz propia: F5-TTS en español tardó ~38 s por frase en la PC de escritorio
+(CPU). Integración: `audio.tts.engine: edge` (`EdgeSynth` → `DiskCachedSynth` → `FallbackSynth`
+con Piper `es_ES-davefx-medium`), dependencia `edge-tts` en el extra `voz`.
+
+**Evidencia (PC de escritorio, red doméstica, 18/11).** Primera vez de cada frase: 1,1–2,1 s hasta
+tener el audio completo (Piper: ~0,15 s); desde la caché en disco, ~1 ms. Edge agrega ~150 ms de
+silencio antes y 0,8–1,2 s después: se recortan (quedan 30/120 ms). Ya recortada, Mateo dura
+0,03 s + 61 ms por carácter (10 frases de guía), dentro de la estimación de los modos
+(`speech_base_s` 0,3 + 0,065/car): no se cambió. Tests 1032 OK (7 nuevos de voz, sin red).
+
+**Límites.** Necesita internet: en la expo, sin red, la app habla con Piper y cambia de voz. El
+texto leído por «leé» y las descripciones se envían a Microsoft. Latencia en la Mac y con la red
+del lugar sin medir. Las frases nuevas suman ~1,5 s a la primera respuesta hasta que quedan en
+caché.
+
+**Próximo paso.** Precalentar la caché con las frases frecuentes de la guía antes de la expo y
+probar la voz en el bucle con micrófono (Tomás).
+
 ## 2026-11-18 — Decisión: T12 pivotea de Fusion a CREStereo adaptable (solo planificación)
 
 **Tareas:** T12; afecta T13, T14, T15, T17 y T18. **Persona/agente:** Bauty (decisión) / Claude

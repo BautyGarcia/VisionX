@@ -1,7 +1,10 @@
-"""Motores locales de voz (T08): TTS con Piper, STT con faster-whisper y micrófono por botón.
+"""Motores de voz (T08): TTS con Edge o Piper, STT con faster-whisper y micrófono por botón.
 
-Todos se importan recién al construirse (extra `voz`) y cargan modelos ya bajados con
-`python -m visionx.voice descargar`: ninguno descarga solo ni necesita red al usarse.
+Todos se importan recién al construirse (extra `voz`). Piper y Whisper cargan modelos ya bajados
+con `python -m visionx.voice descargar` y no necesitan red. La voz por defecto (`audio.tts.engine:
+edge`, es-UY-MateoNeural, elegida por Tomás el 18/11) es una voz neuronal de Microsoft Edge que
+SÍ usa internet: el texto dicho sale de la máquina. Sin red, la app sigue con Piper sola
+(FallbackSynth) y lo ya dicho alguna vez sale de la caché en disco.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import queue
 import threading
 import time
 import urllib.request
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,7 +23,7 @@ from typing import Any
 import numpy as np
 
 from visionx.shared.config import ROOT
-from visionx.shared.errors import EstimatorError, SourceError
+from visionx.shared.errors import EstimatorError, InvalidInput, SourceError
 
 # Voces de Piper fijadas a la versión v1.0.0 del repositorio (no a "main", que puede cambiar).
 PIPER_VOICES_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0"
@@ -43,8 +47,13 @@ def sha256_file(path: Path) -> str:
 class VoiceSettings:
     """Sección `audio` de la config (unidades en configs/default.yaml)."""
 
-    tts_voice: str = "es_AR-daniela-high"
+    tts_voice: str = "es_ES-davefx-medium"  # Piper: voz única con engine piper; respaldo con edge
     voices_dir: str = "weights/piper"
+    tts_engine: str = "piper"  # piper | edge
+    edge_voice: str = "es-UY-MateoNeural"
+    edge_timeout_s: float = 4.0
+    edge_retry_s: float = 30.0
+    tts_cache_dir: str | None = "data/cache/voz"
     speech_rate: float = 1.0
     stt_model: str = "small"
     stt_models_dir: str = "weights/whisper"
@@ -68,6 +77,11 @@ class VoiceSettings:
         return cls(
             tts_voice=str(tts.get("voice", d.tts_voice)),
             voices_dir=str(tts.get("voices_dir", d.voices_dir)),
+            tts_engine=str(tts.get("engine", d.tts_engine)),
+            edge_voice=str(tts.get("edge_voice", d.edge_voice)),
+            edge_timeout_s=float(tts.get("edge_timeout_s", d.edge_timeout_s)),
+            edge_retry_s=float(tts.get("edge_retry_s", d.edge_retry_s)),
+            tts_cache_dir=tts.get("cache_dir", d.tts_cache_dir) or None,
             speech_rate=float(a.get("speech_rate", d.speech_rate)),
             stt_model=str(stt.get("model", d.stt_model)),
             stt_models_dir=str(stt.get("models_dir", d.stt_models_dir)),
@@ -164,6 +178,195 @@ class PiperSynth:
         if not chunks:
             return np.zeros(0, np.float32)
         return np.concatenate(chunks).astype(np.float32, copy=False)
+
+
+EDGE_RATE = 24_000  # Edge entrega MP3 mono a 24 kHz
+
+
+def edge_rate(speech_rate: float) -> str:
+    """speech_rate (1.0 = normal) -> el formato de Edge: "+0%", "-10%", "+15%"."""
+    pct = int(round((speech_rate - 1.0) * 100))
+    return f"{pct:+d}%"
+
+
+def decode_mp3(data: bytes, rate: int = EDGE_RATE) -> np.ndarray:
+    """MP3 en memoria -> float32 mono a `rate` Hz, con PyAV (ya viene con faster-whisper)."""
+    import io
+
+    import av
+
+    parts = []
+    with av.open(io.BytesIO(data)) as container:
+        resampler = av.AudioResampler(format="flt", layout="mono", rate=rate)
+        for frame in container.decode(audio=0):
+            parts += [f.to_ndarray().reshape(-1) for f in resampler.resample(frame)]
+        parts += [f.to_ndarray().reshape(-1) for f in resampler.resample(None)]
+    return np.concatenate(parts).astype(np.float32) if parts else np.zeros(0, np.float32)
+
+
+def trim_silence(
+    samples: np.ndarray, rate: int, threshold: float = 0.01, keep_start_ms=30, keep_end_ms=120
+) -> np.ndarray:
+    """Recortar el silencio de los bordes. Edge entrega ~150 ms antes de hablar y 0,8-1,2 s
+    después (medido el 18/11): demora la primera palabra y ocupa el parlante sin decir nada."""
+    loud = np.nonzero(np.abs(samples) > threshold)[0]
+    if loud.size == 0:
+        return samples
+    start = max(0, int(loud[0]) - int(rate * keep_start_ms / 1000))
+    end = min(len(samples), int(loud[-1]) + 1 + int(rate * keep_end_ms / 1000))
+    return samples[start:end]
+
+
+def _edge_fetch(text: str, voice: str, rate: str, timeout_s: float) -> bytes:
+    """Pedir el MP3 a Edge. Corre su propio bucle asyncio (se llama desde hilos sin bucle)."""
+    import asyncio
+
+    try:
+        import edge_tts
+    except ImportError as exc:
+        raise EstimatorError("falta edge-tts: `uv sync --extra voz`") from exc
+
+    async def collect() -> bytes:
+        out = bytearray()
+        async for chunk in edge_tts.Communicate(text, voice, rate=rate).stream():
+            if chunk["type"] == "audio":
+                out += chunk["data"]
+        return bytes(out)
+
+    return asyncio.run(asyncio.wait_for(collect(), timeout_s))
+
+
+class EdgeSynth:
+    """Texto -> audio con una voz neuronal de Microsoft Edge (edge-tts). NECESITA INTERNET.
+
+    Medido en la PC de escritorio el 18/11: ~0,9-1,3 s hasta el primer audio (Piper: ~0,15 s).
+    `fetch` se inyecta en los tests para no salir a la red.
+    """
+
+    sample_rate = EDGE_RATE
+
+    def __init__(self, settings: VoiceSettings, fetch: Callable[..., bytes] | None = None) -> None:
+        self.voice = settings.edge_voice
+        self.rate = edge_rate(settings.speech_rate)
+        self.timeout_s = settings.edge_timeout_s
+        self._fetch = fetch or _edge_fetch
+        self.voice_id = f"edge:{self.voice}{'' if self.rate == '+0%' else self.rate}"
+        self.last_ms = 0.0
+
+    def synthesize(self, text: str) -> np.ndarray:
+        t0 = time.perf_counter()
+        data = self._fetch(text, self.voice, self.rate, self.timeout_s)
+        if not data:
+            raise EstimatorError(f"Edge no devolvió audio para {text!r}")
+        samples = trim_silence(decode_mp3(data, self.sample_rate), self.sample_rate)
+        self.last_ms = (time.perf_counter() - t0) * 1000
+        return samples
+
+
+class DiskCachedSynth:
+    """Guarda en disco cada frase sintetizada (`<carpeta>/<voz>/v1/<sha256>.npy`).
+
+    Lo dicho una vez sale después al instante y también sin red. La clave incluye la voz y la
+    velocidad: cambiar de voz no reutiliza audio de otra.
+    """
+
+    def __init__(self, synth, folder: Path) -> None:
+        self.synth = synth
+        self.sample_rate = synth.sample_rate
+        self.voice_id = getattr(synth, "voice_id", "voz")
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in self.voice_id)
+        self.folder = folder / safe / "v1"  # v1: con trim_silence; cambiar el audio sube la versión
+        self.last_ms = 0.0
+        self.hits = 0
+
+    def _path(self, text: str) -> Path:
+        key = hashlib.sha256(f"{self.voice_id}\n{text}".encode()).hexdigest()[:32]
+        return self.folder / f"{key}.npy"
+
+    def synthesize(self, text: str) -> np.ndarray:
+        path = self._path(text)
+        if path.is_file():
+            try:
+                samples = np.load(path)
+                self.hits += 1
+                self.last_ms = 0.0
+                return samples
+            except (OSError, ValueError):
+                path.unlink(missing_ok=True)  # archivo roto: se vuelve a pedir
+        samples = self.synth.synthesize(text)
+        self.last_ms = getattr(self.synth, "last_ms", 0.0)
+        self.folder.mkdir(parents=True, exist_ok=True)
+        partial = path.with_name(path.stem + ".parcial.npy")
+        np.save(partial, samples)
+        partial.replace(path)  # un corte no deja un .npy a medias
+        return samples
+
+
+class FallbackSynth:
+    """Voz principal (Edge) con respaldo local (Piper) si falla o no hay red.
+
+    Tras una falla no se vuelve a probar la principal durante `retry_s`: sin internet, cada
+    frase esperaría el timeout. Lo dicho por el respaldo se lleva a la frecuencia de la principal
+    para que el reproductor reciba siempre la misma. Cada motor tiene su propia caché en
+    memoria (build_synth): una frase dicha por Piper durante un corte no queda fija con esa voz.
+    """
+
+    def __init__(self, primary, fallback, retry_s: float = 30.0, clock=time.monotonic) -> None:
+        self.primary = primary
+        self.fallback = fallback
+        self.sample_rate = primary.sample_rate
+        self.retry_s = retry_s
+        self._clock = clock
+        self._down_until = float("-inf")
+        self._lock = threading.Lock()
+        names = (
+            getattr(primary, "voice_id", None) or "principal",
+            getattr(fallback, "voice_id", None) or "respaldo",
+        )
+        self.voice_id = "|".join(names)
+        self.failures = 0
+        self.last_engine = ""
+        self.last_error: str | None = None
+
+    def synthesize(self, text: str) -> np.ndarray:
+        with self._lock:
+            try_primary = self._clock() >= self._down_until
+        if try_primary:
+            try:
+                samples = self.primary.synthesize(text)
+                self.last_engine = "principal"
+                return samples
+            except Exception as exc:  # red caída, timeout, servicio que cambió: seguir con Piper
+                with self._lock:
+                    self._down_until = self._clock() + self.retry_s
+                    self.failures += 1
+                self.last_error = f"{type(exc).__name__}: {exc}"
+        samples = self.fallback.synthesize(text)
+        self.last_engine = "respaldo"
+        return resample(samples, self.fallback.sample_rate, self.sample_rate)
+
+    def preload(self, phrases: Iterable[str]) -> None:
+        for phrase in phrases:
+            self.synthesize(phrase)
+
+
+def build_synth(settings: VoiceSettings):
+    """Sintetizador de la app según `audio.tts.engine`, con caché en memoria (y preload()).
+
+    piper: Piper sola. edge: Edge con caché en disco y Piper de respaldo.
+    """
+    from visionx.voice.output import CachedSynth
+
+    if settings.tts_engine == "piper":
+        return CachedSynth(PiperSynth(settings))
+    if settings.tts_engine != "edge":
+        raise InvalidInput(f"audio.tts.engine {settings.tts_engine!r}: use piper o edge")
+    primary = EdgeSynth(settings)
+    if settings.tts_cache_dir:
+        primary = DiskCachedSynth(primary, _abs(settings.tts_cache_dir))
+    return FallbackSynth(
+        CachedSynth(primary), CachedSynth(PiperSynth(settings)), retry_s=settings.edge_retry_s
+    )
 
 
 # --- STT --------------------------------------------------------------------------------

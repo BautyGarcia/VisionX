@@ -1,7 +1,7 @@
 """Comandos de voz (T08). Requieren `uv sync --extra voz` salvo `orden` y `frases`.
 
     uv run python -m visionx.voice dispositivos
-    uv run python -m visionx.voice descargar [--voz es_AR-daniela-high] [--whisper base small]
+    uv run python -m visionx.voice descargar [--voz es_ES-davefx-medium] [--whisper base small]
     uv run python -m visionx.voice orden "¿A qué distancia está la taza?"
     uv run python -m visionx.voice frases [tests/fixtures/voz-frases.csv]
     uv run python -m visionx.voice decir "Busco la taza." [--wav salida.wav]
@@ -131,13 +131,21 @@ def cmd_frases(args: argparse.Namespace) -> int:
 
 
 def cmd_decir(args: argparse.Namespace) -> int:
-    from visionx.voice.engines import PiperSynth
+    import time
+
+    from visionx.voice.engines import build_synth
 
     s = VoiceSettings.from_config(load_config(args.config))
-    synth = PiperSynth(s)
+    synth = build_synth(s)
+    t0 = time.perf_counter()
     samples = synth.synthesize(args.texto)
+    ms = (time.perf_counter() - t0) * 1000
     duration = len(samples) / synth.sample_rate
-    print(f"{synth.voice_id}: síntesis {synth.last_ms:.0f} ms para {duration:.2f} s de audio")
+    engine = getattr(synth, "last_engine", "") or s.tts_engine
+    voice = getattr(synth, "voice_id", s.tts_voice)
+    print(f"{voice} ({engine}): síntesis {ms:.0f} ms para {duration:.2f} s de audio")
+    if getattr(synth, "last_error", None):
+        print(f"  Edge falló: {synth.last_error}")
     if args.wav:
         write_wav(Path(args.wav), samples, synth.sample_rate)
         print(f"guardado en {args.wav}")
@@ -226,13 +234,13 @@ def cmd_bucle(args: argparse.Namespace) -> int:
 
 def cmd_escuchar(args: argparse.Namespace) -> int:
     """Prueba manual con micrófono: Enter empieza a grabar, Enter termina; q + Enter sale."""
-    from visionx.voice.engines import PiperSynth, PushToTalk, WhisperTranscriber
-    from visionx.voice.output import AudioOutput, CachedSynth, SoundDevicePlayer
+    from visionx.voice.engines import PushToTalk, WhisperTranscriber, build_synth
+    from visionx.voice.output import AudioOutput, SoundDevicePlayer
 
     s = VoiceSettings.from_config(load_config(args.config))
     parser = _parser()
     stt = WhisperTranscriber(s)
-    synth = CachedSynth(PiperSynth(s))
+    synth = build_synth(s)
     synth.preload(s.preload)
     output = AudioOutput(synth, SoundDevicePlayer(s.output_device, s.block_ms))
     mic = PushToTalk(s.input_device, s.max_record_s)

@@ -102,11 +102,11 @@ def build_detector(args: argparse.Namespace, cfg: dict[str, Any], synthetic):
 def build_output(args: argparse.Namespace, cfg: dict[str, Any], on_record):
     if not args.voz:
         return AudioOutput(PrintSynth(), FakePlayer(), on_record=on_record), None
-    from visionx.voice.engines import PiperSynth, PushToTalk, VoiceSettings, WhisperTranscriber
-    from visionx.voice.output import CachedSynth, SoundDevicePlayer
+    from visionx.voice.engines import PushToTalk, VoiceSettings, WhisperTranscriber, build_synth
+    from visionx.voice.output import SoundDevicePlayer
 
     s = VoiceSettings.from_config(cfg)
-    synth = CachedSynth(PiperSynth(s))
+    synth = build_synth(s)
     synth.preload(s.preload)
     output = AudioOutput(synth, SoundDevicePlayer(s.output_device, s.block_ms), on_record=on_record)
     return output, (PushToTalk(s.input_device, s.max_record_s), WhisperTranscriber(s))

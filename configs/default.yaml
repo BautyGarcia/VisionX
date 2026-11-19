@@ -278,7 +278,12 @@ audio:
     choose: 10
     control: 2
   tts:
-    voice: es_AR-daniela-high   # voz de Piper (v1.0.0); otras: es_MX-claude-high, es_ES-davefx-medium
+    engine: edge              # edge (voz neuronal, NECESITA INTERNET; sin red sigue con Piper) | piper (local)
+    edge_voice: es-UY-MateoNeural  # elegida por Tomás el 18/11 (muestras en outputs/voz/voces-naturales)
+    edge_timeout_s: 4.0       # sin audio completo en este tiempo, esa frase la dice Piper
+    edge_retry_s: 30.0        # tras una falla de Edge, todo por Piper durante este lapso
+    cache_dir: data/cache/voz # frases ya dichas por Edge (sirven sin red); null = sin caché en disco
+    voice: es_ES-davefx-medium  # voz de Piper (v1.0.0): única con engine piper, respaldo con edge
     voices_dir: weights/piper
     preload: ["No entendí.", "Cancelado.", "Leo.", "Describo.", "Mido la distancia."]
   stt:

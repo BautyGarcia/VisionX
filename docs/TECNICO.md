@@ -1423,6 +1423,7 @@ medirlo. Si falla, usar micrófono separado y registrar límite; no bloquea desa
 | `AudioOutput` | `AudioSink` con un hilo: prioridad y luego llegada, corte por prioridad mayor si lo actual es cancelable, `cancel`/`cancel_all`, vencimiento antes y después de sintetizar, cola acotada. Cada evento deja un `PlaybackRecord` con resultado y espera | Síntesis o dispositivo fallido: resultado `error`, la salida sigue. Lo cortado no se retoma |
 | `sonido:<nombre>` | Tonos generados (bip, ok, error, cancelado) sin pasar por TTS | Nombre desconocido: `InvalidInput` |
 | `PiperSynth` + `CachedSynth` | Voz de Piper en CPU; las frases de `audio.tts.preload` y las recientes no se recalculan | Voz ausente o extra sin instalar: `EstimatorError` |
+| `build_synth` (`audio.tts.engine: edge`, desde el 18/11) | Voz por defecto: es-UY-MateoNeural de Microsoft Edge (`EdgeSynth`, **usa internet**; el texto dicho sale de la máquina), sin el silencio que Edge agrega en los bordes, con caché en disco (`DiskCachedSynth`, `data/cache/voz`) y Piper `es_ES-davefx-medium` de respaldo (`FallbackSynth`). `engine: piper` vuelve a la voz local sola | Sin red o timeout: esa frase la dice Piper y Edge no se reintenta por `edge_retry_s`; lo dicho alguna vez sale de la caché también sin red |
 | `WhisperTranscriber` | faster-whisper local en español, sin timestamps ni contexto previo | Modelo ausente: `EstimatorError` |
 | `PushToTalk` | Botón: el callback solo copia bloques a una cola; si el micrófono no acepta 16 kHz graba a su frecuencia y remuestrea (FFT, sin aliasing) | Micrófono que no abre: `SourceError` |
 | `SoundDevicePlayer` | Escribe bloques de `audio.block_ms` y mira el pedido de corte entre bloques; al cortar usa `abort()` para descartar el búfer | Errores de PortAudio: resultado `error` |
@@ -1433,7 +1434,7 @@ se mide con y sin prompt antes de dejarlo. Cancelar tiene que tener un botón: c
 sintética, ni «pará» ni «basta» se transcribieron bien de forma consistente.
 
 ```text
-uv run python -m visionx.voice descargar --voz es_AR-daniela-high --whisper base small
+uv run python -m visionx.voice descargar --voz es_ES-davefx-medium --whisper base small
 uv run python -m visionx.voice orden "¿A qué distancia está la taza?"   # solo reglas
 uv run python -m visionx.voice frases                  # reglas contra tests/fixtures/voz-frases.csv
 uv run python -m visionx.voice bucle --whisper base small --csv X   # Piper -> Whisper -> reglas

@@ -29,7 +29,18 @@ from visionx.voice.commands import (
     clean,
     find_object,
 )
-from visionx.voice.engines import PiperSynth, VoiceSettings, WhisperTranscriber, resample
+from visionx.voice.engines import (
+    DiskCachedSynth,
+    EdgeSynth,
+    FallbackSynth,
+    PiperSynth,
+    VoiceSettings,
+    WhisperTranscriber,
+    build_synth,
+    edge_rate,
+    resample,
+    trim_silence,
+)
 from visionx.voice.output import (
     SOUNDS,
     AudioOutput,
@@ -434,8 +445,9 @@ def test_cached_synth_reuses_frequent_phrases():
 
 def test_settings_from_default_config():
     s = VoiceSettings.from_config(load_config())
-    assert s.tts_voice == "es_AR-daniela-high" and s.stt_model == "small"
-    assert s.voice_path == ROOT / "weights" / "piper" / "es_AR-daniela-high.onnx"
+    assert s.tts_engine == "edge" and s.edge_voice == "es-UY-MateoNeural"
+    assert s.tts_voice == "es_ES-davefx-medium" and s.stt_model == "small"
+    assert s.voice_path == ROOT / "weights" / "piper" / "es_ES-davefx-medium.onnx"
     assert s.deadlines_s["control"] == 2.0
 
 
@@ -467,3 +479,99 @@ def test_whisper_variants_of_search_and_describe():
     }
     for phrase, expected in cases.items():
         assert outcome(parser.parse(phrase)) == expected, phrase
+
+
+# --- Edge (Mateo) con caché en disco y Piper de respaldo, sin red --------------------------
+
+
+def _mp3(seconds: float = 0.3, rate: int = 24_000) -> bytes:
+    """MP3 real de un tono, codificado con PyAV: lo que devolvería Edge."""
+    import io
+
+    import av
+
+    buf = io.BytesIO()
+    with av.open(buf, "w", format="mp3") as out:
+        stream = out.add_stream("libmp3lame", rate=rate, layout="mono")
+        samples = tone([440], seconds * 1000, rate).reshape(1, -1)
+        frame = av.AudioFrame.from_ndarray(samples, format="flt", layout="mono")
+        frame.sample_rate = rate
+        for packet in stream.encode(frame):
+            out.mux(packet)
+        for packet in stream.encode(None):
+            out.mux(packet)
+    return buf.getvalue()
+
+
+def test_edge_rate_format():
+    assert [edge_rate(r) for r in (1.0, 0.9, 1.15)] == ["+0%", "-10%", "+15%"]
+
+
+def test_edge_synth_decodes_mp3_without_network():
+    calls = []
+
+    def fetch(text, voice, rate, timeout_s):
+        calls.append((text, voice, rate, timeout_s))
+        return _mp3(0.3)
+
+    synth = EdgeSynth(VoiceSettings(edge_voice="es-UY-MateoNeural", speech_rate=0.9), fetch=fetch)
+    audio = synth.synthesize("Llegaste.")
+    assert calls == [("Llegaste.", "es-UY-MateoNeural", "-10%", 4.0)]
+    assert synth.sample_rate == 24_000 and audio.dtype == np.float32
+    assert 0.2 < len(audio) / 24_000 < 0.45 and np.abs(audio).max() > 0.1
+    assert synth.voice_id == "edge:es-UY-MateoNeural-10%"
+
+
+def test_edge_synth_without_audio_is_an_error():
+    synth = EdgeSynth(VoiceSettings(), fetch=lambda *a: b"")
+    with pytest.raises(EstimatorError):
+        synth.synthesize("hola")
+
+
+def test_disk_cache_survives_restart(tmp_path: Path):
+    first = FakeSynth()
+    DiskCachedSynth(first, tmp_path).synthesize("Busco la taza.")
+    second = FakeSynth()
+    cached = DiskCachedSynth(second, tmp_path)
+    audio = cached.synthesize("Busco la taza.")
+    assert first.calls == ["Busco la taza."] and second.calls == []  # salió del disco
+    assert cached.hits == 1 and len(audio) == 10 * len("Busco la taza.")
+
+
+def test_disk_cache_separates_voices(tmp_path: Path):
+    a, b = FakeSynth(), FakeSynth()
+    a.voice_id, b.voice_id = "edge:A", "edge:B"
+    DiskCachedSynth(a, tmp_path).synthesize("hola")
+    DiskCachedSynth(b, tmp_path).synthesize("hola")
+    assert a.calls == b.calls == ["hola"]
+
+
+def test_fallback_uses_piper_while_edge_is_down_and_retries_later():
+    now = [0.0]
+    edge = FakeSynth(fail_on="Leo.")
+    edge.sample_rate = 2000
+    piper = FakeSynth()  # 1 kHz: se lleva a 2 kHz
+    synth = FallbackSynth(edge, piper, retry_s=30.0, clock=lambda: now[0])
+    assert len(synth.synthesize("hola")) == 40 and synth.last_engine == "principal"
+    audio = synth.synthesize("Leo.")  # Edge falla: esa frase la dice Piper
+    assert synth.last_engine == "respaldo" and synth.failures == 1
+    assert len(audio) == 2 * 10 * len("Leo.") and "RuntimeError" in synth.last_error
+    now[0] = 10.0
+    synth.synthesize("chau")  # dentro de los 30 s no se vuelve a esperar a Edge
+    assert edge.calls == ["hola", "Leo."] and piper.calls == ["Leo.", "chau"]
+    now[0] = 31.0
+    synth.synthesize("otra")
+    assert edge.calls[-1] == "otra" and synth.last_engine == "principal"
+
+
+def test_build_synth_rejects_unknown_engine():
+    with pytest.raises(InvalidInput, match="engine"):
+        build_synth(VoiceSettings(tts_engine="otra"))
+
+
+def test_trim_silence_keeps_a_short_margin():
+    rate = 1000
+    audio = np.concatenate([np.zeros(150), np.full(100, 0.5), np.zeros(1000)]).astype(np.float32)
+    out = trim_silence(audio, rate, keep_start_ms=30, keep_end_ms=120)
+    assert len(out) == 30 + 100 + 120 and out[30] == 0.5
+    assert len(trim_silence(np.zeros(50, np.float32), rate)) == 50  # todo silencio: no se toca

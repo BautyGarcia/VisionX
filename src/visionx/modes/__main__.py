@@ -234,10 +234,9 @@ def cmd_demo(args: argparse.Namespace) -> int:
     synth = None
     sample_rate = 22050
     if not args.sin_voz:
-        from visionx.voice.engines import PiperSynth, VoiceSettings
-        from visionx.voice.output import CachedSynth
+        from visionx.voice.engines import VoiceSettings, build_synth
 
-        synth_obj = CachedSynth(PiperSynth(VoiceSettings.from_config(cfg)))
+        synth_obj = build_synth(VoiceSettings.from_config(cfg))
         synth, sample_rate = synth_obj.synthesize, synth_obj.sample_rate
     schedule = AudioSchedule(synth, sample_rate)
     painter = Painter()

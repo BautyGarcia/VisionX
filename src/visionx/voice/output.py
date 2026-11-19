@@ -97,6 +97,7 @@ class CachedSynth:
     def __init__(self, synth: Synth, max_items: int = 64) -> None:
         self.synth = synth
         self.sample_rate = synth.sample_rate
+        self.voice_id = getattr(synth, "voice_id", None)
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
         self._max = max_items
         self._lock = threading.Lock()
