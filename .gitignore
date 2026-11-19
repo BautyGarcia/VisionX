@@ -84,6 +84,10 @@ CLAUDE.local.md
 # notas de traspaso Claude/Codex por worktree (ver AGENTS.md)
 TRASPASO.md
 
+# ---------- Código de terceros descargado ----------
+# Port de CREStereo: no tiene licencia, no se commitea (scripts/profundidad/descargar_crestereo.py)
+third_party/
+
 # ---------- Referencias locales pesadas ----------
 # TP2 viejo (256 MB, con su propio .venv)
 docs/i308-calib-tp2-antiguo/

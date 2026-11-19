@@ -40,6 +40,73 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-18 — T12: compuerta de CREStereo (wrapper, latencia, cinta y robustez)
+
+**Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-compuerta-crestereo`
+(local, sin commit ni PR al escribir esto).
+
+**Objetivo.** Decidir si CREStereo congelado queda como estéreo de base: que corra en la Mac,
+cuánto tarda, cuánto erra en metros y cuánto lo daña una desalineación.
+
+**Hecho (código).**
+- `scripts/profundidad/descargar_crestereo.py`: baja el port (commit `b6c7a9f`) a
+  `third_party/crestereo/` y los pesos `crestereo_eth3d.pth` a `weights/crestereo/`, con SHA-256.
+  Los dos quedan fuera de Git (`third_party/` se agregó a `.gitignore`).
+- `src/visionx/depth/crestereo_adapt/`: `port.py` (carga y verificación), `matcher.py` (relleno a
+  múltiplos de 16, dos pasadas y arranque en caliente), `estimator.py` (`CreStereoEstimator` con el
+  contrato `DepthEstimator`), `correction.py` (corrección del ojo derecho como homografía y su
+  composición con los mapas), `classic.py` (SIFT + RANSAC + cuadrados mínimos robustos),
+  `perturb.py` (generador de etapa 1), `robustness.py` y la CLI `latencia`/`cinta`/`robustez`.
+- `configs/default.yaml`: sección `depth.crestereo` con los modos `continuo` y `preciso`.
+- Tests sin pesos ni red real: `tests/test_crestereo_adapt.py` y `tests/test_crestereo_align.py`.
+
+**Evidencia.** Mac M2 Max, macOS, PyTorch 2.15 en MPS, OpenCV 5.0.0, calibración
+`elp-2026-11-11-corregida.yaml`. Artefactos en `outputs/profundidad/20261118-*` (fuera de Git).
+- **Software:** `uv run --extra ml pytest`: 679 aprobados (33 nuevos). `ruff check` y
+  `ruff format --check` correctos.
+- **Carga:** 5,43 M de parámetros; corre en MPS sin recurrir a la CPU; memoria pico ~2 GB.
+- **Latencia M9** (`latencia`, clip `dev-1114-distancias`, 100 pares, 50 + 300):
+  continuo 640×360, 4 iteraciones, arranque en caliente: P50 120 / P95 136 ms, con un cuadro en
+  frío de 218 ms cada 31; preciso 1280×720, 4 iteraciones, dos pasadas: P50 617 / P95 647 ms.
+  La tabla completa de 36 combinaciones se midió con protocolo reducido (10 + 62).
+- **Cinta** (`cinta`, `cinta-s7`, error = distancia − cero de cinta 12,9 mm − cinta, a 1 / 1,5 /
+  2 / 2,5 / 3 m): preciso +1,9 / +2,0 / −2,1 / +25,6 / +34,2 mm; SGBM B0 +12,6 / −16,6 / −18,4 /
+  +37,6 / −87,7 mm; esquinas del damero +1,5 / −5,0 / −2,2 / −0,2 / +1,1 mm.
+- **Robustez** (`robustez`, 8 pares, referencia = la misma red sin perturbar, cambio relativo de
+  profundidad entre 0,5 y 3 m, mediana): roll 0,25° → 5,3 % sin corregir, 2,0 % con el clásico,
+  0,25 % con la corrección exacta; roll 1° → 20,9 / 2,9 / 0,25 %; yaw 0,05° → 3,6 / 1,1 / 0,22 %;
+  focal 0,5 % → 9,0 / 2,5 / 0,22 %. Tabla en [TECNICO](TECNICO.md#compuerta-lo-medido-el-1811).
+
+**Decisión.** CREStereo queda como base. `preciso` se fija en 4 iteraciones y dos pasadas (mide
+como 10 iteraciones en la cinta y tarda menos de la mitad). `continuo` usa dos pasadas en los
+cuadros en frío, que cuestan lo mismo que una.
+
+**Problemas y cambios.**
+- **Corrige el análisis previo al pivote.** Ahí se dijo que la ELP casi no tenía error vertical
+  y que por eso la alineación tendría poco margen. La curva muestra que el mismo giro que corre
+  pocas filas también corre columnas y cambia la profundidad: 0,25° de roll, lo que se midió con
+  el precinto el 09/11, son 5 % de mediana.
+- **El clásico de un solo par no llega al techo** y con errores de 0,05° empeora lo que había
+  (1,8 % contra 1,1 %). Su piso lo fijan yaw y focal, que casi no dejan huella en las filas.
+- **A baja resolución la red falla sobre el damero desde 2 m** (hasta +650 mm a 640×360). No se
+  separó cuánto es del blanco repetitivo y cuánto de la resolución.
+- La nota decía que el registro `app/depth_registry.py` ya existía: está solo en
+  `b/beta-integracion`. El estimador nuevo todavía no está dado de alta en la app.
+
+**Límites.**
+- Un solo clip, de un solo ambiente y día; 8 pares en robustez. La referencia de robustez es la
+  propia red: mide daño por desalineación, no error en metros.
+- La cinta usa el damero y las mismas mediciones con las que se ajustó la corrección de
+  disparidad: no es independiente. Faltan B5 y Fusion en esa tabla.
+- **No está medida la precisión del modo continuo en escenas naturales.**
+- La descalibración es simulada (homografía sobre el par rectificado); falta la real (precinto).
+- El clásico se probó de a un par, sin promediar en el tiempo.
+- No existen la red de alineación, la U-Net de incertidumbre ni la integración en la app.
+
+**Próximo paso (Bauty / Claude Code).** Medir el continuo contra el preciso en escenas naturales;
+repetir robustez con las capturas del precinto y con el clásico promediado en el tiempo; después,
+generador de etapa 2 y red de alineación (22–26/11).
+
 ## 2026-11-18 — Decisión: T12 pivotea de Fusion a CREStereo adaptable (solo planificación)
 
 **Tareas:** T12; afecta T13, T14, T15, T17 y T18. **Persona/agente:** Bauty (decisión) / Claude
