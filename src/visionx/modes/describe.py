@@ -326,7 +326,9 @@ class DescribeHandler:
         from visionx.assistant import Delivery
 
         self._delivery, self._fallback = Delivery(job, now_ns), fallback
-        self._on_event("asistente-pedido", {"request_id": job.request_id, "tipo": job.kind, **info})
+        self._on_event(
+            "asistente-pedido", {"request_id": job.request_id, "pedido": job.kind, **info}
+        )
 
     def _deliver(self, command: Command, now_ns: int) -> tuple[list[Say], bool]:
         d = self._delivery
@@ -349,7 +351,7 @@ class DescribeHandler:
                 "asistente-respuesta",
                 {
                     "request_id": job.request_id,
-                    "tipo": job.kind,
+                    "pedido": job.kind,
                     "texto": job.text,
                     "primer_texto_s": job.first_s,
                     "total_s": job.total_s,

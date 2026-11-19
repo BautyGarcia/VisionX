@@ -293,6 +293,7 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
                     else:
                         audio = mic.stop()
                         recording = False
+                        on_event("boton-soltado", {"audio_s": round(len(audio) / 16000, 2)})
 
                         def recognize(audio=audio, stt=stt) -> None:
                             result = stt.transcribe(audio)
@@ -358,6 +359,13 @@ def cmd_comparar(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_latencias(args: argparse.Namespace) -> int:
+    from visionx.app.latency import load, summary
+
+    print(summary(load(args.traza)))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m visionx.app",
@@ -403,6 +411,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--traza", help="JSONL de eventos (frames, resultados, órdenes, audio)")
     p.add_argument("--captura", help="PNG del dashboard al terminar (sirve con --sin-ventana)")
     p.set_defaults(fn=cmd_ejecutar)
+
+    p = sub.add_parser("latencias", help="tabla de latencias por orden de una traza en vivo")
+    p.add_argument("--traza", required=True)
+    p.set_defaults(fn=cmd_latencias)
 
     p = sub.add_parser("comparar", help="todos los métodos sobre todos los pares, sin descartes")
     common(p)

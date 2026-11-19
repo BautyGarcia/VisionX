@@ -81,6 +81,8 @@ def test_quotes_confirmed_by_ocr_stay_and_the_rest_become_parece_decir():
     assert "«Tita»" in out and bad == 0  # «GRASAS» está a una letra de «CRASAS»
     out, bad = verify_quotes("El frasco dice «60 cápsulas» y es de «Force Factor».", ["FORCE"])
     assert out == "El frasco parece decir 60 cápsulas y es de Force Factor." and bad == 2
+    out, _ = verify_quotes("Dice «Force Factor» y «Amazing».", ["FORCE", "AMAZING"])
+    assert out == "Parece decir Force Factor y «Amazing»."  # mayúscula al principio de la frase
     out, bad = verify_quotes("Los sellos dicen «exceso en sodio».", ["EXCESO EN"])
     assert out == "Los sellos parecen decir exceso en sodio." and bad == 1
 

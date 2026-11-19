@@ -150,7 +150,7 @@ class ReadHandler:
                 ajob = self.assistant.submit(job.request_id, kind, job.selected_image, ocr=lines)
                 self._delivery = Delivery(ajob, now_ns)
                 self._fallback = fallback
-                self._event("asistente-pedido", {"request_id": job.request_id, "tipo": kind,
+                self._event("asistente-pedido", {"request_id": job.request_id, "pedido": kind,
                                                  "ocr": lines})  # fmt: skip
                 return [], False
             if not ordered:
@@ -209,7 +209,7 @@ class ReadHandler:
                 "asistente-respuesta",
                 {
                     "request_id": job.request_id,
-                    "tipo": job.kind,
+                    "pedido": job.kind,
                     "texto": job.text,
                     "primer_texto_s": job.first_s,
                     "total_s": job.total_s,

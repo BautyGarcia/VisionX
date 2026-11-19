@@ -181,6 +181,8 @@ def verify_quotes(text: str, ocr_lines: Iterable[str]) -> tuple[str, int]:
             says = _SAYS.search(before)
             if says:
                 verb = "parecen decir" if says.group(1).lower() == "dicen" else "parece decir"
+                if not before[: says.start()].strip() and says.group(0)[:1].isupper():
+                    verb = verb[:1].upper() + verb[1:]  # «Dice "X"» al principio de la frase
                 prefix = before[: says.start()] + (
                     "que " if says.group(0).lower().startswith("que") else ""
                 )
