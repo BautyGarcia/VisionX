@@ -40,6 +40,43 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — Plan de cierre y de la exposición; insumos para el póster
+
+**Tareas:** T07, T09, T15, T16. **Persona/agente:** Tomás (decisiones) / Claude Code.
+**Rama:** `b/poster-insumos`.
+
+**Decisiones de Tomás.**
+- **Portátil (T19):** primero se muestra la demo funcional al profesor con la cámara en la Mac y se
+  pregunta qué presta el laboratorio (Pi 5 o 4, placa de sonido USB, corbatero, pulsador, power
+  bank, arnés de pecho). Arquitectura: la Pi solo captura, graba y reproduce; todo el cómputo
+  sigue en la Mac. Auricular: uno solo (Bluetooth, solo salida) para no perder el ambiente, o
+  conducción ósea. Tomás se encarga de las conexiones.
+- **Altura de la persona:** se pregunta una vez («medí 1,80») y se guarda, y además se estima la
+  altura y la inclinación real de la cámara detectando el piso con la profundidad; las bandas del
+  cuerpo («a la altura de tu cintura») se calculan para esa persona.
+- **Dashboard rediseñado para el stand:** pantalla completa con cámara + flecha, profundidad, mapa
+  de incertidumbre, radar con objetos y su margen, subtítulos de la conversación y medidor de
+  latencia. (El tercer panel actual es una vista desde arriba de la profundidad, de
+  diagnóstico; no tiene que ver con la incertidumbre.)
+- **Exposición:** setup para que el público pruebe los 4 modos; «probalo vos» con los ojos
+  vendados; «sabe cuándo no sabe» (vidrio/espejo); otra cámara (segunda ELP y, si se consigue,
+  una distinta); visor del GT sintético con la curva de robustez.
+- **Póster A0:** lo compila Bauty con ayuda de Tomás; tiene que contar datos, infraestructura,
+  datasets, resultados intermedios, lo que no sirvió y por qué.
+
+**Hecho.** [POSTER-INSUMOS](POSTER-INSUMOS.md): mensaje central, línea de tiempo, arquitectura e
+infraestructura, decisiones con su porqué, resultados con número y fuente, datasets, resultados
+negativos, el ciclo probar → corregir del 19/11 y figuras sugeridas, con lo pendiente marcado.
+Enlazado desde AGENTS (paso 8).
+
+**Qué falta para cerrar diseño, software y modelo.**
+- Bauty: red de entrada (entrenando) y su evaluación con el GT sintético; integrarla (corrección,
+  confianza, estados, `calibrar_distancia`); U-Net a Drive, factor de b en val y margen por objeto
+  en el ubicador; banco ELP s1.
+- Tomás / Claude Code: curva de robustez (corriendo); sesiones M8 y M10 con Bauty; M9 con la traza
+  rápida; altura + piso; dashboard del stand; material de la exposición.
+- Los dos: test congelado una vez; congelar 4/12; póster; informe después.
+
 ## 2026-11-19 (noche) — T15/T12: GT sintético de Replica con la geometría de la ELP, generado
 
 **Tareas:** T15, T12, T13. **Persona/agente:** Tomás (decisión A + C) / Claude Code. **Rama:**
