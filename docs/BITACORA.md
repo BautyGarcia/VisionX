@@ -40,6 +40,96 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T13/T15: cómo llega la incertidumbre a la voz y mini dataset con ground truth
+
+**Tareas:** T13, T15. **Persona/agente:** Tomás (decisiones) / Claude Code (búsqueda y
+especificación). **Rama:** `b/decision-t12`.
+
+**Objetivo.** Responder a la devolución de la cátedra antes de que se diseñe la red de entrada:
+cómo entiende Sonnet el resultado de la red y con qué datos con verdad de referencia se mide.
+
+**Decisiones de Tomás.**
+- **Tres niveles de certeza** decididos por código (precisa / aproximada / no segura) a partir
+  del intervalo del 90 % por objeto; Sonnet solo los dice y se verifica que no agregue números.
+- **Mini dataset: A + C.** A = escenas sintéticas de Replica renderizadas con la geometría de la
+  ELP (con variantes de cámara hermana y distinta), primero y completo, a cargo de Tomás / Claude
+  Code. C = el banco ELP de Bauty, con medidor láser si se consigue en la facultad. Booster queda
+  descartado por ahora.
+
+**Hecho.** [INCERTIDUMBRE-Y-GT](INCERTIDUMBRE-Y-GT.md): contrato (qué tiene que entregar la
+profundidad: b calibrada, intervalo por objeto, confianza y estados de cámara,
+`calibrar_distancia`), cálculo del intervalo de Laplace, niveles y frases, formato para Sonnet,
+verificación, banco de 60 casos, generación y partición del sintético, Booster y métricas por
+objeto. Enlazado desde AGENTS (paso 6).
+
+**Búsqueda.** No hay un dataset real con estéreo + profundidad densa + labels de objetos en
+interiores: los estéreo reales (InStereo2K, Middlebury, Booster) no traen labels, y los de
+interiores con labels (NYU, ScanNet, Hypersim) no son estéreo. InStereo2K y Middlebury además
+probablemente los vio CREStereo. Replica: licencia de investigación o educación, sin
+redistribuir. Habitat-Sim no corre en Windows: el renderizador se decide en la factibilidad.
+
+**Límites.** Los umbrales de los niveles (10 % y 25 %) son iniciales y se ajustan en val. El
+sintético tiene brecha de dominio: el banco ELP sigue siendo la prueba real.
+
+**Próximo paso.** Claude Code: factibilidad del render de Replica y el conjunto A completo.
+Bauty: intervalo por objeto en el ubicador y factor de b.
+
+## 2026-11-19 (noche) — Decisión T12: la red de entrada estima el campo de corrección (opción a); devolución de la cátedra
+
+**Tareas:** T12, T13, T15. **Persona/agente:** Tomás (decisión, acordada con Bauty) / Claude
+Code (registro). **Rama:** `b/decision-t12`.
+
+**Decisión (Tomás, 19/11).** De las tres opciones que dejó abiertas la entrada «regla de decisión,
+generador de etapa 2 y cámaras hermanas», se elige la **(a)**: la red de entrada, antes de
+CREStereo, estima el **campo de corrección completo** del ojo derecho (giros + centro óptico +
+distorsión) que lleva «esta cámara» a la geometría de la ELP calibrada, más una **confianza**.
+
+- **Referencia única:** la red lleva adentro solo la calibración de nuestra ELP
+  (`elp-2026-11-11-corregida.yaml`); se entrena con **cámaras hermanas simuladas** (el generador
+  de etapa 2 ya existe: `CameraModel`, `sample_sibling`, `mismatch_field`).
+- **Cámaras parecidas:** se autocalibran (red + clásico para los giros).
+- **Cámaras muy distintas:** si la confianza de la red o la incertidumbre de la U-Net de salida no
+  cumple el umbral, la app **pide un objeto a distancia conocida** («calibrá, está a 2 metros»;
+  el comando ya existe en la app y llama a `calibrar_distancia(frame, mask, z_m)` del estimador).
+  Con eso se corrige la escala. Una distorsión muy distinta (gran angular, ojo de pez) no se
+  corrige con un objeto: necesita una calibración corta con damero o queda fuera de alcance.
+- **Reparto:** clásico = giros de nuestra cámara; red de entrada = diferencias de lente y «¿conozco
+  esta cámara?»; distancia conocida = escala; U-Net de salida = cuánto creerle a cada píxel.
+
+**Por qué (lo medido, entradas del 19/11).** El clásico con la regla ya resuelve roll, pitch y
+focal en nuestra cámara (precinto −4,8 % → −2,3 %), así que una red ahí casi no gana. En cámaras
+hermanas, corregir solo cuatro números deja 3–11 % aun con distancia conocida, y el campo exacto
+deja 0,3–0,9 %: lo que falta es centro y distorsión, que es lo que la red puede aprender.
+
+**Alcance.** Cualquier cámara estéreo sincronizada, de lentes paralelas y sin ojo de pez, con la
+captura adaptada si no entrega el par lado a lado como la ELP. **No sirve para una sola cámara**
+(sin par no hay disparidad; un modo monocular sería otro modelo y otro proyecto).
+
+**Lo que falta (Bauty, con lo que ya está del lado de la app).**
+1. La red de entrada (campo + confianza) entrenada con hermanas de la ELP; ampliar a cámaras
+   virtuales más variadas si sobra tiempo.
+2. El umbral de confianza/incertidumbre que dispara el pedido de distancia conocida.
+3. En el estimador: `calibrar_distancia` y los códigos de estado `alineando`,
+   `camara-desconocida`, `no-medible` (la app ya los dice).
+4. Probarlo con cámaras reales: la segunda ELP (pedírsela al profesor) y una cámara distinta.
+
+**Devolución de la cátedra (Agus, 19/11)**, sobre el mail donde se explicó el sistema:
+- «Cuando estén satisfechos con el funcionamiento intentaría hacer la **conexión con la LLM**, ya
+  que no creo que sea trivial hacer que entienda el resultado de la red sin alguna vuelta.» Es
+  decir: que Sonnet reciba y use bien distancias **con incertidumbre** (y la confianza de la
+  cámara) para responder.
+- «Después, cuando tengan algo mínimo funcionando, pueden seguir mejorando la performance.»
+- «Tal vez pueden conseguir algún **mini dataset de escenas** cuyo input sea similar a lo que
+  verían en la realidad pero tengan **ground truth de las distancias y labels**, así pueden medir
+  con más casos y tener más precisión en esa medición en comparación con medir con regla pocos
+  casos.» Afecta a T15 (evaluación): sumar un conjunto con verdad de distancias y etiquetas de
+  objetos, además del banco ELP con cinta.
+- Conclusión de la cátedra: «van bien así».
+
+**Próximo paso.** Bauty: red de entrada (a). Tomás / Claude Code: conexión de la salida de la red
+(metros + incertidumbre + confianza) con el asistente, y búsqueda del mini dataset con verdad de
+distancias y etiquetas.
+
 ## 2026-11-19 (noche) — T07: plan para pasar de 4 a 10 fps, con el criterio fijado antes de medir
 
 **Tareas:** T07 (y T12 por CREStereo). **Persona/agente:** Tomás (decisiones) / Claude Code.
