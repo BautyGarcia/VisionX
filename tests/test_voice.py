@@ -592,16 +592,33 @@ def test_prefetch_synthesizes_while_queued_and_never_twice():
 
 
 def test_audio_output_prefetches_queued_phrases():
-    slow = FakeSynth(delay_s=0.15)
+    class Overlap(FakeSynth):
+        """Cuenta cuántas síntesis corren a la vez (sin depender del reloj del runner)."""
+
+        def __init__(self):
+            super().__init__(delay_s=0.15)
+            self.active = self.peak = 0
+            self.lock = threading.Lock()
+
+        def synthesize(self, text):
+            with self.lock:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+            try:
+                return super().synthesize(text)
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+    slow = Overlap()
     cached = CachedSynth(slow, prefetch=True)
     output = AudioOutput(cached, FakePlayer())
-    t0 = time.perf_counter()
     for i, text in enumerate(["Primera frase.", "Segunda frase.", "Tercera frase."]):
         output.submit(event(1, text, created=i))
-    assert output.wait_idle(5)
+    assert output.wait_idle(10)
     output.close()
     assert sorted(slow.calls) == sorted(["Primera frase.", "Segunda frase.", "Tercera frase."])
-    assert time.perf_counter() - t0 < 0.15 * 3  # en paralelo, no una detrás de otra
+    assert slow.peak >= 2  # se sintetizaron en paralelo, no una detrás de otra
 
 
 def test_only_mateo_by_default_retries_and_never_switches_voice():

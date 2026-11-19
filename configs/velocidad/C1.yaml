@@ -1,0 +1,12 @@
+# C1 — Opción 1: YOLO en la GPU de la Mac (MPS) (docs/VELOCIDAD.md).
+# Se superpone a la config local de la máquina (cámara, audio): no editar local.yaml por prueba.
+incluir: configs/local.yaml
+detection:
+  device: mps
+  imgsz: 960
+depth:
+  precisa:
+    espera_s: 3.0          # el preciso en vivo tarda ~1,6 s con todo corriendo (19/11)
+  crestereo:
+    continuo:
+      iters: 4

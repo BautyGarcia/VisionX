@@ -108,7 +108,8 @@ salir. Auriculares puestos. Para verlo por Discord: compartir la ventana de la a
 (la voz y el sonar salen por los auriculares de la Mac).
 
 Si CREStereo no carga, va lento o se queda sin memoria: repetir con `--profundidad B0
---profundidad-precisa B0` (la beta de siempre) y anotar la diferencia.
+--profundidad-precisa B0` (la beta de siempre) y anotar la diferencia. Para subir los fps (YOLO
+en la GPU, 768 px, 3 iteraciones) y elegir con datos: [VELOCIDAD](VELOCIDAD.md).
 
 ## 4. Qué probar y qué anotar
 

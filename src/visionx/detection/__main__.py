@@ -4,6 +4,7 @@
     uv run python -m visionx.detection clases [TEXTO ...]
     uv run python -m visionx.detection detectar ENTRADA [--salida DIR] [--imagenes] [--rectificar]
     uv run python -m visionx.detection medir ENTRADA [--modelos A B] [--repeticiones 3] [--csv X]
+    uv run python -m visionx.detection presencia ENTRADA --clases cup bottle [--csv X]
 
 ENTRADA es una imagen, una carpeta de imágenes o una grabación de `python -m visionx.camera
 grabar`. El detector se configura en la sección `detection` de configs/default.yaml.
@@ -247,6 +248,76 @@ def cmd_detectar(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_presencia(args: argparse.Namespace) -> int:
+    """En qué % de los cuadros aparece cada clase pedida (calidad de detección por config).
+
+    Una fila por clase, más la latencia del detector sobre esos mismos cuadros. Sirve para
+    comparar dispositivo e imgsz sobre los clips de buscar/distancias (docs/VELOCIDAD.md).
+    """
+    from collections import Counter
+
+    cfg = load_config(args.config)
+    settings = dataclasses.replace(DetectorSettings.from_config(cfg), track=False)
+    if args.imgsz:
+        settings = dataclasses.replace(settings, imgsz=args.imgsz)
+    if args.dispositivo:
+        settings = dataclasses.replace(settings, device=args.dispositivo)
+    detector = YoloDetector(settings)
+    wanted = set(args.clases)
+    counts: Counter = Counter()
+    best: dict[str, list[float]] = {c: [] for c in wanted}
+    latencies: list[float] = []
+    n = 0
+    try:
+        for frame in islice(open_input(args.entrada, cfg), args.max or None):
+            det = detector.predict(frame)
+            n += 1
+            if n > args.calentamiento:
+                latencies.append(det.inference_ms)
+            seen: dict[str, float] = {}
+            for cls, score in zip(det.classes, det.scores, strict=True):
+                if cls in wanted:
+                    seen[cls] = max(seen.get(cls, 0.0), float(score))
+            for cls, score in seen.items():
+                counts[cls] += 1
+                best[cls].append(score)
+    finally:
+        detector.close()
+    if n == 0:
+        print("no hay frames", file=sys.stderr)
+        return 1
+    lat = latency_summary(latencies or [np.nan])
+    rows = []
+    for cls in sorted(wanted):
+        rows.append({
+            "entrada": str(args.entrada),
+            "clase": cls,
+            "frames": n,
+            "presencia_pct": round(100 * counts[cls] / n, 1),
+            "score_mediano": round(float(np.median(best[cls])), 3) if best[cls] else None,
+            "modelo": settings.model,
+            "dispositivo": detector.device,
+            "imgsz": settings.imgsz,
+            "det_mediana_ms": lat["mediana_ms"],
+            "det_p90_ms": lat["p90_ms"],
+        })  # fmt: skip
+        print(f"{cls:12} presente en {rows[-1]['presencia_pct']:5.1f} % de {n} cuadros  "
+              f"(score mediano {rows[-1]['score_mediano']})")  # fmt: skip
+    print(f"detector {settings.model} en {detector.device} a {settings.imgsz}: "
+          f"mediana {lat['mediana_ms']} ms, p90 {lat['p90_ms']} ms")  # fmt: skip
+    if args.csv:
+        path = Path(args.csv)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        new = not path.exists()
+        with open(path, "a", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+            if new:
+                writer.writeheader()
+            writer.writerows(rows)
+        print(f"filas agregadas a {path}")
+    return 0
+
+
 def cmd_medir(args: argparse.Namespace) -> int:
     """Latencia de varios modelos sobre los mismos frames, sin tracking (comparación justa).
 
@@ -264,6 +335,8 @@ def cmd_medir(args: argparse.Namespace) -> int:
         settings = dataclasses.replace(base, model=model, track=False)
         if args.imgsz:
             settings = dataclasses.replace(settings, imgsz=args.imgsz)
+        if args.dispositivo:
+            settings = dataclasses.replace(settings, device=args.dispositivo)
         detector = YoloDetector(settings)
         try:
             for _ in range(args.calentamiento):
@@ -348,8 +421,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--imgsz", type=int, help="pisa detection.imgsz")
     p.add_argument("--max", type=int, default=0, help="usar como máximo N frames")
     p.add_argument("--csv", help="guardar la tabla en este CSV")
+    p.add_argument("--dispositivo", help="pisa detection.device: cpu | mps | cuda:0 | auto")
     p.add_argument("--config")
     p.set_defaults(fn=cmd_medir)
+
+    p = sub.add_parser("presencia", help="% de cuadros con cada clase pedida (calidad por config)")
+    p.add_argument("entrada")
+    p.add_argument("--clases", nargs="+", required=True, help="clases COCO, ej. cup bottle")
+    p.add_argument("--imgsz", type=int, help="pisa detection.imgsz")
+    p.add_argument("--dispositivo", help="pisa detection.device: cpu | mps | cuda:0 | auto")
+    p.add_argument("--max", type=int, default=0, help="usar como máximo N frames")
+    p.add_argument("--calentamiento", type=int, default=3, help="cuadros sin contar en la latencia")
+    p.add_argument("--csv", help="agregar las filas a este CSV")
+    p.add_argument("--config")
+    p.set_defaults(fn=cmd_presencia)
 
     args = parser.parse_args(argv)
     try:
