@@ -40,6 +40,47 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T07: velocidad medida sin cámara; gana C1 (YOLO en la GPU), falta el vivo
+
+Tarea: T07 (velocidad, [VELOCIDAD](VELOCIDAD.md)). Persona/agente: Bauty / Claude Code. Rama:
+`a/velocidad-medicion`, sobre `main` 0426c57.
+Objetivo: medir C0–C4 con el criterio fijado antes de medir y proponer la config ganadora.
+Hecho: secciones **A** (presencia y latencia del detector en 4 clips) y **B** (CREStereo con 3 y
+4 iteraciones: latencia y cinta) para las 5 configs. La sección **C** (vivo) no se hizo: la pidió
+Bauty sin cámara. Como referencia del ritmo con todo junto se corrió la app completa sobre el clip
+`dev-1114-buscar-a` (sin ventana ni órdenes, con `--profundidad-precisa`), una config por vez.
+Contexto: Mac M2 Max, MPS, `configs/velocidad/C*.yaml` sobre `configs/local.yaml`; YOLO
+`yolo26s-seg@3da1d83e31ca`; CREStereo `2271ab61`, 640×360, 2 pasadas. Planilla:
+`datasets/velocidad/resultados.csv`; crudos en `outputs/velocidad/` (log en `log.txt`).
+
+| | C0 | C1 | C2 | C3 | C4 |
+|---|---:|---:|---:|---:|---:|
+| YOLO / imgsz / iteraciones | cpu/960/4 | mps/960/4 | mps/768/4 | mps/960/3 | mps/768/3 |
+| Detector solo, distancias: mediana / p90 ms | 163,5 / 318,8 | 34,2 / 42,1 | 29,4 / 42,5 | 34,9 / 57,7 | 28,6 / 35,7 |
+| Presencia botella / taza / mochila (buscar-a/b/c), % | 61,3 / 41,4 / 33,4 | igual a C0 | 60,4 / 38,1 / 35,9 | igual a C0 | igual a C2 |
+| Presencia taza / botella / bolso (distancias), % | 100 / 100 / 62,0 | igual a C0 | 100 / 100 / **4,0** | igual a C0 | 100 / 100 / **4,0** |
+| CREStereo solo, en caliente: P50 / P95 ms | 128 / 182 | 128 / 182 | 128 / 182 | 97 / 149 | 97 / 149 |
+| Cinta, continuo: error a 1 / 1,5 / 2 m, mm | −1,3 / +16,1 / +109,9 | ídem | ídem | **+16,0** / +7,6 / **+152,2** | ídem C3 |
+| App sobre clip: detector / profundidad, fps | 4,0 / 4,0 | 9,0 / 4,1 | 9,7 / 4,4 | 9,8 / 5,2 | 10,7 / 5,6 |
+| Criterio 2 (detección) / 3 (cinta) | — | sí / sí | **no** / sí | sí / **no** | **no** / **no** |
+
+Resultado: **C1 es la única que cumple 2 y 3**. La GPU no cambia nada de la detección (presencia
+idéntica cuadro a cuadro) y YOLO baja de 164 a 34 ms. 768 px pierde el bolso de distancias (de
+62 % a 4 %, y `handbag` de 19,7 % a 0). 3 iteraciones empeora la cinta 14,7 mm a 1 m y 42,3 mm a
+2 m (a 1,5 m mejora 8,5 mm): falla el límite de 1 cm. Propuesta: `detection.device: mps` en
+`configs/local.yaml` de la Mac (ya está), sin tocar `configs/default.yaml` (la PC de Tomás no
+tiene MPS).
+Hallazgo: sobre el clip, ninguna config salvo C4 llega a 10/5 fps. La **profundidad queda en ~4 fps
+en la app** aunque CREStereo solo tarde 128 ms (en la app, mediana 153–182 ms): hay tiempo fuera
+de la red por cuadro (rectificar 1920×1080, preparar, unir) o espera del pipeline. Con YOLO en la
+GPU el cuello pasa a ser la profundidad, no el detector. YOLO en la app tarda 95 ms contra 34 ms
+solo: compite por la GPU con CREStereo.
+Límites: sin vivo, el criterio 1 y el 4 no están medidos (`cumple` de C1 = «pendiente vivo»). La
+cinta tiene 3 pares por distancia, cada uno en frío para las dos variantes. El ritmo sobre clip
+no es el de la cámara (el clip se reproduce a su velocidad y salta cuadros).
+Próximo paso: Bauty corre la sección C con C1 (y C0 para comparar) con el guion de VELOCIDAD;
+Tomás mira por qué la profundidad de la app no pasa de ~4 fps.
+
 ## 2026-11-19 (noche) — T07: plan para pasar de 4 a 10 fps, con el criterio fijado antes de medir
 
 **Tareas:** T07 (y T12 por CREStereo). **Persona/agente:** Tomás (decisiones) / Claude Code.
