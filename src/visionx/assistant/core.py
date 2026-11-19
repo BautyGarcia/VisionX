@@ -93,6 +93,9 @@ class AssistantSettings:
     timeout_s: float = 15.0
     memory_s: float = 120.0
     max_turns: int = 6
+    # Cortar también en comas desde esta cantidad de caracteres, para que la voz arranque con el
+    # primer tramo y no al final de una frase larga. 0 = solo en punto.
+    clause_chars: int = 30
     fallbacks: bool = True  # fallback del servidor si el modelo rechaza (beta)
     # Gasto: cada consulta se anota en `ledger` (JSONL); con el acumulado >= budget_usd no se
     # consulta más y los modos usan su respaldo local. 0 = sin tope.
@@ -246,15 +249,39 @@ def verify_quotes(text: str, ocr_lines: Iterable[str]) -> tuple[str, int]:
 _END = re.compile(r"[.!?…](?=\s)")
 
 
+_CLAUSE = re.compile(r"[,;:](?=\s)")
+
+
+def _inside_quote(text: str, pos: int) -> bool:
+    """¿La posición cae dentro de una cita «…» o "…"? (no se corta una cita a la mitad)."""
+    before = text[:pos]
+    return before.count("«") > before.count("»") or before.count('"') % 2 == 1
+
+
 def split_sentences(
-    buffer: str, *, final: bool = False, min_chars: int = 12
+    buffer: str, *, final: bool = False, min_chars: int = 12, clause_chars: int = 0
 ) -> tuple[list[str], str]:
-    """Frases completas del buffer y el resto. Con final=True, el resto también sale."""
+    """Frases completas del buffer y el resto. Con final=True, el resto también sale.
+
+    Con `clause_chars` > 0 también corta en coma, punto y coma o dos puntos cuando el tramo ya
+    tiene al menos esa cantidad de caracteres: una frase larga de Claude («La taza blanca está
+    sobre el taburete, a 1,4 metros, …») empieza a sintetizarse y a sonar con su primer tramo en
+    vez de esperar el punto final (en vivo, 19/11, la frase entera tardaba ~4 s en sonar).
+    """
     out, start = [], 0
-    for m in _END.finditer(buffer):
-        if m.end() - start >= min_chars:
-            out.append(buffer[start : m.end()].strip())
-            start = m.end()
+    cuts = sorted(
+        [(m.end(), True) for m in _END.finditer(buffer)]
+        + ([(m.end(), False) for m in _CLAUSE.finditer(buffer)] if clause_chars > 0 else [])
+    )
+    for end, full_stop in cuts:
+        if end <= start:
+            continue
+        if full_stop and end - start >= min_chars:
+            out.append(buffer[start:end].strip())
+            start = end
+        elif not full_stop and end - start >= clause_chars and not _inside_quote(buffer, end):
+            out.append(buffer[start:end].strip())
+            start = end
     rest = buffer[start:]
     if final:
         if rest.strip():
@@ -464,7 +491,7 @@ class Assistant:
                     job.first_s = self._clock() - t0
                 buffer += delta
                 job.raw += delta
-                ready, buffer = split_sentences(buffer)
+                ready, buffer = split_sentences(buffer, clause_chars=self.s.clause_chars)
                 for sentence in ready:
                     self._emit(job, sentence, t0, full)
             ready, _ = split_sentences(buffer, final=True)

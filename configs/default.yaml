@@ -348,6 +348,8 @@ audio:
     compute_type: int8      # int8 en CPU; float16 en CUDA
     beam_size: 1            # 1 = greedy, lo más rápido; subir solo si mejora las frases medidas
     initial_prompt: "Buscá la taza. ¿A qué distancia está? Leé. Describí. Cancelar."  # orienta vocabulario y puntuación
+    backend: auto           # auto: MLX (GPU de Apple) si está instalado y bajado; si no, faster-whisper | mlx | faster-whisper
+    mlx_models_dir: weights/whisper-mlx  # `python -m visionx.voice descargar --whisper-mlx small`
 
 assistant:
   # Claude con imagen para leer, describir y preguntas libres (T10/T11, decidido el 18/11 tras
@@ -363,6 +365,7 @@ assistant:
   timeout_s: 15.0
   memory_s: 120.0            # preguntas de seguimiento: recuerda lo hablado durante esto
   max_turns: 6
+  clause_chars: 30           # corta la respuesta también en comas desde 30 caracteres: la voz arranca con el primer tramo (vivo 19/11: ~4 s de espera); 0 = solo en punto
   fallbacks: true            # fallback del servidor si el modelo rechaza una consulta
   ledger: outputs/vlm/gasto.jsonl  # costo de cada consulta
   budget_usd: 5.0            # con lo anotado en ledger >= esto, no consulta más (0 = sin tope)

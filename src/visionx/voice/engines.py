@@ -66,6 +66,11 @@ class VoiceSettings:
     stt_compute_type: str = "int8"
     stt_beam_size: int = 1
     stt_initial_prompt: str | None = None
+    # Motor de Whisper: "auto" usa MLX (GPU de Apple) en una Mac con Apple Silicon si está
+    # instalado y bajado; si no, faster-whisper en CPU. En vivo (19/11, Mac) faster-whisper
+    # tardaba ~4,2 s por orden con la CPU cargada por la profundidad.
+    stt_backend: str = "auto"  # auto | mlx | faster-whisper
+    stt_mlx_models_dir: str = "weights/whisper-mlx"
     input_device: int | str | None = None
     output_device: int | str | None = None
     block_ms: float = 20.0
@@ -100,6 +105,8 @@ class VoiceSettings:
             stt_compute_type=str(stt.get("compute_type", d.stt_compute_type)),
             stt_beam_size=int(stt.get("beam_size", d.stt_beam_size)),
             stt_initial_prompt=stt.get("initial_prompt"),
+            stt_backend=str(stt.get("backend", d.stt_backend)),
+            stt_mlx_models_dir=str(stt.get("mlx_models_dir", d.stt_mlx_models_dir)),
             input_device=a.get("input_device"),
             output_device=a.get("output_device"),
             block_ms=float(a.get("block_ms", d.block_ms)),
@@ -116,6 +123,10 @@ class VoiceSettings:
     @property
     def stt_path(self) -> Path:
         return _abs(self.stt_models_dir) / self.stt_model
+
+    @property
+    def stt_mlx_path(self) -> Path:
+        return _abs(self.stt_mlx_models_dir) / self.stt_model
 
 
 # --- descargas --------------------------------------------------------------------------
@@ -157,6 +168,38 @@ def download_whisper(model: str, folder: Path) -> Path:
     target = folder / model
     download_model(model, output_dir=str(target))
     return target
+
+
+def mlx_repo(model: str) -> str:
+    """Repositorio de Hugging Face con los pesos MLX de un tamaño de Whisper."""
+    return {"large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
+            "turbo": "mlx-community/whisper-large-v3-turbo"}.get(
+        model, f"mlx-community/whisper-{model}-mlx")  # fmt: skip
+
+
+def download_whisper_mlx(model: str, folder: Path) -> Path:
+    """Baja los pesos MLX de Whisper (solo sirven en una Mac con Apple Silicon)."""
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise EstimatorError("falta huggingface_hub: `uv sync --extra voz`") from exc
+    target = folder / model
+    snapshot_download(mlx_repo(model), local_dir=str(target))
+    return target
+
+
+def mlx_available() -> bool:
+    """¿Se puede usar Whisper en la GPU de Apple? (Mac con Apple Silicon y mlx-whisper)."""
+    import importlib.util
+    import platform
+    import sys
+
+    return (
+        sys.platform == "darwin"
+        and platform.machine() == "arm64"
+        and importlib.util.find_spec("mlx_whisper") is not None
+    )
 
 
 # --- TTS --------------------------------------------------------------------------------
@@ -462,6 +505,71 @@ class WhisperTranscriber:
             language=info.language,
             language_probability=float(info.language_probability),
         )
+
+
+class MlxWhisperTranscriber:
+    """Audio mono 16 kHz -> texto con mlx-whisper, en la GPU de una Mac con Apple Silicon.
+
+    Mismo tamaño de modelo y mismas opciones que faster-whisper (español, sin condicionar en
+    texto previo, el prompt de vocabulario), así que cambia la velocidad, no lo que entiende.
+    Greedy: MLX no tiene búsqueda en haz (beam_size se ignora; por defecto ya es 1).
+    """
+
+    def __init__(self, settings: VoiceSettings, transcribe: Callable[..., dict] | None = None):
+        path = settings.stt_mlx_path
+        if transcribe is None:
+            if not (path / "config.json").is_file():
+                raise EstimatorError(
+                    f"no está el modelo {path}: `python -m visionx.voice descargar "
+                    f"--whisper-mlx {settings.stt_model}`"
+                )
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            try:
+                import mlx_whisper
+            except ImportError as exc:
+                raise EstimatorError("falta mlx-whisper: `uv sync --extra voz` en la Mac") from exc
+            transcribe = mlx_whisper.transcribe
+        self.settings = settings
+        self._transcribe = transcribe
+        self._path = str(path)
+        self.model_id = f"whisper-{settings.stt_model}-mlx"
+        # La primera llamada carga el modelo y compila: hacerla acá y no con la primera orden.
+        self._run(np.zeros(WHISPER_RATE // 2, dtype=np.float32))
+
+    def _run(self, audio: np.ndarray) -> dict:
+        return self._transcribe(
+            audio,
+            path_or_hf_repo=self._path,
+            language="es",
+            condition_on_previous_text=False,
+            initial_prompt=self.settings.stt_initial_prompt,
+            temperature=0.0,
+            verbose=None,
+        )
+
+    def transcribe(self, samples: np.ndarray) -> Transcript:
+        audio = np.ascontiguousarray(samples, dtype=np.float32).reshape(-1)
+        t0 = time.perf_counter()
+        out = self._run(audio)
+        return Transcript(
+            text=str(out.get("text", "")).strip(),
+            audio_s=len(audio) / WHISPER_RATE,
+            elapsed_ms=(time.perf_counter() - t0) * 1000,
+            language=str(out.get("language", "es")),
+            language_probability=1.0,  # MLX no la informa
+        )
+
+
+def build_transcriber(settings: VoiceSettings):
+    """Whisper con el motor de `audio.stt.backend` (auto: MLX en Apple Silicon si está)."""
+    backend = settings.stt_backend
+    if backend not in ("auto", "mlx", "faster-whisper"):
+        raise EstimatorError(f"audio.stt.backend {backend!r}: auto, mlx o faster-whisper")
+    if backend == "mlx" or (
+        backend == "auto" and mlx_available() and (settings.stt_mlx_path / "config.json").is_file()
+    ):
+        return MlxWhisperTranscriber(settings)
+    return WhisperTranscriber(settings)
 
 
 # --- micrófono --------------------------------------------------------------------------

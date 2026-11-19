@@ -40,6 +40,39 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T08: Whisper en la GPU de la Mac y la respuesta de Claude por tramos
+
+**Tareas:** T08, T11. **Persona/agente:** Tomás (pedido) / Claude Code. **Rama:**
+`b/voz-mas-rapida`.
+
+**Por qué.** En el vivo de C0/C1 (entrada de Bauty, más abajo), de los ~11 s de «¿a qué distancia
+está la taza?» ~8 eran voz: **Whisper ~4,2 s por orden** (faster-whisper en CPU, con la CPU
+cargada por la profundidad) y **~4 s** desde que Claude terminaba la frase hasta que sonaba
+(Edge sintetiza la frase entera antes de sonar, y la de distancia es una sola frase larga).
+
+**Hecho.**
+- **Whisper con MLX** (la implementación de Apple para su GPU): `MlxWhisperTranscriber`, mismo
+  modelo `small` y mismas opciones (español, sin condicionar en lo anterior, el prompt de
+  vocabulario), precalentado al arrancar. `audio.stt.backend: auto` lo elige en una Mac con
+  Apple Silicon si `mlx-whisper` está instalado (extra `voz`, solo en esa plataforma) y los pesos
+  bajados (`python -m visionx.voice descargar --whisper-mlx small`); si no, faster-whisper como
+  antes. La app imprime cuál usa. faster-whisper no puede ir a la GPU de la Mac: CTranslate2 no
+  tiene backend MPS.
+- **Respuesta por tramos:** `assistant.clause_chars: 30`. Además de en el punto, la respuesta se
+  corta en coma, punto y coma o dos puntos cuando el tramo ya tiene 30 caracteres, nunca dentro
+  de una cita «…» ni en «1,4» (la coma tiene que ir seguida de espacio). El primer tramo se
+  sintetiza y suena mientras Claude sigue escribiendo; los siguientes se sintetizan por adelantado
+  mientras suena el anterior (la síntesis adelantada ya existía).
+- Tests: `tests/test_voz_rapida.py` (9).
+
+**Sin medir.** No hay Mac acá: MLX se probó con un transcriptor simulado y el corte por tramos sin
+Edge real. Esperado: Whisper `small` en MLX < 1 s para órdenes de 2–3 s, y la primera palabra de
+Claude ~2–3 s antes en respuestas largas. Puede notarse una pausa breve entre tramos; si molesta,
+subir `clause_chars` (p. ej. 50) o ponerlo en 0.
+
+**Próximo paso.** Bauty: `uv sync` con `--extra voz`, `descargar --whisper-mlx small`, repetir
+«buscá» y «¿a qué distancia?» con `--traza` y pasar `latencias` (columna STT y primera frase).
+
 ## 2026-11-19 (noche) — T09: la búsqueda la termina la persona
 
 **Tareas:** T09, T08. **Persona/agente:** Tomás (pedido) / Claude Code. **Rama:**

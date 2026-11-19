@@ -105,7 +105,7 @@ def build_detector(args: argparse.Namespace, cfg: dict[str, Any], synthetic):
 def build_output(args: argparse.Namespace, cfg: dict[str, Any], on_record):
     if not args.voz:
         return AudioOutput(PrintSynth(), FakePlayer(), on_record=on_record), None
-    from visionx.voice.engines import PushToTalk, VoiceSettings, WhisperTranscriber, build_synth
+    from visionx.voice.engines import PushToTalk, VoiceSettings, build_synth, build_transcriber
     from visionx.voice.output import SoundDevicePlayer
 
     s = VoiceSettings.from_config(cfg)
@@ -116,7 +116,9 @@ def build_output(args: argparse.Namespace, cfg: dict[str, Any], on_record):
         SoundDevicePlayer(s.output_device, s.block_ms, s.output_latency_s),
         on_record=on_record,
     )
-    return output, (PushToTalk(s.input_device, s.max_record_s), WhisperTranscriber(s))
+    stt = build_transcriber(s)
+    print(f"voz a texto: {stt.model_id}")
+    return output, (PushToTalk(s.input_device, s.max_record_s), stt)
 
 
 def load_script(path: str | None) -> list[tuple[float, str]]:

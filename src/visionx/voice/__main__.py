@@ -96,9 +96,14 @@ def cmd_descargar(args: argparse.Namespace) -> int:
     for voice in args.voz or [s.tts_voice]:
         for path in download_piper_voice(voice, Path(s.voice_path.parent)):
             print(f"{path}  {path.stat().st_size} bytes  sha256 {sha256_file(path)}")
-    for model in args.whisper or [s.stt_model]:
+    for model in args.whisper or ([] if args.whisper_mlx else [s.stt_model]):
         folder = download_whisper(model, s.stt_path.parent)
         print(f"{folder}  model.bin sha256 {sha256_file(folder / 'model.bin')}")
+    for model in args.whisper_mlx or []:
+        from visionx.voice.engines import download_whisper_mlx
+
+        folder = download_whisper_mlx(model, s.stt_mlx_path.parent)
+        print(f"{folder}  (MLX, para la GPU de la Mac)")
     print("Registrar los sha256 en BITACORA.")
     return 0
 
@@ -330,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("descargar", help="bajar voz de Piper y modelos de Whisper")
     p.add_argument("--voz", nargs="+")
     p.add_argument("--whisper", nargs="+", help="tiny, base, small, medium...")
+    p.add_argument("--whisper-mlx", nargs="+", help="pesos MLX (Mac): small, large-v3-turbo...")
     p.add_argument("--config")
     p.set_defaults(fn=cmd_descargar)
 
