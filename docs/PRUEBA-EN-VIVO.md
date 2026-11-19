@@ -54,12 +54,16 @@ audio:
 ## 3. Correr la app
 
 ```bash
-uv run python -m visionx.app ejecutar --fuente usb --detector yolo --profundidad B0 \
+uv run python -m visionx.app ejecutar --fuente usb --detector yolo --profundidad crestereo \
   --profundidad-precisa crestereo-preciso --voz --config configs/local.yaml \
   --traza outputs/beta/1119/vivo-1.jsonl
 ```
 
-Si CREStereo no carga o tarda demasiado, usar `--profundidad-precisa B0`. Con la ventana en
+CREStereo en la Mac (BITACORA 2026-11-18): continuo 640×360 P50 120 ms, preciso 1280×720
+P50 617 ms; en la cinta de 1 a 3 m erra ≤ 3,4 cm contra hasta 8,8 cm de B0. Si no carga o algo
+anda mal, repetir con `--profundidad B0 --profundidad-precisa B0` (la beta de siempre) y anotar la
+diferencia. Al terminar, `uv run python -m visionx.app latencias --traza
+outputs/beta/1119/vivo-1.jsonl` da la tabla de tiempos por orden para la BITACORA. Con la ventana en
 foco: **espacio** = hablar / terminar de hablar, **c** = cancelar, **q** = salir. Auriculares
 puestos (sin parlantes: el micrófono escucharía a la app).
 
