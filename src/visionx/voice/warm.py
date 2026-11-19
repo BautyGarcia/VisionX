@@ -89,4 +89,15 @@ def frequent_phrases(cfg: dict[str, Any], spoken) -> list[str]:
         out += [f"Veo {name}.", f"Busco {name}.", f"Perdí {name}.", f"No encontré {name}.",
                 f"Terminé de buscar {name}.", f"No veo {name} ahora. Sigo buscando."]  # fmt: skip
         out += [f"{_cap(name)} {w}." for w in wheres]
+        # La búsqueda la termina la persona (19/11).
+        out += [f"Sigo buscando {name}.", f"Listo, terminé de buscar {name}."]
+        out += [
+            f"Llegaste: {name} adelante, {m}. Cuando lo tengas, decí: listo."
+            for m in ("a 0,5 metros", "a 0,6 metros", "muy cerca, a menos de 0,5 metros")
+        ]
+        out += [
+            f"Llegaste: {name} adelante, {m}."
+            for m in ("a 0,5 metros", "a 0,6 metros", "muy cerca, a menos de 0,5 metros")
+        ]
+    out += ["No estoy buscando nada ahora.", "Listo."]
     return list(dict.fromkeys(out))  # sin repetidas, en orden

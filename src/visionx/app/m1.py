@@ -223,7 +223,7 @@ class Scenario:
         catalog = ClassCatalog(COCO_CLASSES)
         # M1 mide el contrato del aviso de presencia con bip (guía «palabras»); «centrar» avisa
         # con «Veo X.» por el mismo camino.
-        self.settings = ModeSettings(guide_style="palabras")
+        self.settings = ModeSettings(guide_style="palabras", end_on_arrival=True)
         self.controller = Controller(
             CommandParser(catalog),
             self.sink,

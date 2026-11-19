@@ -20,6 +20,10 @@ from visionx.shared.contracts import Command, FrameKey, Mode
 
 CANCEL = "cancelar"
 REPEAT = "repetir"
+# La búsqueda no termina sola (Tomás, 19/11): termina cuando la persona dice que lo encontró o
+# que quiere terminar. «dejá de buscar», «pará» y demás siguen siendo cancelar.
+FOUND = "encontrado"
+END_SEARCH = "terminar-busqueda"
 READ_ALL = "todo"  # «leé todo»: lectura completa por bloques, sin resumir
 CALIBRATE = "calibrar"  # «calibrá, está a 2 metros» -> objetivo "calibrar:2"
 _CALIBRATE = re.compile(r"^(calibra\w*|calibrar)\b")
@@ -92,6 +96,16 @@ _CANCEL_WORDS = {
     "callate", "calla", "detene", "detenete", "frena", "frenar", "deja", "dejalo", "chau",
 }  # fmt: skip
 _REPEAT = re.compile(r"^(repeti\w*|repetir|otra vez|de nuevo|que dijiste|como dijiste)\b")
+# Frase entera: «la encontré», «ya lo tengo», «listo», «ya está», «llegué» (con «gracias» al final).
+# «encontré la taza» sola no entra: Whisper a veces escribe «encontré» por «encontrá»; durante
+# una búsqueda de la taza, el controlador la toma como encontrado.
+_FOUND = re.compile(
+    r"^((ya )?((la|lo|las|los) )?(encontre|tengo|agarre|toque)"
+    r"|ya esta|listo|lista|encontrado|encontrada|ya llegue|llegue)( gracias)?$"
+)
+_END_SEARCH = re.compile(
+    r"^(termina\w*|terminar|fin)( (de )?(la )?(busqueda|buscar))?$|^no (busques|buscar) mas$"
+)
 _DISTANCE = re.compile(
     r"\b(distancia|que tan lejos|cuan lejos|a cuanto (esta|estoy|queda)|cuantos metros|"
     r"que tan cerca|lejos (esta|queda|estoy))\b"
@@ -184,6 +198,10 @@ class CommandParser:
             return Interpretation(utterance, Mode.CONTROL, CANCEL, "cancelar")
         if _REPEAT.search(text):
             return Interpretation(utterance, Mode.CONTROL, REPEAT, "repetir")
+        if _FOUND.search(text):
+            return Interpretation(utterance, Mode.CONTROL, FOUND, "encontrado")
+        if _END_SEARCH.search(text):
+            return Interpretation(utterance, Mode.CONTROL, END_SEARCH, "terminar-busqueda")
         if _CALIBRATE.search(text):
             from visionx.app.calibrate import parse_meters
 

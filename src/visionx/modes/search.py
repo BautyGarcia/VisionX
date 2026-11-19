@@ -5,7 +5,11 @@ Estados de una búsqueda:
     buscando --(presencia confirmada, uno)--> guiando
     buscando --(presencia confirmada, varios iguales)--> eligiendo --(elección)--> guiando
     guiando --(sin verlo durante lost_s)--> buscando   ("Perdí la taza.")
-    guiando --(al frente y a arrive_m o menos)--> fin  ("Llegaste...")
+    guiando --(al frente y a arrive_m o menos)--> llegó  ("Llegaste..." + cómo terminar)
+    llegó --(se aleja más de arrive_m + leave_margin_m)--> guiando
+    fin: cuando la persona dice «la encontré», «listo» o «terminá» (controlador), o cancela.
+    Sin verlo: «Sigo buscando…» cada searching_reminder_s.
+    Con plazo (deadlines_s.search > 0, banco M1) o end_on_arrival, el cierre automático de antes:
     cualquiera --(se acerca el vencimiento)--> fin     ("No encontré..." / "Termino...")
 
 Reglas (TECNICO T09):
@@ -55,6 +59,7 @@ from visionx.shared.geometry import StereoGeometry
 
 BIP = "sonido:bip"
 SEARCHING, CHOOSING, GUIDING = "buscando", "eligiendo", "guiando"
+HOW_TO_END = "Cuando lo tengas, decí: listo."  # se agrega a la primera «Llegaste»
 
 
 class SearchHandler:
@@ -121,6 +126,8 @@ class SearchHandler:
         self._support_start_ns = 0
         self._support_done = False
         self._last_frame: Any = None
+        self._arrived = False  # llegó y se queda callado hasta que se aleje o termine
+        self._arrived_once = False  # el aviso de cómo terminar se dice una vez
 
     # -- interfaz ModeHandler --------------------------------------------------------------
 
@@ -186,7 +193,11 @@ class SearchHandler:
                 f"¿Cuál {name}? Decí izquierda, derecha, centro o la más cercana."
             )
             says.append(self._ask(again, now_ns))
-        if self.state == GUIDING and self.target is not None:
+        if self._arrived and self._moved_away(now_ns):
+            self._arrived = False
+            self._said_z = None  # vuelve a decir los metros enseguida
+            self._event("se-alejo", {})
+        if self.state == GUIDING and self.target is not None and not self._arrived:
             # "Perdí" necesita evidencia de ausencia: frames frescos que cubran lost_s de video
             # sin el objetivo, medido en tiempo de FRAME. Si el sistema se atrasa (no llegan
             # frames frescos), la guía se suspende en silencio: no es que el objeto se fue.
@@ -219,13 +230,34 @@ class SearchHandler:
                 # Solo se guía en frames donde el objetivo está: mientras no se lo ve, repetir
                 # su última dirección sería guiar con información vieja.
                 says += self._guide(name, now_ns)
-        done = any(s.text_or_sound.startswith("Llegaste") for s in says)
+        arrived = any(s.text_or_sound.startswith("Llegaste") for s in says)
+        done = arrived and self.s.end_on_arrival
         if done:
             self._finished = True
             self._event("fin", {"motivo": "llegada"})
+        elif arrived:
+            self._event("llegada", {})
+            if not self._arrived_once:
+                says = [replace(s, text_or_sound=f"{s.text_or_sound} {HOW_TO_END}")
+                        if s.text_or_sound.startswith("Llegaste") else s for s in says]  # fmt: skip
+            self._arrived = self._arrived_once = True
+        if (
+            self.state == SEARCHING
+            and not says
+            and self.s.searching_reminder_s > 0
+            and (now_ns - (self._last_say_ns or command.issued_ns)) / 1e9
+            >= self.s.searching_reminder_s
+        ):
+            says.append(self._phrase(f"Sigo buscando {name}.", now_ns))
         if self.s.guide_style == "centrar":  # sin bips: solo palabras (pedido de Tomás)
             says = [s for s in says if s.text_or_sound != BIP]
         return [s for s in says if s.text_or_sound], done
+
+    def _moved_away(self, now_ns: int) -> bool:
+        """Después de llegar: ¿se alejó lo suficiente como para volver a guiar?"""
+        m = self._fresh_measure(now_ns)
+        return bool(m is not None and m.ok and m.z_m is not None
+                    and m.z_m > self.s.arrive_m + self.s.leave_margin_m)  # fmt: skip
 
     def awaiting_choice(self) -> bool:
         """¿Está preguntando «¿cuál?» con opciones descriptas (se puede elegir «la verde»)?"""

@@ -225,6 +225,9 @@ modes:
   end_margin_s: 1.0         # frase de cierre antes del vencimiento de la orden, s
   round_m: 0.1              # redondeo de los metros que se dicen
   arrive_m: 0.6             # al frente y a esto o menos: "Llegaste", m
+  end_on_arrival: false     # la búsqueda termina cuando la persona dice «la encontré»/«listo»/«terminá» (Tomás, 19/11)
+  leave_margin_m: 0.4       # después de llegar, si se aleja más de arrive_m + esto, vuelve a guiar
+  searching_reminder_s: 15  # sin verlo, «Sigo buscando…» cada tanto, s; 0 = nunca
   accept_before_s: 0.5      # distancia: frame medido hasta esto ANTES de la orden, s
   max_listed: 3             # a lo sumo cuántos iguales se enumeran
 
@@ -320,7 +323,7 @@ audio:
   output_latency_s: 0.2     # búfer del parlante, s: aguanta picos de cómputo sin cortar la voz (con «low» se entrecortaba en vivo, 19/11); 0 = «low»
   max_record_s: 8           # tope de una orden con el botón, s
   deadlines_s:              # vigencia de cada orden, s; vencida, su respuesta ya no se dice (candidatos, sin medir)
-    search: 30
+    search: 0               # 0 = sin vencimiento: termina cuando la persona lo dice (Tomás, 19/11)
     distance: 10            # respuesta con dos instancias ~5 s de habla + medir (arranque en frío ~2 s) + margen
     read: 30
     describe: 20

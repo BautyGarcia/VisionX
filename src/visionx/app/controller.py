@@ -28,10 +28,13 @@ from visionx.shared.contracts import AudioEvent, Command, FrameKey, Mode, Priori
 from visionx.shared.interfaces import AudioSink
 from visionx.voice.commands import (
     CANCEL,
+    END_SEARCH,
+    FOUND,
     REPEAT,
     CommandParser,
     Interpretation,
     acknowledgement,
+    clean,
 )
 
 EXPIRED_REPEAT = "Ya no está vigente. Pedilo de nuevo."
@@ -135,6 +138,38 @@ class Controller:
                 order["request_id"] = self._audio_request_id
                 self._on_event("orden", order)
                 self.cancel()
+                self.history.append((None, interp))
+                return None
+            searching = self.active is not None and self.active.mode is Mode.SEARCH
+            if (
+                searching
+                and interp.mode is Mode.SEARCH
+                and clean(interp.utterance).split()[:1] == ["encontre"]
+                and interp.target in (None, self.active.target)  # type: ignore[union-attr]
+            ):
+                # «Encontré la taza» mientras se busca la taza: la encontró, no «buscá».
+                interp = Interpretation(interp.utterance, Mode.CONTROL, FOUND, "encontrado")
+                order.update(modo=interp.mode, objetivo=FOUND, regla=interp.rule)
+            if interp.mode is Mode.CONTROL and interp.target in (FOUND, END_SEARCH):
+                rid = self._new_id()
+                order["request_id"] = rid
+                self._on_event("orden", order)
+                if searching:
+                    ended = self.active
+                    assert ended is not None
+                    name = self.parser.catalog.spoken(ended.target) if ended.target else ""
+                    if self._audio_request_id is not None:
+                        self.output.cancel(self._audio_request_id)
+                    self._cancel_repeats()
+                    self._cancel_handler()
+                    self.active = None
+                    self._on_event(
+                        "terminado", {"request_id": ended.request_id, "motivo": interp.rule}
+                    )
+                    text = f"Listo, terminé de buscar {name}." if name else "Listo."
+                else:
+                    text = "No estoy buscando nada ahora."
+                self._say(Say(text), rid, now)
                 self.history.append((None, interp))
                 return None
             if interp.mode is Mode.CONTROL and interp.target == REPEAT:
