@@ -1804,3 +1804,12 @@ def test_distance_falls_back_to_the_plain_answer_when_the_assistant_fails():
     h.start(c, View(None, m), int(1.2 * SEC))
     says, done = h.tick(c, View(None, m), int(1.3 * SEC))
     assert texts(says) == ["Taza al frente, a 1,1 metros."] and done
+
+
+def test_arrival_cuts_the_guidance_that_is_still_playing():
+    h, c = search(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("cup", 0, None)]), joint(0.2, 2, [("cup", 0, None)])])
+    near = joint(0.3, 3, [("cup", 0, None, 0.55, SPEAK)], measured=True)
+    says, done = h.tick(c, View(joint(0.4, 4, [("cup", 0, None)]), near), int(0.4 * SEC))
+    assert done and says[0].text_or_sound.startswith("Llegaste") and says[0].replace

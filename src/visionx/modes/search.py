@@ -324,11 +324,11 @@ class SearchHandler:
     def _guide(self, name: str, now_ns: int) -> list[Say]:
         text, valid_until, received = self._guide_fact(name, now_ns)
         if text == "" or text.startswith("Llegaste"):
-            return (
-                [self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received)]
-                if text
-                else []
-            )
+            if not text:
+                return []
+            say = self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received)
+            # «Llegaste» es la frase final: corta la guía que todavía suena (no se encola detrás).
+            return [replace(say, replace=True)] if say.text_or_sound else [say]
         since = None if self._last_say_ns is None else (now_ns - self._last_say_ns) / 1e9
         # Ni antes del mínimo ni mientras la frase anterior todavía suena (no encolar guía vieja).
         speaking = speech_s(self._last_phrase or "", self.s) + 0.2
