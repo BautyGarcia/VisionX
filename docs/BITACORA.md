@@ -544,6 +544,91 @@ voz también (lo frecuente está en caché). Las respuestas de Claude no tienen 
 **Próximo paso.** Prueba en vivo en la Mac con `docs/PRUEBA-EN-VIVO.md` (Tomás y Bauty);
 `latencias --traza` para la tabla; probar la alerta con `proximity.enabled: true` y CREStereo.
 
+## 2026-11-19 (noche) — T12: red de alineación v2 (45 épocas); gana en el campo, pierde en profundidad
+
+Tarea: T12. Persona/agente: Bauty / Claude Code. Rama: `a/T12-red-alineacion` (PR #37).
+Hecho: misma red y datos que la v1, 45 épocas (63 min en MPS). Validación del campo: 0,579 px
+(v1: 1,114), con la curva casi plana desde la época 37.
+
+**Campo** (`alin-evaluar`, mediana del error en px, filas / columnas sin su corrimiento
+constante; misma tabla que abajo):
+
+| Grupo | n | Sin corregir | Clásico con lente | Red v1 | Red v2 |
+|---|---:|---|---|---|---|
+| ELP limpio | 2 | 0,00 / 0,00 | **0,02 / 0,04** | 0,30 / 0,37 | 0,26 / 0,16 |
+| ELP chico | 26 | 0,81 / 0,75 | 0,27 / 0,33 | 0,49 / 0,51 | 0,28 / **0,26** |
+| ELP medio | 14 | 2,19 / 3,04 | 0,50 / 0,66 | 0,65 / 0,86 | **0,38 / 0,50** |
+| ELP grande | 9 | 4,87 / 5,02 | 0,62 / 1,30 | 1,02 / 1,06 | **0,57 / 0,81** |
+| InStereo2K limpio | 5 | 0,00 / 0,00 | 0,18 / 0,13 | 0,34 / 0,25 | **0,14 / 0,10** |
+| InStereo2K chico | 16 | 0,88 / 0,32 | 0,30 / 0,26 | 0,41 / 0,34 | **0,29 / 0,23** |
+| InStereo2K medio | 11 | 2,31 / 0,88 | 0,28 / 0,31 | 0,46 / 0,43 | 0,28 / **0,24** |
+| InStereo2K grande | 8 | 3,72 / 1,33 | 0,97 / 0,46 | 0,50 / 0,43 | **0,28 / 0,27** |
+
+En el campo, la v2 empata o le gana al clásico en todo salvo el par ELP limpio.
+
+**Bug encontrado al aplicarla** (`hermanas --red`). La primera corrida dio más cambio de
+profundidad con la red que sin corregir (×0,1: 6,8 % contra 4,8 %), lo que contradecía la tabla.
+Diagnóstico sobre un par: la forma del campo estaba bien (0,26–0,34 px), pero la red sumaba un
+**corrimiento constante de columnas** de −0,75 / −1,25 / +0,73 px (a 960 de ancho) distinto en
+cada par. La pérdida ignora ese corrimiento a propósito (lo arregla la distancia conocida), así
+que la red lo deja en cualquier valor; `correct_right` lo aplicaba igual, y como cambia de par
+en par, la distancia conocida medida en el primero no lo cancela en los demás.
+Arreglo: `without_column_shift` le saca la mediana de columnas al campo antes de aplicarlo.
+Tests: `tests/test_crestereo_alignnet.py` 10 aprobados (se ajustó el de escala, que usaba un
+corrimiento constante, y se agregó uno del arreglo).
+
+**Profundidad en cámaras hermanas** (6 pares de `dev-1114-escenas`, 3 cámaras por nivel; cambio
+de profundidad medio en %, el primer par se usa para la distancia conocida y no se evalúa):
+
+| Rangos | Sin corregir + dist. | Regla + dist. | Lente + dist. | Red v2 + dist. (antes del arreglo) | Red v2 + dist. | Oráculo denso |
+|---|---:|---:|---:|---:|---:|---:|
+| ×0,1 | 3,53 | 1,96 | **1,98** | 6,78 | 2,93 | 0,48 |
+| ×0,25 | 8,06 | 3,42 | **2,63** | 6,59 | 3,97 | 0,56 |
+| ×0,5 | 16,54 | 6,46 | **3,66** | 11,06 | 5,47 | 0,58 |
+| ×1 | 24,99 | 10,61 | **5,57** | 10,81 | 8,83 | 0,74 |
+
+Resultado: **la red no le gana al clásico con lente en profundidad**, aunque sí en la mediana
+del campo. Por la regla escrita antes de entrenar, el sistema sigue con el clásico. Hipótesis
+sin verificar: la profundidad pesa las colas y el promedio, no la mediana; y el clásico junta
+puntos de los 6 pares mientras la red corrige cada par por separado.
+Límites: una semilla; 6 pares de un clip que también está en la validación de la red (le
+favorece); n chico por grupo (2–26); rangos de las hermanas supuestos.
+Crudos en `outputs/crestereo_alin/v2-45ep/` (`eval/`, `hermanas/` antes del arreglo,
+`hermanas-sin-corrimiento/` después), fuera de Git.
+Próximo paso: (1) la variante prevista, la red corrige encima del clásico con lente;
+(2) barato: promediar el campo de la red sobre varios pares antes de aplicarlo, como hace el
+clásico con sus puntos.
+
+## 2026-11-19 (noche) — T12: primer entrenamiento de la red de alineación; todavía no le gana al clásico
+
+Tarea: T12. Persona/agente: Bauty / Claude Code. Rama: `a/T12-red-alineacion` (PR #37).
+Hecho: `alin-entrenar` con los valores por defecto (15 épocas, lote 4, lr 1e-3, semilla 0) en la
+Mac (MPS): 1119 pares de InStereo2K con cámara virtual y 725 cuadros de clips ELP de desarrollo
+con cámaras hermanas; validación en `dev-1114-escenas` y en InStereo2K val (91 muestras). 24 min.
+Error de validación del campo: 3,48 px en la época 0, **1,114 px** en la 14, todavía bajando.
+Evaluación (`alin-evaluar`, mediana del error del campo en px, filas / columnas; columnas sin su
+corrimiento constante, que corrige la distancia conocida):
+
+| Grupo | n | Sin corregir | Clásico con lente | Red v1 |
+|---|---:|---|---|---|
+| ELP limpio | 2 | 0,00 / 0,00 | 0,02 / 0,04 | 0,30 / 0,37 |
+| ELP chico | 26 | 0,81 / 0,75 | **0,27 / 0,33** | 0,49 / 0,51 |
+| ELP medio | 14 | 2,19 / 3,04 | **0,50 / 0,66** | 0,65 / 0,86 |
+| ELP grande | 9 | 4,87 / 5,02 | 0,62 / 1,30 | 1,02 / **1,06** |
+| InStereo2K limpio | 5 | 0,00 / 0,00 | 0,18 / 0,13 | 0,34 / 0,25 |
+| InStereo2K chico | 16 | 0,88 / 0,32 | **0,30 / 0,26** | 0,41 / 0,34 |
+| InStereo2K medio | 11 | 2,31 / 0,88 | **0,28 / 0,31** | 0,46 / 0,43 |
+| InStereo2K grande | 8 | 3,72 / 1,33 | 0,97 / 0,46 | **0,50 / 0,43** |
+
+Resultado: el clásico gana en chico y medio. La red solo gana en las desalineaciones grandes, y en
+los pares limpios mete 0,3 px donde no debería tocar nada. Es el resultado negativo que preveía la
+entrada del 19/11 («Decisión: se hace la red…»).
+Límites: n chico por grupo (2–26); una semilla; la curva no se aplanó. Crudos en
+`outputs/crestereo_alin/v1/` (fuera de Git).
+Próximo paso: (1) misma red con 45 épocas (en curso), para separar «poco entrenamiento» de «la
+idea no alcanza»; (2) si sigue perdiendo, la variante prevista: la red corrige encima del
+clásico y aprende solo lo que él deja.
+
 ## 2026-11-19 — T12: red de alineación implementada, sin entrenar
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-red-alineacion`.
