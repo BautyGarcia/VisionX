@@ -210,7 +210,13 @@ modes:
   preempt_min_s: 0.6        # dirección nueva mientras suena la vieja: se corta y se dice la nueva
                             # (0,4 en la demo buscar-a del 19/11: cortes cada 0,4 s al barrer)
   short_guide: true         # después de la primera frase, sin el nombre: «Un poco a la izquierda.»
-  guide_style: sonar        # sonar (bips del lado del objeto; elegido por Tomás 19/11) | palabras
+  guide_style: centrar      # centrar (instrucciones y después metros; Tomás, vivo 19/11) | sonar | palabras
+  turn_deg: 30.0            # centrar: |ángulo| > esto «Girá a la …»
+  more_deg: 15.0            # centrar: > esto «Más a la …»; > center_deg «Un poco a la …»
+  center_v_deg: 12.0        # centrar: |vertical| <= esto está centrado en altura
+  low_deg: 22.0             # centrar: > esto «Abajo/Arriba»; si no «Un poco más abajo/arriba»
+  center_repeat_s: 2.5      # centrar: repetir la misma instrucción si no cambia, s
+  approach_meters_s: 2.5    # centrar: mínimo entre dos avisos de metros al acercarse, s
   sonar_meters_s: 4.0       # con sonar: mínimo entre dos avisos de metros, s
   distance_change_m: 0.3    # guía: metros nuevos se dicen solos si cambian al menos esto...
   distance_change_frac: 0.15 # ...o esta fracción (lo mayor); sin cambio no se repite la frase

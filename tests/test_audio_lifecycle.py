@@ -282,7 +282,11 @@ def test_trace_has_command_ids_player_times_and_fact_age_without_changing_legacy
         output,
         clock=clock,
         latest_view=lambda: view,
-        handlers={Mode.SEARCH: SearchHandler(G, CATALOG.spoken, ModeSettings(confirm_hits=1))},
+        handlers={
+            Mode.SEARCH: SearchHandler(
+                G, CATALOG.spoken, ModeSettings(confirm_hits=1, guide_style="palabras")
+            )
+        },
         deadlines_s={"search": 10},
         on_event=lambda k, d: events.append((k, d)),
     )
@@ -378,7 +382,7 @@ def test_search_leaves_room_after_ongoing_guides_for_its_closing():
 
     output = AudioOutput(TimedSynth(), AdvancingPlayer(), clock=clock)
     view = View()
-    handler = SearchHandler(G, CATALOG.spoken, ModeSettings(confirm_hits=1))
+    handler = SearchHandler(G, CATALOG.spoken, ModeSettings(confirm_hits=1, guide_style="palabras"))
     ctl = Controller(
         CommandParser(CATALOG),
         output,

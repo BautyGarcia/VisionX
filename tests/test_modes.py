@@ -390,8 +390,8 @@ def test_several_equal_objects_ask_and_choice_completes_the_same_search():
     assert said[-1].startswith("Veo 2 tazas. ¿Cuál?")
     ctl.handle_text("la de la derecha")
     assert ctl.active is not None and ctl.active.request_id == search_id  # no la reemplazó
-    assert [s.text for s in sink.spoken][-2:] == ["sonido:bip", "Taza un poco a la derecha."]
-    assert all(s.request_id == search_id for s in sink.spoken[-2:])
+    assert [s.text for s in sink.spoken][-1:] == ["Veo taza."]  # centrar: sin bip
+    assert all(s.request_id == search_id for s in sink.spoken[-1:])
 
 
 def test_unanswered_choice_is_asked_again_not_decided_for_the_user():
@@ -455,7 +455,7 @@ def test_choose_nearest_needs_meters_and_choose_without_search_says_so():
     state["view"] = View(joint(0.3, 4, two), measured)
     clock.set(int(0.3 * SEC))
     ctl.handle_text("la más cercana")
-    assert [s.text for s in sink.spoken][-2:] == ["sonido:bip", "Taza un poco a la derecha."]
+    assert [s.text for s in sink.spoken][-1:] == ["Veo taza."]  # centrar: sin bip
 
 
 def test_nearest_choice_does_not_guide_to_an_instance_only_in_old_depth():
@@ -814,7 +814,7 @@ def test_simulation_cli_is_deterministic_and_answers(capsys, tmp_path):
     assert modes_main(argv) == 0
     second = capsys.readouterr().out
     assert first == second  # tiempo grabado: misma entrada, misma salida
-    assert "sonido:bip" in first and "a 1,2 metros" in first
+    assert "Veo taza." in first and "1,2 metros" in first  # centrar: «Veo», después metros
     lines = (tmp_path / "t.jsonl").read_text(encoding="utf-8").splitlines()
     assert any('"buscar-adquirido"' in x for x in lines)
     answers = [x for x in lines if '"distancia-respuesta"' in x]
@@ -1831,8 +1831,7 @@ def test_sonar_cues_pan_to_the_side_and_speed_up_when_centered():
 
 
 def test_sonar_style_speaks_only_key_moments():
-    sonar = ModeSettings()  # por defecto: sonar
-    assert sonar.guide_style == "sonar"
+    sonar = ModeSettings(guide_style="sonar")
     h, c = search(sonar), cmd(Mode.SEARCH, "cup")
     h.start(c, View(), 0)
     # gira de la izquierda al frente: con palabras habría varias frases de dirección
@@ -1929,3 +1928,77 @@ def test_controller_routes_la_verde_to_the_choice_instead_of_a_question():
     ctl.handle_text("Buscá la botella.")
     ctl.handle_text("La verde.")
     assert calls == ["La verde."] and ctl.active.mode is Mode.SEARCH
+
+
+def centrar(**kw):
+    return search(ModeSettings(**kw))  # por defecto: guide_style centrar
+
+
+def test_centrar_turns_then_centers_then_says_distance_ahead():
+    h, c = centrar(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    # la taza a −26° (borde de la cámara sintética) y la persona gira hasta tenerla al frente
+    frames = [joint(0.1 * i, i, [("cup", -26 + 1.0 * i, None)]) for i in range(1, 27)]
+    out, _ = run(h, c, frames)
+    said = [t for _, t in out]
+    assert said[0] == "Veo taza." and "sonido:bip" not in said
+    assert said[1:3] == ["Más a la izquierda.", "Un poco a la izquierda."]
+    assert said[-1] == "Centrado."  # todavía sin medición
+    m = joint(2.7, 27, [("cup", 0, None, 1.43, SPEAK)], measured=True)
+    says, _ = h.tick(c, View(joint(2.8, 28, [("cup", 0, None)]), m), int(2.8 * SEC))
+    assert texts(says) == ["Está a 1,4 metros, adelante."]  # apenas llega la medición
+
+
+def test_centrar_says_distance_when_centered_with_a_measure():
+    h, c = centrar(), cmd(Mode.SEARCH, "cup")
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("cup", 0, None)]), joint(0.2, 2, [("cup", 0, None)])])
+    m = joint(0.3, 3, [("cup", 0, None, 1.43, SPEAK)], measured=True)
+    h2, c2 = centrar(), cmd(Mode.SEARCH, "cup", request_id=2)
+    h2.start(c2, View(), 0)
+    h2.tick(c2, View(joint(0.1, 1, [("cup", 0, None)]), m), int(0.35 * SEC))
+    says, _ = h2.tick(c2, View(joint(0.4, 4, [("cup", 0, None)]), m), int(0.45 * SEC))
+    assert texts(says) == ["Veo taza.", "Centrado."]  # la medición llega en el tick siguiente
+    says, _ = h2.tick(c2, View(joint(0.5, 5, [("cup", 0, None)]), m), int(0.55 * SEC))
+    assert texts(says) == ["Está a 1,4 metros, adelante."]
+
+
+def test_centrar_instruction_zones_with_hysteresis():
+    h = centrar()
+    assert h._instruction(-40, 0) == "Girá a la izquierda."
+    assert h._instruction(-20, 0) == "Más a la izquierda."
+    assert h._instruction(-28, 0) == "Más a la izquierda."  # cerca del límite: no salta
+    assert h._instruction(12, 0) == "Un poco a la derecha."
+    assert h._instruction(0, -30) == "Abajo."  # horizontal centrado: ahora la altura
+    assert h._instruction(0, -16) == "Un poco más abajo."
+    assert h._instruction(2, 3) is None  # centrado
+
+
+def test_centrar_describes_support_once_and_arrives():
+    from visionx.assistant import AssistantJob
+
+    class Support:
+        available = True
+
+        def __init__(self):
+            self.calls = []
+
+        def submit(self, rid, kind, image, **kw):
+            job = AssistantJob(rid, kind)
+            job.text, job.total_s = "Está sobre la mesa de madera, al lado de una taza.", 0.5
+            job.done.set()
+            self.calls.append(kind)
+            return job
+
+    h, c = centrar(), cmd(Mode.SEARCH, "bottle")
+    h.assistant = Support()
+    h.start(c, View(), 0)
+    run(h, c, [joint(0.1, 1, [("bottle", 0, None)]), joint(0.2, 2, [("bottle", 0, None)])])
+    m = joint(0.3, 3, [("bottle", 0, None, 1.8, SPEAK)], measured=True)
+    h.tick(c, View(joint(0.4, 4, [("bottle", 0, None)]), m), int(0.4 * SEC))
+    says, _ = h.tick(c, View(joint(1.0, 10, [("bottle", 0, None)]), m), int(1.0 * SEC))
+    assert texts(says) == ["Está sobre la mesa de madera, al lado de una taza."]
+    assert h.assistant.calls == ["apoyo"]
+    near = joint(5.0, 50, [("bottle", 0, None, 0.55, SPEAK)], measured=True)
+    says, done = h.tick(c, View(joint(5.1, 51, [("bottle", 0, None)]), near), int(5.1 * SEC))
+    assert done and texts(says)[0].startswith("Llegaste: botella adelante")

@@ -63,6 +63,9 @@ KINDS = {
     "describir": "DESCRIBIR: 3 frases como máximo y de no más de 15 palabras cada una, lo más "
     "cercano o importante primero (obstáculos y lo que se puede usar), sin detalles decorativos.",
     "pregunta": "PREGUNTA: respondé la pregunta con lo que ves.",
+    "apoyo": "APOYO: el objeto pedido está en el centro de la imagen. En UNA frase corta (máximo "
+    "12 palabras) decí sobre qué está apoyado y, si ayuda a encontrarlo, qué tiene al lado. "
+    "Empezá con «Está…». Sin metros ni direcciones.",
     "opciones": "OPCIONES: hay varios objetos iguales, numerados de izquierda a derecha con su "
     "posición. Respondé SOLO estas líneas: una por objeto con el formato «N: descripción», donde "
     "la descripción son 1 a 3 palabras que lo distinguen de los otros (color, tamaño, sobre qué "
