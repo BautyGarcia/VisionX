@@ -18,7 +18,9 @@ GUIDES = {
     "Una fila por ensayo/intervalo no superpuesto y traza. inicio_s/fin_s son segundos "
     "desde el PRIMER t_ns del JSONL, no desde el primer frame del clip. "
     "resultado_real: exito/fallo/ausente/cancelar/perdida; exito_s es tiempo desde inicio_s "
-    "en que la persona encuentra el objeto, no el detector. request_id vincula audio y orden. "
+    "en que la persona encuentra el objeto, no el detector; si queda vacío se toma de la "
+    "traza, cuando la persona dice «la encontré». Falso aviso = bip o «Veo …» con el objeto "
+    "ausente. request_id vincula audio y orden. "
     "Guardar una traza nueva por ejecución; no concatenar relojes monotónicos.",
     "ocr": "30 textos distintos, cada uno a 0,5 y 1 m (60 filas). "
     "Transcribir TODO el texto visible en orden de lectura, incluidos números. "

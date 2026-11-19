@@ -1,6 +1,7 @@
 """M8: verdad humana + eventos existentes. No confundir callback final con inicio audible."""
 
 import json
+import os
 from pathlib import Path
 
 from .common import number, read_csv, report, resolve
@@ -9,7 +10,7 @@ from .common import number, read_csv, report, resolve
 def evaluate(sheet: Path, out: Path, *, trace: Path | None = None):
     annotations = read_csv(sheet)
     loaded, intervals, rows = {}, {}, []
-    total_absent = false_beeps = searches = successes = cancels = losses = 0
+    total_absent = false_beeps = false_sees = searches = successes = cancels = losses = 0
     late_cancel = late_deadline = suspects = stale_guides = 0
     audio_without_start = 0
     audios = missing_cancel = missing_request = 0
@@ -51,7 +52,19 @@ def evaluate(sheet: Path, out: Path, *, trace: Path | None = None):
         if kind in ("exito", "fallo"):
             searches += 1
             if kind == "exito":
-                elapsed = number(r["exito_s"], "exito_s")
+                if str(r.get("exito_s", "")).strip():
+                    elapsed = number(r["exito_s"], "exito_s")
+                else:
+                    # Buscar ya no termina sola (19/11): la persona dice «la encontré» y el
+                    # controlador lo registra como `terminado` con motivo `encontrado`.
+                    found = next((e for e in scoped if e["tipo"] == "terminado"
+                                  and e.get("motivo") == "encontrado"), None)  # fmt: skip
+                    if found is None:
+                        raise ValueError(
+                            f"ensayo {r.get('ensayo')}: éxito sin exito_s ni "
+                            "«la encontré» en la traza"
+                        )
+                    elapsed = (found["t_ns"] - origin) / 1e9 - start
                 if elapsed > end - start:
                     raise ValueError("exito_s fuera del ensayo")
                 success = elapsed <= 60
@@ -66,9 +79,17 @@ def evaluate(sheet: Path, out: Path, *, trace: Path | None = None):
             and e.get("resultado") == "reproducido"
             for e in scoped
         )
+        # Con la guía «centrar» no hay bip: el aviso de presencia es «Veo taza.».
+        sees = sum(
+            e["tipo"] == "audio"
+            and str(e.get("texto", "")).startswith("Veo ")
+            and e.get("resultado") == "reproducido"
+            for e in scoped
+        )
         if kind == "ausente":
             total_absent += end - start
             false_beeps += beeps
+            false_sees += sees
         cancelled = next((e["t_ns"] for e in scoped if e["tipo"] == "cancelado"), None)
         missing_cancel += int(kind == "cancelar" and cancelled is None)
         expired = next((e["t_ns"] for e in scoped if e["tipo"] == "vencido"), None)
@@ -92,6 +113,7 @@ def evaluate(sheet: Path, out: Path, *, trace: Path | None = None):
                 **r,
                 "exito_60s": success if kind in ("exito", "fallo") else None,
                 "bips_reproducidos": beeps,
+                "avisos_veo_reproducidos": sees,
                 "eventos": len(scoped),
                 "cancelacion_en_traza": cancelled is not None,
                 "perdida_en_traza": any(e["tipo"] == "buscar-perdido" for e in scoped),
@@ -104,6 +126,10 @@ def evaluate(sheet: Path, out: Path, *, trace: Path | None = None):
         "ausente_s": total_absent,
         "falsos_bips_software": false_beeps,
         "falsos_bips_por_min": false_beeps / (total_absent / 60) if total_absent else None,
+        "falsos_avisos_veo": false_sees,
+        "falsos_avisos_por_min": (false_beeps + false_sees) / (total_absent / 60)
+        if total_absent
+        else None,
         "n_cancelar": cancels,
         "n_perdidas": losses,
         "respuestas_tras_cancelar": late_cancel
@@ -127,3 +153,56 @@ def evaluate(sheet: Path, out: Path, *, trace: Path | None = None):
         and losses >= 10,
     }
     return report(out, rows, summary, [sheet, *loaded])
+
+
+REVISAR = "REVISAR-fallo-o-ausente"
+
+
+def borrador(trace: Path, out: Path, ambiente: str) -> list[dict]:
+    """Borrador de la planilla M8 desde una traza en vivo: una fila por «buscá…».
+
+    El resultado se sugiere por cómo terminó cada búsqueda: «la encontré» -> exito (exito_s
+    queda vacío: lo saca `evaluar` de la traza); cancelar -> cancelar; «Perdí» sin encontrar ->
+    perdida; «terminá la búsqueda» -> REVISAR (fallo si el objeto estaba, ausente si no). La
+    persona revisa todo antes de evaluar: `evaluar` rechaza REVISAR.
+    """
+    from .common import write_csv
+
+    events = [json.loads(x) for x in trace.read_text(encoding="utf-8").splitlines() if x.strip()]
+    if not events:
+        raise ValueError(f"{trace}: traza vacía")
+    origin = events[0]["t_ns"]
+    searches = [
+        (i, e) for i, e in enumerate(events)
+        if e.get("tipo") == "orden" and e.get("modo") == "search" and e.get("request_id")
+    ]  # fmt: skip
+    rows = []
+    for k, (i, order) in enumerate(searches):
+        rid = order["request_id"]
+        stop = searches[k + 1][0] if k + 1 < len(searches) else len(events)
+        mine = [e for e in events[i:stop] if e.get("request_id") == rid]
+        ended = next((e for e in mine if e["tipo"] in ("terminado", "cancelado", "vencido")), None)
+        motive = (ended or {}).get("motivo")
+        if ended is not None and ended["tipo"] == "cancelado":
+            result = "cancelar"
+        elif motive == "encontrado":
+            result = "exito"
+        elif any(e["tipo"] == "buscar-perdido" for e in mine):
+            result = "perdida"
+        else:
+            result = REVISAR
+        # El ensayo dura hasta un poco después de su fin (lo que suena tras «la encontré») o
+        # hasta la próxima búsqueda; nunca se superpone con la siguiente.
+        last = events[stop - 1]["t_ns"] if stop == len(events) else events[stop]["t_ns"] - 1
+        end_ns = min(last, ended["t_ns"] + 2_000_000_000) if ended else last
+        rows.append({
+            "ensayo": len(rows) + 1, "ambiente": ambiente, "objeto": order.get("objetivo") or "",
+            "resultado_real": result, "request_id": rid,
+            # Relativa a la planilla, como la resuelve `evaluar`.
+            "traza": os.path.relpath(trace.resolve(), out.resolve().parent).replace("\\", "/"),
+            "inicio_s": round((order["t_ns"] - origin) / 1e9, 3),
+            "fin_s": round((end_ns - origin) / 1e9, 3), "exito_s": "",
+            "notas": f"dicho: {order.get('texto', '')}",
+        })  # fmt: skip
+    write_csv(out, rows)
+    return rows
