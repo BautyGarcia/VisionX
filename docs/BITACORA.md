@@ -40,6 +40,32 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T08/T09: la frase de distancia ya no se corta al vencer; «maus»
+
+**Tareas:** T08, T09. **Persona/agente:** Bauty (vivo, traza `outputs/beta/voz-cortes.jsonl`,
+pedido 3) lo diagnosticó con su agente; Tomás / Claude Code. **Rama:** `b/vencimiento-no-corta`.
+
+**Problema.** La respuesta a «¿a qué distancia está…?» se cortaba a la mitad, justo antes de los
+metros. `deadlines_s.distance` es 10 s y, al vencer, `Controller.tick()` cortaba también lo que
+estaba sonando; Whisper (~4 s) + síntesis (~2,7 s) + una frase de ~7 s no entra en 10 s, y Claude
+ponía los metros al final. Además «¿A qué distancia está el mouse?» salió de Whisper como «maus»
+y la app respondió «No reconozco maus».
+
+**Hecho.**
+- El vencimiento es un plazo para **empezar** a responder: si para entonces la respuesta no empezó
+  a sonar, la orden vence como antes; si ya suena, termina con todos sus tramos, con un tope de
+  `AudioOutput.answer_grace_s` (20 s) después del plazo. La confirmación de la orden («Leo.»,
+  «Busco taza.», registrada con `note_ack`) y los sonidos no cuentan como respuesta, así que una
+  respuesta que nunca empezó sigue sin decirse tarde.
+- Distancia: Claude dice primero el objeto y los metros, y después el costado, la altura y sobre
+  qué está («La taza blanca está a 1,4 metros, unos 20 cm a tu izquierda, sobre el taburete.»).
+  Con los tramos del PR #44, el número suena en el primero.
+- Catálogo: «maus» y «mause» son mouse.
+- Tests: `tests/test_vencimiento.py` (5).
+
+**Próximo paso.** Bauty: repetir «¿a qué distancia está…?» con `--traza`; en `latencias` no
+tendría que haber frases `vencido` del pedido después de la primera que sonó.
+
 ## 2026-11-19 (noche) — T08: Whisper en la GPU de la Mac y la respuesta de Claude por tramos
 
 **Tareas:** T08, T11. **Persona/agente:** Tomás (pedido) / Claude Code. **Rama:**

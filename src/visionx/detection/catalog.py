@@ -82,7 +82,7 @@ COCO_ES: dict[str, tuple[str, ...]] = {
     "toilet": ("inodoro", "baño"),
     "tv": ("televisor", "tele", "televisión"),
     "laptop": ("computadora portátil", "notebook", "laptop", "computadora"),
-    "mouse": ("mouse", "ratón"),
+    "mouse": ("mouse", "ratón", "maus", "mause"),  # Whisper escribe «maus» (vivo 19/11)
     "remote": ("control remoto", "control"),
     "keyboard": ("teclado",),
     "cell phone": ("celular", "teléfono", "móvil"),

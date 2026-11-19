@@ -260,6 +260,13 @@ class AudioOutput:
         self._stop_current = threading.Event()
         self._current_outcome: Outcome | None = None
         self._closed = False
+        # Vencimiento = plazo para EMPEZAR a responder (vivo 19/11: cortaba la frase de distancia
+        # a la mitad, antes de los metros). Un pedido cuya respuesta ya empezó a sonar termina,
+        # con sus tramos siguientes, hasta `answer_grace_s` después del plazo. La confirmación
+        # («Busco taza.», `note_ack`) y los sonidos no cuentan como respuesta.
+        self.answer_grace_s = 20.0
+        self._acks: dict[int, str] = {}
+        self._answering: set[int] = set()
         self._thread = threading.Thread(target=self._run, name="visionx-audio", daemon=True)
         self._thread.start()
 
@@ -286,7 +293,7 @@ class AudioOutput:
             prefetch = getattr(self.synth, "prefetch", None)
             if prefetch is not None and not text.startswith(SOUND_PREFIX):
                 prefetch(text)
-            if event.deadline_ns is not None and now > event.deadline_ns:
+            if self._expired(event, now):
                 self._finish(record, Outcome.EXPIRED, now)
                 return
             if event.valid_until_ns is not None and now > event.valid_until_ns:
@@ -306,6 +313,22 @@ class AudioOutput:
                 heapq.heapify(self._queue)
                 self._finish(worst.record, Outcome.DROPPED, now)
             self._cond.notify()
+
+    def note_ack(self, request_id: int, text: str) -> None:
+        """La confirmación de este pedido: que suene no cuenta como «empezó a responder»."""
+        with self._cond:
+            self._acks[request_id] = text
+
+    def answering(self, request_id: int | None) -> bool:
+        """¿Ya sonó (o suena) parte de la respuesta de este pedido?"""
+        with self._cond:
+            return request_id in self._answering
+
+    def _expired(self, event: AudioEvent, now: int) -> bool:
+        if event.deadline_ns is None or now <= event.deadline_ns:
+            return False
+        grace = int(self.answer_grace_s * 1e9)
+        return not (event.request_id in self._answering and now <= event.deadline_ns + grace)
 
     def cancel(self, request_id: int) -> None:
         """Descarta lo pendiente de ese pedido y corta lo que suena, si es cancelable."""
@@ -399,11 +422,14 @@ class AudioOutput:
             if self._current_outcome is not None:
                 return self._current_outcome, None
             now = self.clock.now_ns()
-            if event.deadline_ns is not None and now > event.deadline_ns:
+            if self._expired(event, now):
                 return Outcome.EXPIRED, None
             if event.valid_until_ns is not None and now > event.valid_until_ns:
                 return Outcome.FACT_EXPIRED, None
             record.started_ns = now
+            text = event.text_or_sound
+            if not text.startswith(SOUND_PREFIX) and text != self._acks.get(event.request_id):
+                self._answering.add(event.request_id)
         try:
             completed = self.player.play(samples, rate, self._stop_current)
         except Exception as exc:

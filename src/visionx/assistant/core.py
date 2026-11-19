@@ -72,11 +72,13 @@ KINDS = {
     "está), y al final una línea «PREGUNTA: …» que empiece con «Veo», los nombre por cómo son y "
     "de qué lado están y termine en «¿Cuál querés?» (p. ej. «Veo una taza blanca a la izquierda "
     "y un vaso rojo a la derecha. ¿Cuál querés?»). Sin metros.",
-    "distancia": "DISTANCIA: con un objeto, UNA sola frase: qué es (color, sobre qué está o al "
-    "lado de qué) y, tal cual, la distancia, el costado y la altura medidos de la lista. Con "
-    "varios: primero cuántos son («Hay dos tazas.») y después una frase corta por cada uno, de "
-    "izquierda a derecha, con lo que los distingue y su distancia; el costado y la altura solo si "
-    "ayudan a encontrarlo. Sin números que no estén en la lista.",
+    "distancia": "DISTANCIA: con un objeto, UNA sola frase que empiece por el objeto y su "
+    "distancia tal cual de la lista, y después el costado, la altura y qué es (color, sobre qué "
+    "está o al lado de qué): «La taza blanca está a 1,4 metros, unos 20 cm a tu izquierda, "
+    "sobre el taburete.». Con varios: primero cuántos son («Hay dos tazas.») y después una "
+    "frase corta por cada uno, de izquierda a derecha, que empiece con su distancia y siga con lo "
+    "que los distingue; el costado y la altura solo si ayudan a encontrarlo. Sin números que no "
+    "estén en la lista.",
 }
 
 
