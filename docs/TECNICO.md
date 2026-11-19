@@ -960,6 +960,49 @@ tiene una parte en filas, que se ve, y una en columnas, que queda determinada po
   cuarto, mejora una y empeora otra. Sigue muy lejos del campo exacto (0,4–0,9 %). Lo que
   falta es, sobre todo, el corrimiento de columnas del centro óptico, que no se ve en las filas.
 
+### Corrección clásica más distancia conocida (19/11)
+
+Lo que la alineación no puede ver en las filas (el corrimiento de columnas del centro óptico y
+del yaw) es, a primer orden, un corrimiento constante de disparidad: justo lo que mide el paso
+de distancia conocida. Se emuló en el experimento de cámaras hermanas: el corrimiento se saca
+del primer par (como si se hubiera medido ahí una distancia con cinta) y se aplica a los otros
+seis, que son los que se evalúan. Mediana del cambio de profundidad, tres cámaras por nivel.
+
+| Nivel | Sin corregir | Regla de 4 + distancia | Lente + distancia | Campo exacto |
+|---|---|---|---|---|
+| ×0,1 | 3,4 / 5,4 / 6,1 % | 1,3 / 1,3 / 2,1 % | 2,0 / 1,3 / 1,8 % | 0,33 / 0,26 / 0,23 % |
+| ×0,25 | 7,1 / 14,5 / 15,0 % | 2,7 / 2,1 / 4,9 % | 2,8 / 2,6 / 2,0 % | 0,32 / 0,29 / 0,22 % |
+| ×0,5 | 14,5 / 33,3 / 28,1 % | 4,5 / 3,1 / 10,9 % | 3,9 / 2,8 / 2,7 % | 0,35 / 0,29 / 0,24 % |
+| ×1 | 31,6 / 85,4 / 33,0 % | 7,7 / 5,6 / 42,5 % | 6,1 / 5,4 / 4,5 % | 0,41 / 0,31 / 0,25 % |
+
+- **La distancia conocida recupera la mayor parte de lo que faltaba.** Sin ella, el clásico
+  dejaba entre 2,5 y 49 %; con ella y los términos de lente queda entre 1,3 y 6 %.
+- **Los términos de lente sí sirven acá:** con la regla de cuatro hay casos que no se arreglan
+  (10,9 % y 42,5 %); con lente no aparecen. En los pares reales del precinto pasó lo contrario,
+  así que cuál conviene sigue abierto.
+- **Lo que queda hasta el campo exacto (de ~2 % a ~0,3 %)** es el margen real para una corrección
+  densa aprendida.
+- Es una emulación optimista: el corrimiento sale de la referencia de todo un cuadro, no de un
+  objeto medido con cinta. Rangos supuestos, tres cámaras por nivel, un clip.
+
+### Evaluador del banco ELP (19/11)
+
+`python -m visionx.depth.bench` mide métodos de profundidad contra los stickers del banco
+([Datos y comparación](#datos-y-comparacion)). Dos comandos: `marcar` abre una ventana para
+ubicar a mano cada sticker en la izquierda rectificada y escribe `puntos.yaml`; `evaluar` corre
+los métodos y compara, en una ventana chica alrededor de cada punto, la mediana de la
+profundidad contra la cinta más el cero de la cinta.
+
+- **Qué informa:** puntos medidos, % dentro de 5 % (contando los no medidos como no acertados),
+  error mediano y P90, por rango de distancia. Si el método trae b: el intervalo de 90 % en
+  metros, cuántas veces contiene a la referencia y el factor por el que habría que multiplicar
+  b para que quede calibrada en esos puntos.
+- **Sesiones de test:** rechaza `s3`, `s4` y `s5` salvo con `--test-congelado`.
+- **Probado** con el clip `dev-1114-distancias` (cinco objetos con distancia anotada), con los
+  puntos ubicados a ojo y sin stickers: sirve para ver que la herramienta corre, no como medida
+  de precisión. Los tres métodos coinciden entre sí dentro de 1–3 %, y el modo continuo queda a
+  menos de 1 % del preciso por objeto. `marcar` no se pudo probar: necesita pantalla.
+
 ### Orden de trabajo, orden de caída y ablaciones
 
 Fechas objetivo, **todavía no evidencia**; el estado vigente está en [ROADMAP](ROADMAP.md).

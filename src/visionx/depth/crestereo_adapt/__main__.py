@@ -909,6 +909,40 @@ def _coherence(args: argparse.Namespace) -> int:
     return 0
 
 
+def _with_known_distance(
+    values: list[tuple[np.ndarray, np.ndarray]],
+    reference: tuple[np.ndarray, np.ndarray],
+    geom: Any,
+    range_m: tuple[float, float],
+) -> tuple[list[tuple[np.ndarray, np.ndarray]], float]:
+    """Emula el paso de distancia conocida sobre el primer par de una lista de profundidades.
+
+    Una medición con cinta da el corrimiento constante de disparidad que quedó. Acá se saca de
+    la referencia del primer par (mediana de la diferencia de disparidad) y se resta en todos.
+    Devuelve las profundidades corregidas y el corrimiento, en px de cómputo.
+    """
+    fb = geom.fx * geom.baseline_m
+
+    def to_disparity(depth: np.ndarray) -> np.ndarray:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return fb / depth - geom.doffs
+
+    depth0, ok0 = values[0]
+    ref0, ref_ok0 = reference
+    with np.errstate(invalid="ignore"):
+        both = ok0 & ref_ok0 & (ref0 >= range_m[0]) & (ref0 <= range_m[1])
+    if not both.any():
+        return values, 0.0
+    delta = float(np.median(to_disparity(depth0)[both] - to_disparity(ref0)[both]))
+    fixed = []
+    for depth, ok in values:
+        disparity = to_disparity(depth) - delta
+        with np.errstate(divide="ignore", invalid="ignore"):
+            good = ok & np.isfinite(disparity) & ((disparity + geom.doffs) > 0)
+            fixed.append((fb / (disparity + geom.doffs), good))
+    return fixed, delta
+
+
 # --- hermanas: cámara real contra nominal (etapa 2) ----------------------------------------
 
 
@@ -1021,36 +1055,50 @@ def _siblings(args: argparse.Namespace) -> int:
             lens_maps = None
             if lens_est.ok and lens_est.applied:
                 lens_maps = pull_maps(lens_est.lens, capture)
-            per_system: dict[str, list[dict[str, float]]] = {
-                "sin_corregir": [],
-                "clasico_regla": [],
-                "clasico_lente": [],
-                "oraculo_parametrico": [],
-                "oraculo_denso": [],
+            # Profundidad de cada sistema en cada par: (metros, máscara).
+            outputs: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {
+                name: []
+                for name in (
+                    "sin_corregir",
+                    "clasico_regla",
+                    "clasico_lente",
+                    "oraculo_parametrico",
+                    "oraculo_denso",
+                )
             }
-            for frame, perturbed, (ref, ref_ok) in zip(
-                frames, perturbed_all, references, strict=True
-            ):
-
-                def change(right: np.ndarray, frame=frame, ref=ref, ref_ok=ref_ok) -> dict:
-                    depth, ok = run(frame, right)
-                    return robustness.depth_change(depth, ok, ref, ref_ok, range_m)
-
-                per_system["sin_corregir"].append(change(perturbed))
-                if ruled_fix is None:
-                    per_system["clasico_regla"].append(per_system["sin_corregir"][-1])
-                else:
-                    per_system["clasico_regla"].append(change(warp_image(perturbed, ruled_fix)))
+            for frame, perturbed in zip(frames, perturbed_all, strict=True):
+                plain = run(frame, perturbed)
+                outputs["sin_corregir"].append(plain)
+                outputs["clasico_regla"].append(
+                    plain if ruled_fix is None else run(frame, warp_image(perturbed, ruled_fix))
+                )
                 if lens_maps is None:
-                    per_system["clasico_lente"].append(per_system["sin_corregir"][-1])
+                    outputs["clasico_lente"].append(plain)
                 else:
                     fixed = cv2.remap(perturbed, lens_maps[0], lens_maps[1], cv2.INTER_LINEAR)
-                    per_system["clasico_lente"].append(change(fixed))
-                per_system["oraculo_parametrico"].append(change(warp_image(perturbed, undo)))
+                    outputs["clasico_lente"].append(run(frame, fixed))
+                outputs["oraculo_parametrico"].append(run(frame, warp_image(perturbed, undo)))
                 dense = cv2.remap(
                     perturbed, u + field[:, :, 0], v + field[:, :, 1], cv2.INTER_LINEAR
                 )
-                per_system["oraculo_denso"].append(change(dense))
+                outputs["oraculo_denso"].append(run(frame, dense))
+
+            # Distancia conocida: una medición sobre el primer par da el corrimiento constante de
+            # disparidad que quedó (centro óptico y yaw no se ven en las filas). Se emula con la
+            # referencia de ese par y se aplica a los demás, que son los que se evalúan.
+            offsets: dict[str, float] = {}
+            for name in ("sin_corregir", "clasico_regla", "clasico_lente"):
+                outputs[f"{name}+distancia"], offsets[name] = _with_known_distance(
+                    outputs[name], references[0], est.geometry, range_m
+                )
+
+            per_system: dict[str, list[dict[str, float]]] = {}
+            for name, values in outputs.items():
+                # El primer par se usó para la distancia conocida: no se evalúa en ningún sistema.
+                per_system[name] = [
+                    robustness.depth_change(depth, ok, ref, ref_ok, range_m)
+                    for (depth, ok), (ref, ref_ok) in zip(values[1:], references[1:], strict=True)
+                ]
             row: dict[str, Any] = {
                 "fraccion": fraction,
                 "semilla": seed,
@@ -1072,6 +1120,7 @@ def _siblings(args: argparse.Namespace) -> int:
                     "radial2": round(lens_est.lens.radial2, 6),
                     "radial4": round(lens_est.lens.radial4, 6),
                 },
+                "corrimiento_distancia_conocida_px": {k: round(x, 3) for k, x in offsets.items()},
                 "filas_px_mediana": round(float(np.median(np.abs(field[:, :, 1]))), 2),
                 "resto_filas_px_mediana": round(float(np.median(np.abs(rest[:, :, 1]))), 2),
                 "resto_columnas_px_mediana": round(float(np.median(np.abs(rest[:, :, 0]))), 2),

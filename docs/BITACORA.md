@@ -40,6 +40,47 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 — T12/T04: distancia conocida en cámaras hermanas y evaluador del banco
+
+**Tareas:** T12, T04, T15. **Persona/agente:** Bauty (indicó seguir sin supervisión durante la
+noche) / Claude Code. **Rama:** `a/T12-distancia-conocida-y-banco`, apilada sobre el PR #35.
+
+**Hecho (código).**
+- `hermanas` emula el paso de distancia conocida: saca del primer par el corrimiento constante
+  de disparidad y lo aplica a los demás; ese primer par no se evalúa.
+- `src/visionx/depth/bench.py`: lectura de `escena.yaml` y `puntos.yaml`, medición por punto,
+  resumen por rango, intervalo de 90 % en metros y factor de recalibración de b; comandos
+  `marcar` y `evaluar`; rechazo de las sesiones de test sin `--test-congelado`.
+- Tests: `tests/test_depth_bench.py` (7).
+
+**Evidencia.** `uv run pytest tests/test_depth_bench.py`: 7 aprobados. Artefacto
+`outputs/profundidad/20261119-041404-hermanas-*`. Tablas en
+[TECNICO](TECNICO.md#corrección-clásica-más-distancia-conocida-1911).
+- **Cámaras hermanas con distancia conocida** (7 pares, 3 cámaras por nivel): con la mitad de
+  los rangos, sin corregir 14,5 / 33,3 / 28,1 %; regla de cuatro más distancia 4,5 / 3,1 /
+  10,9 %; lente más distancia 3,9 / 2,8 / 2,7 %; campo exacto 0,35 / 0,29 / 0,24 %.
+- **Evaluador** sobre `dev-1114-distancias` (5 objetos con distancia anotada, puntos a ojo, un
+  cuadro, CREStereo en CPU para no competir con el entrenamiento): corre de punta a punta. Los
+  tres métodos dan errores parecidos entre sí (entre +1 y +6 %, y +12 a +15 % en la caja), lo
+  que apunta a los puntos o a la referencia y no a los métodos: no es una medida de precisión.
+
+**Problemas.**
+- **Dos corridas a la vez en MPS se rompen.** Se lanzó `hermanas` mientras entrenaba la segunda
+  semilla: `hermanas` terminó con «MPS command buffer execution failed» y el entrenamiento quedó
+  colgado sin avanzar. Se detuvo, se borró su carpeta incompleta (`v2-s1`) y se relanzó todo en
+  serie. Regla práctica: una sola corrida con GPU por vez en la Mac.
+- `marcar` necesita pantalla y un clic por sticker: no se probó.
+
+**Límites.** La emulación de distancia conocida usa la referencia de un cuadro entero, no una
+medición de cinta sobre un objeto: es optimista. Rangos de las cámaras hermanas supuestos.
+
+**Bloqueo físico.** Todo lo que sigue necesita a Bauty con la cámara: grabar `s1` del banco
+(calibrar b en la ELP y medir precisión real por objeto), pares con la cámara apretada y
+distancia medida, y la segunda unidad ELP.
+
+**Próximo paso.** Bauty: `s1` y decidir el papel de la red de alineación. Con `s1` grabada:
+`bench marcar`, `bench evaluar` y recalibrar b.
+
 ## 2026-11-19 — T12: U-Net de incertidumbre entrenada y estimador con términos de lente
 
 **Tareas:** T12 y T13. **Persona/agente:** Bauty (indicó seguir sin supervisión durante la
