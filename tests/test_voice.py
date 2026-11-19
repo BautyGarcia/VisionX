@@ -29,7 +29,18 @@ from visionx.voice.commands import (
     clean,
     find_object,
 )
-from visionx.voice.engines import PiperSynth, VoiceSettings, WhisperTranscriber, resample
+from visionx.voice.engines import (
+    DiskCachedSynth,
+    EdgeSynth,
+    FallbackSynth,
+    PiperSynth,
+    VoiceSettings,
+    WhisperTranscriber,
+    build_synth,
+    edge_rate,
+    resample,
+    trim_silence,
+)
 from visionx.voice.output import (
     SOUNDS,
     AudioOutput,
@@ -75,6 +86,20 @@ def test_unknown_object_asks_instead_of_guessing():
     assert "llaves" in interp.reply
     with pytest.raises(ValueError, match="aclaración"):
         interp.to_command(1, 0)
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "¿A qué distancia está eso?",
+        "¿A qué distancia está esa?",
+        "¿A qué distancia está?",
+        "¿Qué tan lejos está ese objeto?",
+    ],
+)
+def test_distance_pronouns_are_implicit_references(phrase):
+    interp = CommandParser(CATALOG).parse(phrase)
+    assert interp.ok and interp.mode is Mode.DISTANCE and interp.target is None
 
 
 def test_cancel_wins_even_with_more_words():
@@ -259,6 +284,79 @@ def test_event_expiring_during_synthesis_is_not_played():
     assert outcomes(output)["tarde"] is Outcome.EXPIRED
 
 
+@pytest.mark.parametrize(
+    "valid_until,expected",
+    [
+        (3_000, Outcome.PLAYED),
+        (2_000, Outcome.PLAYED),
+        (1_000, Outcome.FACT_EXPIRED),
+        (None, Outcome.PLAYED),
+    ],
+)
+def test_fact_validity_is_checked_after_synthesis(valid_until, expected):
+    clock = ManualClock(0)
+
+    class AdvancingSynth(FakeSynth):
+        def synthesize(self, text):
+            clock.advance(2_000)
+            return super().synthesize(text)
+
+    player = FakePlayer()
+    records = []
+    output = AudioOutput(AdvancingSynth(), player, clock=clock, on_record=records.append)
+    try:
+        output.submit(event(1, "guía", deadline=10_000, valid_until_ns=valid_until))
+        assert output.wait_idle(2)
+        assert records[0].outcome is expected
+        assert bool(player.played) == (expected is Outcome.PLAYED)
+        assert (records[0].started_ns is None) == (expected is Outcome.FACT_EXPIRED)
+    finally:
+        output.close()
+
+
+def test_fact_already_expired_is_recorded_without_synthesis():
+    clock = ManualClock(2_000)
+    synth, player = FakeSynth(), FakePlayer()
+    output = AudioOutput(synth, player, clock=clock)
+    try:
+        # El contrato admite recibir un hecho que venció antes de crearse el audio.
+        output.submit(event(1, "viejo", created=2_000, valid_until_ns=1_000))
+        assert output.wait_idle(2)
+        assert outcomes(output)["viejo"] is Outcome.FACT_EXPIRED
+        assert synth.calls == [] and player.played == []
+    finally:
+        output.close()
+
+
+def test_presence_sound_expiring_in_queue_is_not_played():
+    clock = ManualClock(0)
+    entered, release = threading.Event(), threading.Event()
+
+    class BlockingSynth(FakeSynth):
+        def synthesize(self, text):
+            entered.set()
+            assert release.wait(2)
+            return super().synthesize(text)
+
+    player = FakePlayer()
+    output = AudioOutput(BlockingSynth(), player, clock=clock)
+    try:
+        output.submit(event(1, "Busco taza."))
+        assert entered.wait(2)
+        output.submit(event(1, "sonido:bip", valid_until_ns=1_000))
+        clock.advance(2_000)
+        release.set()
+        assert output.wait_idle(2)
+        assert outcomes(output) == {
+            "Busco taza.": Outcome.PLAYED,
+            "sonido:bip": Outcome.FACT_EXPIRED,
+        }
+        assert len(player.played) == 1
+    finally:
+        release.set()
+        output.close()
+
+
 def test_cancel_during_synthesis_prevents_playback():
     started = threading.Event()
     release = threading.Event()
@@ -347,8 +445,9 @@ def test_cached_synth_reuses_frequent_phrases():
 
 def test_settings_from_default_config():
     s = VoiceSettings.from_config(load_config())
-    assert s.tts_voice == "es_AR-daniela-high" and s.stt_model == "small"
-    assert s.voice_path == ROOT / "weights" / "piper" / "es_AR-daniela-high.onnx"
+    assert s.tts_engine == "edge" and s.edge_voice == "es-UY-MateoNeural"
+    assert s.tts_voice == "es_ES-davefx-medium" and s.stt_model == "small"
+    assert s.voice_path == ROOT / "weights" / "piper" / "es_ES-davefx-medium.onnx"
     assert s.deadlines_s["control"] == 2.0
 
 
@@ -365,3 +464,180 @@ def test_wav_round_trip(tmp_path: Path):
     write_wav(tmp_path / "x.wav", samples, 16_000)
     back, rate = read_wav(tmp_path / "x.wav")
     assert rate == 16_000 and np.allclose(back, samples, atol=1e-4)
+
+
+def test_whisper_variants_of_search_and_describe():
+    """Transcripciones de Whisper vistas en el bucle con Piper (BITACORA 2026-11-17)."""
+    parser = CommandParser(ClassCatalog(COCO_CLASSES))
+    cases = {
+        "Encontre la botella.": ("search", "bottle"),
+        "Encuéntrame la taza.": ("search", "cup"),
+        "Descríme lo que hay.": ("describe", ""),
+        "Cuéntame qué tengo enfrente.": ("describe", ""),
+        "Describime lo que hay.": ("describe", ""),
+        "Describí.": ("describe", ""),
+    }
+    for phrase, expected in cases.items():
+        assert outcome(parser.parse(phrase)) == expected, phrase
+
+
+# --- Edge (Mateo) con caché en disco y Piper de respaldo, sin red --------------------------
+
+
+def _mp3(seconds: float = 0.3, rate: int = 24_000) -> bytes:
+    """MP3 real de un tono, codificado con PyAV: lo que devolvería Edge."""
+    import io
+
+    av = pytest.importorskip("av")  # viene con faster-whisper (extra voz); CI core no lo tiene
+
+    buf = io.BytesIO()
+    with av.open(buf, "w", format="mp3") as out:
+        stream = out.add_stream("libmp3lame", rate=rate, layout="mono")
+        samples = tone([440], seconds * 1000, rate).reshape(1, -1)
+        frame = av.AudioFrame.from_ndarray(samples, format="flt", layout="mono")
+        frame.sample_rate = rate
+        for packet in stream.encode(frame):
+            out.mux(packet)
+        for packet in stream.encode(None):
+            out.mux(packet)
+    return buf.getvalue()
+
+
+def test_edge_rate_format():
+    assert [edge_rate(r) for r in (1.0, 0.9, 1.15)] == ["+0%", "-10%", "+15%"]
+
+
+def test_edge_synth_decodes_mp3_without_network():
+    calls = []
+
+    def fetch(text, voice, rate, timeout_s):
+        calls.append((text, voice, rate, timeout_s))
+        return _mp3(0.3)
+
+    synth = EdgeSynth(VoiceSettings(edge_voice="es-UY-MateoNeural", speech_rate=0.9), fetch=fetch)
+    audio = synth.synthesize("Llegaste.")
+    ((text, voice, rate, timeout),) = calls
+    assert (text, voice, rate) == ("Llegaste.", "es-UY-MateoNeural", "-10%")
+    assert timeout == pytest.approx(4.0 + 0.04 * len("Llegaste."))  # más tiempo si es larga
+    assert synth.sample_rate == 24_000 and audio.dtype == np.float32
+    assert 0.2 < len(audio) / 24_000 < 0.45 and np.abs(audio).max() > 0.1
+    assert synth.voice_id == "edge:es-UY-MateoNeural-10%"
+
+
+def test_edge_synth_without_audio_is_an_error():
+    synth = EdgeSynth(VoiceSettings(), fetch=lambda *a: b"")
+    with pytest.raises(EstimatorError):
+        synth.synthesize("hola")
+
+
+def test_disk_cache_survives_restart(tmp_path: Path):
+    first = FakeSynth()
+    DiskCachedSynth(first, tmp_path).synthesize("Busco la taza.")
+    second = FakeSynth()
+    cached = DiskCachedSynth(second, tmp_path)
+    audio = cached.synthesize("Busco la taza.")
+    assert first.calls == ["Busco la taza."] and second.calls == []  # salió del disco
+    assert cached.hits == 1 and len(audio) == 10 * len("Busco la taza.")
+
+
+def test_disk_cache_separates_voices(tmp_path: Path):
+    a, b = FakeSynth(), FakeSynth()
+    a.voice_id, b.voice_id = "edge:A", "edge:B"
+    DiskCachedSynth(a, tmp_path).synthesize("hola")
+    DiskCachedSynth(b, tmp_path).synthesize("hola")
+    assert a.calls == b.calls == ["hola"]
+
+
+def test_fallback_uses_piper_while_edge_is_down_and_retries_later():
+    now = [0.0]
+    edge = FakeSynth(fail_on="Leo.")
+    edge.sample_rate = 2000
+    piper = FakeSynth()  # 1 kHz: se lleva a 2 kHz
+    synth = FallbackSynth(edge, piper, retry_s=30.0, clock=lambda: now[0])
+    assert len(synth.synthesize("hola")) == 40 and synth.last_engine == "principal"
+    audio = synth.synthesize("Leo.")  # Edge falla: esa frase la dice Piper
+    assert synth.last_engine == "respaldo" and synth.failures == 1
+    assert len(audio) == 2 * 10 * len("Leo.") and "RuntimeError" in synth.last_error
+    now[0] = 10.0
+    synth.synthesize("chau")  # dentro de los 30 s no se vuelve a esperar a Edge
+    assert edge.calls == ["hola", "Leo."] and piper.calls == ["Leo.", "chau"]
+    now[0] = 31.0
+    synth.synthesize("otra")
+    assert edge.calls[-1] == "otra" and synth.last_engine == "principal"
+
+
+def test_build_synth_rejects_unknown_engine():
+    with pytest.raises(InvalidInput, match="engine"):
+        build_synth(VoiceSettings(tts_engine="otra"))
+
+
+def test_trim_silence_keeps_a_short_margin():
+    rate = 1000
+    audio = np.concatenate([np.zeros(150), np.full(100, 0.5), np.zeros(1000)]).astype(np.float32)
+    out = trim_silence(audio, rate, keep_start_ms=30, keep_end_ms=120)
+    assert len(out) == 30 + 100 + 120 and out[30] == 0.5
+    assert len(trim_silence(np.zeros(50, np.float32), rate)) == 50  # todo silencio: no se toca
+
+
+def test_prefetch_synthesizes_while_queued_and_never_twice():
+    slow = FakeSynth(delay_s=0.1)
+    cached = CachedSynth(slow, prefetch=True)
+    cached.prefetch("Uno.")
+    cached.prefetch("Uno.")  # ya en cálculo: no se pide de nuevo
+    audio = cached.synthesize("Uno.")  # espera la que está en curso
+    assert slow.calls == ["Uno."] and len(audio) == 40
+    off = CachedSynth(FakeSynth())
+    off.prefetch("Dos.")
+    assert off.synth.calls == []  # sin prefetch habilitado no hace nada
+
+
+def test_audio_output_prefetches_queued_phrases():
+    class Overlap(FakeSynth):
+        """Cuenta cuántas síntesis corren a la vez (sin depender del reloj del runner)."""
+
+        def __init__(self):
+            super().__init__(delay_s=0.15)
+            self.active = self.peak = 0
+            self.lock = threading.Lock()
+
+        def synthesize(self, text):
+            with self.lock:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+            try:
+                return super().synthesize(text)
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+    slow = Overlap()
+    cached = CachedSynth(slow, prefetch=True)
+    output = AudioOutput(cached, FakePlayer())
+    for i, text in enumerate(["Primera frase.", "Segunda frase.", "Tercera frase."]):
+        output.submit(event(1, text, created=i))
+    assert output.wait_idle(10)
+    output.close()
+    assert sorted(slow.calls) == sorted(["Primera frase.", "Segunda frase.", "Tercera frase."])
+    assert slow.peak >= 2  # se sintetizaron en paralelo, no una detrás de otra
+
+
+def test_only_mateo_by_default_retries_and_never_switches_voice():
+    from visionx.shared.config import load_config
+
+    s = VoiceSettings.from_config(load_config())
+    assert s.tts_fallback == "none"
+    calls = []
+
+    def flaky(text, voice, rate, timeout_s):
+        calls.append(text)
+        if len(calls) == 1:
+            raise TimeoutError("lento")
+        return _mp3(0.3)
+
+    synth = EdgeSynth(VoiceSettings(edge_attempts=2), fetch=flaky)
+    assert len(synth.synthesize("Hola.")) > 0 and calls == ["Hola.", "Hola."]  # reintentó
+    dead = EdgeSynth(
+        VoiceSettings(edge_attempts=2), fetch=lambda *a: (_ for _ in ()).throw(TimeoutError("x"))
+    )
+    with pytest.raises(EstimatorError):
+        dead.synthesize("Hola.")  # sin respaldo: la frase se saltea, no suena otra voz

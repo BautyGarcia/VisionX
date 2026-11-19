@@ -25,9 +25,27 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
         cfg = _mapping(yaml.safe_load(f), str(defaults))
     # Nunca buscar local.yaml automáticamente: el llamador debe elegir su override.
     if path is not None:
-        with open(path, encoding="utf-8") as f:
-            _merge(cfg, _mapping(yaml.safe_load(f), str(path)))
+        _merge_file(cfg, Path(path), set())
     return cfg
+
+
+def _merge_file(cfg: dict[str, Any], path: Path, seen: set[Path]) -> None:
+    """Superpone `path`; si trae `incluir:` (un archivo o una lista), esos van antes.
+
+    Sirve para pruebas que suman unas claves encima de la config local de cada máquina
+    (p. ej. configs/velocidad/C1.yaml incluye configs/local.yaml). Rutas relativas al repo.
+    """
+    path = path if path.is_absolute() or path.exists() else ROOT / path
+    real = path.resolve()
+    if real in seen:
+        raise ValueError(f"{path}: `incluir` en ciclo")
+    seen.add(real)
+    with open(path, encoding="utf-8") as f:
+        over = _mapping(yaml.safe_load(f), str(path))
+    included = over.pop("incluir", None) or []
+    for item in [included] if isinstance(included, str) else included:
+        _merge_file(cfg, Path(item), seen)
+    _merge(cfg, over)
 
 
 def _mapping(value: object, source: str) -> dict[str, Any]:

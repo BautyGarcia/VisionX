@@ -25,7 +25,10 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
+
+if TYPE_CHECKING:
+    from visionx.app.precision import PrecisionWorker
 
 from visionx.shared.clock import Clock, MonotonicClock
 from visionx.shared.contracts import (
@@ -153,6 +156,7 @@ class Joint:
     detection: Detection
     depth: DepthResult | None
     objects: tuple[SpatialObject, ...]
+    precise_request_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +169,11 @@ class View:
 
     seen: Joint | None = None
     measured: Joint | None = None
+    # T10: captura sin esperar detección/profundidad. Original y rectificada mantienen
+    # identidad propia; el OCR no usa sus cajas para medir metros.
+    captured: StereoFrame | None = None
+    original: StereoFrame | None = None
+    precise: PrecisionWorker | None = None
 
 
 class ResultBoard:
@@ -233,11 +242,13 @@ class Pipeline:
         clock: Clock | None = None,
         cache_frames: int = 30,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        precise: PrecisionWorker | None = None,
     ) -> None:
         self.source = source
         self.detector = detector
         self.depth = depth
         self.spatial = spatial
+        self.precise = precise
         self.clock = clock or MonotonicClock()
         self.cache = FrameCache(cache_frames)
         self.board = ResultBoard(cache_frames)
@@ -255,6 +266,7 @@ class Pipeline:
         self._joint_lock = threading.Lock()
         self._joint: Joint | None = None
         self._seen: Joint | None = None  # caché de latest_seen()
+        self._captured: tuple[StereoFrame | None, StereoFrame | None] = (None, None)
         self._threads: list[threading.Thread] = []
 
     # -- control ---------------------------------------------------------------------------
@@ -270,6 +282,8 @@ class Pipeline:
 
     def stop(self, timeout_s: float = 5.0) -> None:
         self._stop.set()
+        if self.precise is not None:
+            self.precise.close()
         self._det_box.close()
         self._depth_box.close()
         for thread in self._threads:
@@ -316,6 +330,12 @@ class Pipeline:
                 now = self.clock.now_ns()
                 self.cache.put(frame)
                 self.latest_frame = frame
+                original = getattr(self.source, "original_frame", None)
+                if not frame.rectified:
+                    original = frame
+                # Publicar juntos evita mezclar el original de otro frame entre hilos.
+                with self._joint_lock:
+                    self._captured = (frame, original)
                 self.capture_status.record(frame.key, 0.0, frame.received_ns, now)
                 self._det_box.put(frame)
                 self._on_event("frame", {"frame_id": frame.frame_id, "session": frame.session_id})
@@ -357,6 +377,7 @@ class Pipeline:
                 status.name,
                 {
                     "frame_id": frame.frame_id,
+                    "model_id": status.model_id,
                     "latencia_ms": round(latency_ms, 2),
                     "edad_ms": round(status.age_ms(self.clock.now_ns()) or 0.0, 2),
                 },
@@ -418,12 +439,20 @@ class Pipeline:
         with self._joint_lock:
             if self._seen is None or _newer(key, self._seen.frame.key):
                 self._seen = seen
-        return seen
+            return self._seen
 
     def view(self) -> View:
         """Lo que reciben los modos en cada tick del controlador."""
         measured = self.latest_joint()
-        return View(self.latest_seen(), measured if self.depth is not None else None)
+        with self._joint_lock:
+            captured, original = self._captured
+        return View(
+            self.latest_seen(),
+            measured if self.depth is not None else None,
+            captured,
+            original,
+            self.precise,
+        )
 
     def _update_joint(self) -> None:
         if self.depth is None:

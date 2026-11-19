@@ -3,7 +3,8 @@
 Reglas (TECNICO T07):
 - Cada orden recibe un request_id nuevo. Una orden nueva invalida la anterior: se cancela su
   audio pendiente y su modo deja de producir resultados.
-- Cada orden vence a los `deadlines_s[modo]` segundos; vencida, no habla más.
+- Cada orden vence a los `deadlines_s[modo]` segundos: si para entonces no empezó a responder,
+  no habla más; si la respuesta ya suena, termina (con un tope, `AudioOutput.answer_grace_s`).
 - Cancelar no depende del modo: corta todo el audio cancelable y deja el controlador inactivo.
 - Una frase que necesita aclaración se responde sin cancelar lo que estaba en curso.
 
@@ -24,24 +25,34 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from visionx.shared.clock import Clock, MonotonicClock
-from visionx.shared.contracts import AudioEvent, Command, Mode, Priority
+from visionx.shared.contracts import AudioEvent, Command, FrameKey, Mode, Priority
 from visionx.shared.interfaces import AudioSink
 from visionx.voice.commands import (
     CANCEL,
+    END_SEARCH,
+    FOUND,
     REPEAT,
     CommandParser,
     Interpretation,
     acknowledgement,
+    clean,
 )
+
+EXPIRED_REPEAT = "Ya no está vigente. Pedilo de nuevo."
 
 
 @dataclass(frozen=True, slots=True)
 class Say:
-    """Algo que un modo quiere decir. El controlador le pone request_id y vigencia."""
+    """Algo que decir; vigencia opcional del hecho en el reloj monotónico local."""
 
     text_or_sound: str
     priority: Priority = Priority.SHORT
     cancelable: bool = True
+    valid_until_ns: int | None = None
+    fact_received_ns: int | None = None
+    frame: FrameKey | None = None
+    # Reemplaza lo que esté sonando o pendiente del mismo pedido (guía que quedó vieja).
+    replace: bool = False
 
 
 class ModeHandler(Protocol):
@@ -75,11 +86,21 @@ class Controller:
         deadlines_s: dict[str, float] | None = None,
         clock: Clock | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        watchers: list[Any] | None = None,
+        calibrate: Callable[[float, Any, int], list[str]] | None = None,
     ) -> None:
         self.parser = parser
+        # Observadores fuera de las órdenes (p. ej. app.camera_status): observe(view, now) ->
+        # list[Say]. Hablan con un request_id propio: no cortan ni vencen con el modo activo.
+        self.watchers = list(watchers or [])
+        # «Calibrar distancia» (app.calibrate): (metros, vista, ahora) -> frases.
+        self.calibrate = calibrate
         self.output = output
         self.latest_view = latest_view
         self.handlers = handlers or {}
+        self._audio_request_id: int | None = None
+        self._audio_deadline_ns: int | None = None
+        self._extra_audio_ids: set[int] = set()
         self.deadlines_s = deadlines_s or {}
         self.clock = clock or MonotonicClock()
         self._on_event = on_event or (lambda kind, data: None)
@@ -87,6 +108,10 @@ class Controller:
         self._next_id = 0
         self.active: Command | None = None
         self.last_spoken: str | None = None
+        self._last_spoken_valid_until_ns: int | None = None
+        self._last_spoken_deadline_ns: int | None = None
+        self._last_spoken_fact_received_ns: int | None = None
+        self._last_spoken_frame: FrameKey | None = None
         self.history: list[tuple[Command | None, Interpretation]] = []
 
     # -- entrada -----------------------------------------------------------------------------
@@ -100,26 +125,121 @@ class Controller:
     def handle(self, interp: Interpretation) -> Command | None:
         with self._lock:
             now = self.clock.now_ns()
-            self._on_event(
-                "orden",
-                {"texto": interp.utterance, "modo": interp.mode, "objetivo": interp.target,
-                 "regla": interp.rule, "aclaracion": interp.reply},
-            )  # fmt: skip
+            order = {
+                "texto": interp.utterance,
+                "modo": interp.mode,
+                "objetivo": interp.target,
+                "regla": interp.rule,
+                "aclaracion": interp.reply,
+                "request_id": None,
+                "issued_ns": now,
+                "deadline_ns": None,
+            }
             if interp.mode is Mode.CONTROL and interp.target == CANCEL:
+                order["request_id"] = self._audio_request_id
+                self._on_event("orden", order)
                 self.cancel()
                 self.history.append((None, interp))
                 return None
-            if interp.mode is Mode.CONTROL and interp.target == REPEAT:
-                if self.last_spoken:
-                    self._say(Say(self.last_spoken), self._new_id(), now, remember=False)
+            searching = self.active is not None and self.active.mode is Mode.SEARCH
+            if (
+                searching
+                and interp.mode is Mode.SEARCH
+                and clean(interp.utterance).split()[:1] == ["encontre"]
+                and interp.target in (None, self.active.target)  # type: ignore[union-attr]
+            ):
+                # «Encontré la taza» mientras se busca la taza: la encontró, no «buscá».
+                interp = Interpretation(interp.utterance, Mode.CONTROL, FOUND, "encontrado")
+                order.update(modo=interp.mode, objetivo=FOUND, regla=interp.rule)
+            if interp.mode is Mode.CONTROL and interp.target in (FOUND, END_SEARCH):
+                rid = self._new_id()
+                order["request_id"] = rid
+                self._on_event("orden", order)
+                if searching:
+                    ended = self.active
+                    assert ended is not None
+                    name = self.parser.catalog.spoken(ended.target) if ended.target else ""
+                    if self._audio_request_id is not None:
+                        self.output.cancel(self._audio_request_id)
+                    self._cancel_repeats()
+                    self._cancel_handler()
+                    self.active = None
+                    self._on_event(
+                        "terminado", {"request_id": ended.request_id, "motivo": interp.rule}
+                    )
+                    text = f"Listo, terminé de buscar {name}." if name else "Listo."
+                else:
+                    text = "No estoy buscando nada ahora."
+                self._say(Say(text), rid, now)
                 self.history.append((None, interp))
                 return None
+            if interp.mode is Mode.CONTROL and interp.target == REPEAT:
+                repeat_id = self._new_id()
+                order.update(request_id=repeat_id, deadline_ns=self._last_spoken_deadline_ns)
+                self._on_event("orden", order)
+                deadline = self._last_spoken_deadline_ns
+                if self.last_spoken and (deadline is None or now < deadline):
+                    self._extra_audio_ids.add(repeat_id)
+                    self._say(
+                        Say(
+                            self.last_spoken,
+                            valid_until_ns=self._last_spoken_valid_until_ns,
+                            fact_received_ns=self._last_spoken_fact_received_ns,
+                            frame=self._last_spoken_frame,
+                        ),
+                        repeat_id,
+                        now,
+                        remember=False,
+                        deadline=deadline,
+                    )
+                elif self.last_spoken:
+                    # Vencida: no se repite un hecho viejo como si fuera actual, pero tampoco
+                    # se deja a la persona en silencio.
+                    self._say(Say(EXPIRED_REPEAT), repeat_id, now, remember=False)
+                self.history.append((None, interp))
+                return None
+            if interp.mode is Mode.CONTROL and (interp.target or "").startswith("calibrar:"):
+                calib_id = self._new_id()
+                order["request_id"] = calib_id
+                self._on_event("orden", order)
+                z_m = float(interp.target.split(":", 1)[1])
+                phrases = (
+                    self.calibrate(z_m, self.latest_view(), now)
+                    if self.calibrate is not None
+                    else ["Calibrar no está disponible."]
+                )
+                self._on_event("calibrar", {"request_id": calib_id, "z_m": z_m, "dice": phrases})
+                for phrase in phrases:
+                    self._say(Say(phrase), calib_id, now)
+                self.history.append((None, interp))
+                return None
+            active_handler = self.handlers.get(self.active.mode) if self.active else None
+            awaiting = getattr(active_handler, "awaiting_choice", None)
+            if (
+                awaiting is not None
+                and awaiting()
+                and interp.rule in ("pregunta", "sin-regla")
+                and len(interp.utterance.split()) <= 8
+            ):
+                # «la verde», «la de la mesa»: elige entre las opciones que se describieron.
+                interp = Interpretation(
+                    interp.utterance, Mode.CHOOSE, interp.utterance.strip(), "elegir-por-como-es"
+                )
+                order.update(modo=Mode.CHOOSE, objetivo=interp.target, regla=interp.rule)
             if not interp.ok:
+                self._on_event("orden", order)
                 # Aclarar no interrumpe lo que estaba en curso (puede ser un error del STT).
                 self._say(Say(interp.reply or "No entendí."), self._new_id(), now)
                 self.history.append((None, interp))
                 return None
             if interp.mode is Mode.CHOOSE:
+                if self.active is not None:
+                    order.update(
+                        request_id=self.active.request_id,
+                        issued_ns=self.active.issued_ns,
+                        deadline_ns=self.active.deadline_ns,
+                    )
+                self._on_event("orden", order)
                 # Elegir completa la orden activa; no la reemplaza ni le cambia la vigencia.
                 active = self.active
                 handler = self.handlers.get(active.mode) if active is not None else None
@@ -132,13 +252,22 @@ class Controller:
                 self.history.append((None, interp))
                 return None
 
-            if self.active is not None:
-                self.output.cancel(self.active.request_id)  # la orden nueva invalida la vieja
+            if self._audio_request_id is not None:
+                # También si el handler terminó pero su último bloque sigue sonando.
+                self.output.cancel(self._audio_request_id)
+            self._cancel_repeats()
+            self._cancel_handler()
             request_id = self._new_id()
             deadline_s = self.deadlines_s.get(interp.mode.value)  # type: ignore[union-attr]
             deadline = now + int(deadline_s * 1e9) if deadline_s else None
             command = interp.to_command(request_id, now, deadline)
+            order.update(
+                request_id=request_id, issued_ns=command.issued_ns, deadline_ns=command.deadline_ns
+            )
+            self._on_event("orden", order)
             self.active = command
+            self._audio_request_id = request_id
+            self._audio_deadline_ns = deadline
             self.history.append((command, interp))
             ack = acknowledgement(interp, self.parser.catalog)
             if command.mode is Mode.DISTANCE:
@@ -147,6 +276,9 @@ class Controller:
                 # Un sonido corto confirma que se entendió sin hacer esperar el número.
                 ack = "sonido:ok"
             if ack:
+                note_ack = getattr(self.output, "note_ack", None)
+                if note_ack is not None:
+                    note_ack(request_id, ack)
                 self._say(Say(ack), request_id, now)
             handler = self.handlers.get(command.mode, UnavailableHandler())
             for say in handler.start(command, self.latest_view(), now):
@@ -157,9 +289,15 @@ class Controller:
         """El botón de cancelar (o la orden "cancelar")."""
         with self._lock:
             self.output.cancel_all()
+            self._extra_audio_ids.clear()
+            self._audio_deadline_ns = None
             previous = self.active
+            self._cancel_handler()
             self.active = None
-            self._on_event("cancelado", {"request_id": previous.request_id if previous else None})
+            self._on_event(
+                "cancelado",
+                {"request_id": previous.request_id if previous else self._audio_request_id},
+            )
             self.output.submit(
                 AudioEvent(self._new_id(), Priority.SHORT, "sonido:cancelado", self.clock.now_ns())
             )
@@ -167,16 +305,41 @@ class Controller:
     def tick(self) -> None:
         """Llamar periódicamente (por ejemplo, en cada cuadro del dashboard)."""
         with self._lock:
+            now = self.clock.now_ns()
+            if self._audio_deadline_ns is not None and now >= self._past_deadline(
+                self._audio_request_id, self._audio_deadline_ns
+            ):
+                # Vencida sin haber empezado a responder (o pasada la gracia): se descarta lo
+                # pendiente. Si la respuesta ya suena, termina (ver AudioOutput.answer_grace_s).
+                self.output.cancel(self._audio_request_id)
+                self._cancel_repeats()
+                self._audio_deadline_ns = None
+            view = self.latest_view()
+            # Hook liviano: LEER conserva capturas previas aun sin una orden activa.
+            # Cálculo de nitidez/modelos quedan fuera del lock, en su worker.
+            for observer in self.handlers.values():
+                observe = getattr(observer, "observe", None)
+                if observe is not None:
+                    observe(view, now)
+            for watcher in self.watchers:
+                if hasattr(watcher, "active_mode"):
+                    watcher.active_mode = self.active.mode.value if self.active else None
+                for say in watcher.observe(view, now):
+                    request_id = self._new_id()
+                    self._on_event("aviso", {"request_id": request_id, "texto": say.text_or_sound})
+                    self._say(say, request_id, now)
             command = self.active
             if command is None:
                 return
-            now = self.clock.now_ns()
-            if command.deadline_ns is not None and now > command.deadline_ns:
+            if command.deadline_ns is not None and now >= self._past_deadline(
+                command.request_id, command.deadline_ns
+            ):
+                self._cancel_handler()
                 self.active = None
                 self._on_event("vencido", {"request_id": command.request_id})
                 return
             handler = self.handlers.get(command.mode, UnavailableHandler())
-            says, done = handler.tick(command, self.latest_view(), now)
+            says, done = handler.tick(command, view, now)
             for say in says:
                 self._say(say, command.request_id, now)
             if done:
@@ -185,14 +348,66 @@ class Controller:
 
     # -- interno ---------------------------------------------------------------------------
 
+    def _past_deadline(self, request_id: int | None, deadline_ns: int) -> int:
+        """Cuándo vence de verdad: el plazo, o el plazo + la gracia si ya empezó a responder."""
+        answering = getattr(self.output, "answering", None)
+        if answering is not None and answering(request_id):
+            return deadline_ns + int(getattr(self.output, "answer_grace_s", 0.0) * 1e9)
+        return deadline_ns
+
+    def _cancel_handler(self) -> None:
+        """Hook opcional: invalidar selección/trabajo pendiente sin esperar inferencia."""
+        if self.active is not None:
+            precise = getattr(self.latest_view(), "precise", None)
+            if precise is not None:
+                precise.cancel(self.active.request_id)
+            cancel = getattr(self.handlers.get(self.active.mode), "cancel", None)
+            if cancel is not None:
+                cancel()
+
+    def close(self) -> None:
+        """Cerrar workers de modos al salir de la aplicación, sin esperar OCR nativo."""
+        with self._lock:
+            if self._audio_request_id is not None:
+                self.output.cancel(self._audio_request_id)
+            self._cancel_repeats()
+            self._cancel_handler()
+            self.active = None
+            for handler in self.handlers.values():
+                close = getattr(handler, "close", None)
+                if close is not None:
+                    close()
+
     def _new_id(self) -> int:
         self._next_id += 1
         return self._next_id
 
-    def _say(self, say: Say, request_id: int, now: int, *, remember: bool = True) -> None:
-        deadline = None
+    def _cancel_repeats(self) -> None:
+        for request_id in self._extra_audio_ids:
+            self.output.cancel(request_id)
+        self._extra_audio_ids.clear()
+
+    def _say(
+        self,
+        say: Say,
+        request_id: int,
+        now: int,
+        *,
+        remember: bool = True,
+        deadline: int | None = None,
+    ) -> None:
+        if not say.text_or_sound:
+            return
         if self.active is not None and self.active.request_id == request_id:
             deadline = self.active.deadline_ns
+        if deadline is not None and now > deadline:
+            # Tramo que llega vencido: solo si la respuesta ya suena (plazo + gracia).
+            deadline = self._past_deadline(request_id, deadline)
+            if now > deadline:
+                return
+        if say.replace:
+            self.output.cancel(request_id)
+            self._on_event("reemplazo", {"request_id": request_id, "texto": say.text_or_sound})
         self.output.submit(
             AudioEvent(
                 request_id,
@@ -201,7 +416,15 @@ class Controller:
                 created_ns=now,
                 deadline_ns=deadline,
                 cancelable=say.cancelable,
+                valid_until_ns=say.valid_until_ns,
+                fact_received_ns=say.fact_received_ns,
+                frame=say.frame,
             )
         )
         if remember and not say.text_or_sound.startswith("sonido:"):
             self.last_spoken = say.text_or_sound
+            # Repetir una guía no rejuvenece el hecho que la originó.
+            self._last_spoken_valid_until_ns = say.valid_until_ns
+            self._last_spoken_deadline_ns = deadline
+            self._last_spoken_fact_received_ns = say.fact_received_ns
+            self._last_spoken_frame = say.frame

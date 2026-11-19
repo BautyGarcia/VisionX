@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from visionx.app.__main__ import main as app_main
-from visionx.app.controller import Controller, Say, UnavailableHandler
+from visionx.app.controller import EXPIRED_REPEAT, Controller, Say, UnavailableHandler
 from visionx.app.dashboard import DashboardState, depth_colormap, render, top_view
 from visionx.app.fakes import (
     FakeDepthEstimator,
@@ -277,6 +277,60 @@ def test_new_command_invalidates_previous_and_sets_deadline():
     output.close()
 
 
+def test_controller_keeps_fact_and_command_validity_separate():
+    from types import SimpleNamespace
+
+    events = []
+
+    class Factual(UnavailableHandler):
+        def start(self, command, view, now_ns):
+            return [Say("Taza al frente.", valid_until_ns=2_000), Say("Perdí taza.")]
+
+    controller = Controller(
+        CommandParser(ClassCatalog(COCO_CLASSES)),
+        SimpleNamespace(submit=events.append),
+        handlers={Mode.SEARCH: Factual()},
+        deadlines_s={"search": 30},
+        clock=ManualClock(1_000),
+    )
+    command = controller.handle_text("buscá la taza")
+    assert command.ok
+    ack, guide, historical = events
+    assert [e.valid_until_ns for e in events] == [None, 2_000, None]
+    assert guide.deadline_ns == ack.deadline_ns == historical.deadline_ns == 30_000_001_000
+    assert Say("hola").valid_until_ns is None
+
+
+def test_repeat_preserves_fact_expiry_without_renewing_it():
+    clock = ManualClock(1_000)
+
+    class Guide(UnavailableHandler):
+        def start(self, command, view, now_ns):
+            return [Say("Taza al frente.", valid_until_ns=2_000)]
+
+    player = FakePlayer()
+    output = AudioOutput(TextSynth(), player, clock=clock)
+    controller = Controller(
+        CommandParser(ClassCatalog(COCO_CLASSES)),
+        output,
+        handlers={Mode.SEARCH: Guide()},
+        clock=clock,
+    )
+    try:
+        controller.handle_text("buscá la taza")
+        assert output.wait_idle(2)
+        assert output.records[-1].outcome is Outcome.PLAYED
+        clock.advance(2_000)
+        controller.handle_text("repetí")
+        assert output.wait_idle(2)
+        repeated = output.records[-1]
+        assert repeated.text_or_sound == "Taza al frente."
+        assert repeated.outcome is Outcome.FACT_EXPIRED and repeated.started_ns is None
+        assert len(player.played) == 2  # acuse y guía original; la repetición no sonó
+    finally:
+        output.close()
+
+
 def test_clarification_does_not_cancel_active_command():
     controller, output = make_controller()
     command = controller.handle(controller.parser.parse("buscá la taza"))
@@ -328,7 +382,8 @@ def test_expired_command_stops_ticking_and_repeat_works():
     controller.tick()
     assert len(calls) == 1 and controller.active is None
     controller.handle_text("repetí")
-    assert spoken(output)[-1] == "Busco taza."
+    # La búsqueda terminó: repetir «Busco taza.» haría creer que sigue buscando.
+    assert spoken(output)[-1] == EXPIRED_REPEAT
     output.close()
 
 
@@ -427,3 +482,13 @@ def test_cli_runs_headless_with_scripted_orders(tmp_path, capsys):
     assert objs and {"clase", "z_m", "fraccion_valida", "politica"} <= set(objs[0])
     assert (tmp_path / "dashboard.png").stat().st_size > 0
     assert app_main(["comparar", "--frames", "5", "--csv", str(tmp_path / "c.csv")]) == 0
+
+
+def test_dashboard_arrow_points_to_the_guided_target():
+    from visionx.app.dashboard import draw_target_arrow
+    from visionx.shared.geometry import StereoGeometry
+
+    g = StereoGeometry(640, 360, 300.0, 300.0, 320.0, 180.0, 0.06)
+    out = draw_target_arrow(np.zeros((360, 640, 3), np.uint8), (-20.0, -10.0), g)
+    ys, xs = np.nonzero(out[:, :, 1] > 200)
+    assert xs.min() < 320 and ys.max() > 180  # a la izquierda y abajo del centro

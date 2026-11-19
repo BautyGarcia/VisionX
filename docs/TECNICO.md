@@ -1143,16 +1143,22 @@ latencia y lo previsto del lado de la app.
 
 ### Decisiones abiertas
 
-- **Fecha de entrega:** ROADMAP dice 10/12, confirmada por Tomás. La nota dice congelar 4/12,
-  entrega 7/12 y expo 12/12. **Sin resolver:** no se cambia la fecha oficial; la diferencia
-  queda anotada como pendiente de confirmar.
+- **Fecha de entrega — resuelta (Tomás, 19/11):** entrega el **7/12** y presentación final el
+  **12/12**.
+- **Papel de la red de entrada — resuelta (Tomás, 19/11, opción a):** estima el campo de
+  corrección completo del ojo derecho (giros + centro + distorsión) hacia la geometría de la ELP,
+  con confianza; cámaras parecidas se autocalibran y, si la confianza o la incertidumbre no
+  alcanzan, la app pide un objeto a distancia conocida. Detalle en BITACORA 2026-11-19 (noche),
+  «Decisión T12».
 - **T14 (cuatro comparadores preentrenados):** con CREStereo como base cambia su papel. Queda en
   el alcance; qué correr y cuándo lo decide Bauty y está pendiente.
 - **T17 (Lite) y T18 (Fusion-FFS):** se redefinen sobre la base nueva (maestro CREStereo; FFS
   como estéreo de base alternativo). Pendiente de decisión; no se eliminan.
-- **Qué quiso decir el profesor con «la calibración en la memoria de la red»:** capa geométrica
-  calculada + condicionamiento, que es lo adoptado, o una deformación aprendida desde la
-  calibración, que queda como comparación si sobra tiempo. A confirmar con él.
+- **«La calibración en la memoria de la red»:** con la decisión (a), la red lleva adentro la
+  calibración de la ELP como referencia y aprende a llevar otras cámaras hacia ella.
+- **Devolución de la cátedra (19/11):** conectar la salida de la red (metros con incertidumbre)
+  con la LLM antes de seguir con la performance, y sumar un mini dataset con verdad de
+  distancias y etiquetas para evaluar con más casos que la cinta (BITACORA 2026-11-19).
 - **Cámara del TP2** (`docs/i308-calib-tp2-antiguo/`): si era otra unidad, ya es un banco de
   prueba «mismo modelo, otra unidad». Falta saberlo.
 - **Segunda unidad ELP:** pedirla antes de la expo.
@@ -1493,10 +1499,10 @@ frame. Los parámetros están en la sección `modes` de la config; son candidato
 | Pieza | Qué hace | Garantía que se prueba (`tests/test_modes.py`) |
 |---|---|---|
 | `SearchHandler` | Estados buscando → (eligiendo) → guiando. Presencia confirmada en el tiempo (`confirm_hits` en `confirm_s`): bip y dirección («Taza un poco a la izquierda.»). Habla cuando cambia la frase, con al menos `min_interval_s` entre frases, o cada `repeat_s`. Al frente, con Z decible y fresco: «Taza al frente, a 1,1 metros.». A `arrive_m` o menos: «Llegaste…» y termina. «Perdí taza.» exige `lost_s` de video fresco sin el objetivo, medido en tiempo de frame; si el sistema se atrasa, la guía calla y la traza registra `buscar-demora`. Cierra antes de vencer («No encontré…»/«Terminé de buscar…») | Un frame suelto no da bip; una observación vieja no guía; no habla en cada frame; repite tras `repeat_s`; la reaparición es una adquisición nueva; un atraso del detector no se anuncia como pérdida |
-| Elegir entre iguales | Con varios de la clase pide «izquierda, derecha, centro o la más cercana». El controlador entrega la elección a la búsqueda activa sin reemplazarla; «la más cercana» solo con metros decibles. Solo pregunta si hay varios en todos los frames de la confirmación (una detección suelta de más no alcanza). Sin respuesta, repregunta cada 2·`repeat_s`: nunca elige por el usuario; si queda uno solo estable durante `confirm_s`, guía hacia ese | La elección conserva el request_id de la búsqueda; sin búsqueda: «No hay nada para elegir ahora.» |
+| Elegir entre iguales | Con varios de la clase pide «izquierda, derecha, centro o la más cercana». El controlador conserva la búsqueda; «la más cercana» exige metros decibles. Pregunta con varios confirmados y a intervalos de `choice_repeat_s` (12 s), solo sobre video fresco. Sin elección previa, un único candidato estable resuelve la selección; después de elegir, conserva la referencia aun si se pierde y solo retoma con continuidad suficiente | No vuelve a preguntar por una pérdida si puede reasociar; no elige desde una lista vencida |
 | `candidates` | Detecciones de la clase con su ángulo, de izquierda a derecha. Dos cajas de la misma clase cuya intersección cubre más del 70 % de la más chica cuentan como una (la de mayor score) | Una parte de la silla no es «otra silla» |
-| `Target` | Sigue al elegido por track_id y, si falta, por el candidato de la misma clase más cercano en ángulo, dentro de `gate_deg` + `gate_deg_per_s`·Δt. Fuera de la ventana no se lo asigna a nadie | Sigue a la taza de la izquierda aunque aparezca otra |
-| `DistanceHandler` | Congela la primera unión medida que llegó después de la orden (o hasta `accept_before_s` antes) y responde solo desde ella. Sin objeto nombrado: el guiado en los últimos 5 s o el que está al frente. Varios iguales: los enumera de izquierda a derecha | Nunca responde con un frame anterior a la orden; una sola respuesta; explica en vez de inventar |
+| `Target` | Prioriza track_id; si falta, combina posición horizontal/vertical y Z fiable como pista de asociación. La ventana crece con Δt; con varios se acota a `reassociate_gate_deg` (35°) y exige `match_margin_deg` (5°) de ventaja. Un empate suspende la guía | Conserva el elegido con IDs nuevos; no afirma identidad en un empate |
+| `DistanceHandler` | Congela la primera unión medida posterior a la orden (o hasta `accept_before_s` antes). Sin objeto nombrado, «está/eso» refiere al último buscado/medido durante `target_memory_s` (60 s); si no se ve, lo dice. Solo sin referencia reciente mide al frente. Una respuesta individual renueva la referencia; una lista de iguales no selecciona uno | Ningún frame viejo ni cambio silencioso a otro objeto; una sola respuesta |
 | `measure` | Metros solo con la política SPEAK_METERS de quien ubicó el objeto y dentro de `depth.range_m`. Fuera: «muy cerca, a menos de…»/«lejos, a más de…»; reencuadrar; «no puedo medir su distancia» | Ningún metro con DIRECTION_ONLY, ABSTAIN, sin Z o fuera de rango |
 | `simulate` + `python -m visionx.modes simular` | Corre los modos sobre una grabación con el tiempo grabado (`ManualClock`) y latencias de detector/profundidad emuladas. Imprime qué diría y en qué segundo | Misma entrada, misma transcripción |
 
@@ -1581,6 +1587,61 @@ con su contexto explícito, sin atribuirle la geometría rectificada. Leer bloqu
 Evaluar números y etiquetas, no solo frases fáciles. **CER** es la tasa de caracteres editados
 para llegar a la transcripción correcta; su definición está en métricas.
 
+Implementación T10 (`visionx.reading`): seleccionar izquierda y ejecutar OCR en un worker
+persistente, con un solo pedido pendiente reemplazable. Cancelar invalida el resultado;
+una inferencia ONNX nativa termina en segundo plano. Al construir la app con fuente real,
+el mismo worker precarga las sesiones OCR sin bloquear el arranque; una orden durante la
+carga espera allí y conserva su captura elegible, sin cargar otro modelo. La fuente
+sintética y los tests no precargan modelos. Un fallo de carga se informa al pedir leer.
+El controlador ofrece capturas aun inactivo; el worker conserva el máximo móvil de
+nitidez de hasta `pre_s=0,8` s previos (máximo 32 izquierdas, buzón más nuevo y captura
+del pedido; sin copiar píxeles). La ventana posterior máxima baja a `window_s=0,4` s.
+Si la mejor captura elegible tiene varianza del Laplaciano >= `early_sharpness=90`,
+se inicia OCR inmediatamente; 0 deshabilita este corte. Umbral absoluto de desarrollo
+para ELP rectificada 1920×1080: evita aceptar un máximo relativo aun completamente borroso,
+pero textura del fondo puede superarlo y exige volver a medir al cambiar ruta/resolución.
+Se filtran antigüedad, futuro y ventana del pedido; cambios de sesión/geometría/calibración
+vacían el historial. Cancelación y cierre tampoco esperan el precalentamiento nativo.
+No cambia schema 3. `reading.crop`
+permite `none`, `center` (fracción configurable), `text` (detección a `text_probe_px`,
+envolvente con margen, segundo det+rec a `det_limit_px`) y `object` (caja más central de
+`View.seen`, solamente con identidad, geometría, calibración y tamaño compatibles con el
+frame seleccionado; sin caja compatible usa `text`). Si la primera detección no encuentra
+cajas, se procesa la imagen completa. Las cajas retornadas siempre vuelven a coordenadas
+de la izquierda de entrada. El recorte no añade detalle que la cámara no haya capturado.
+
+Métricas complementarias de etiqueta completa, sin reemplazar CER: separar palabras como
+secuencias de letras Unicode, ignorar mayúsculas y acentos, excluir números y separar por
+puntuación. Se cuentan **ocurrencias**. Recall = máximo número de pares referencia/OCR
+uno a uno / palabras de referencia, sin exigir orden. Un par admite coincidencia exacta
+o Levenshtein ≤1 si la palabra de referencia tiene al menos cinco letras. Precisión =
+intersección exacta de los multiconjuntos / palabras OCR, sin tolerancia de edición.
+Sin palabras OCR la precisión vale 0; sin palabras de referencia el recall es nulo.
+Aciertos numéricos = intersección exacta de multiconjuntos de tokens
+`\d+(?:[.,]\d+)?%?`, con coma/punto decimal equivalentes; conservar dígitos y `%`.
+Se informan aciertos/n de referencia y también las ediciones numéricas anteriores.
+Estas métricas aún penalizan leyendas no visibles: no equivalen a evaluar solo texto legible.
+
+El orden visual separa columnas/regiones por corredores vacíos, luego ordena renglones;
+evita intercalar sellos contiguos. Para voz se unen renglones de una columna hasta la
+próxima sección amplia, sin unir regiones vecinas. Se adelanta la región que contiene el
+bloque hablable de mayor altura (desempate por área); las demás conservan el orden visual.
+`speech_max_blocks` limita ahora regiones completas (no renglones OCR), `speech_max_chars`
+limita la lectura total y `max_chars` cada Say, cortando frases largas por palabras.
+Si se corta, agrega
+«…y más texto chico.» dentro del límite total, sin diálogo. La evaluación usa todos los
+bloques aceptados a `min_score=0,65`, independientemente del filtro/corte hablado.
+Solo la voz exige `speech_min_score=0,90`, elegido en siete segmentos de desarrollo:
+descarta fragmentos de score 0,659–0,852 y conserva Terrabusi (0,928). Sin diccionario
+ni corrección de marcas. Heurística: tokens de 3–30 letras con vocal, al menos 80 % letras
+y solo guion/apóstrofo internos; 1–2 letras requieren otra palabra larga o número en el
+mismo renglón. Conserva números enteros/decimales y `%`; descarta mezclas alfanuméricas y
+símbolos incrustados. Errores ortográficamente plausibles aún pueden pasar. Si todo queda
+filtrado, indica falta de confianza y pide acercar. Validación audible/Mac pendiente.
+`evaluar --crop ... --calentar`
+permite comparar CPU con un OCR previo sobre el primer frame, fuera del tiempo medido;
+CSV/JSON conservan conteos, ms, recorte, transcripción completa, texto hablado y hashes.
+
 ### Describir — T11
 
 Primera salida: plantilla local con objetos/direcciones/medidas aceptadas. Después VLM a pedido
@@ -1592,9 +1653,77 @@ Proveedor/modelo de API todavía no elegido: comparar calidad, latencia, coste, 
 timeouts y funcionamiento sin red. Enviar imagen solo al pedirlo, con ruta remota explícita.
 El VLM no controla directamente la máquina de estados ni la selección de un objeto.
 
+**Plantilla local implementada (T11, ronda 4; recepción pendiente).** Cada presencia de
+`SceneFacts` tiene nivel `high` o `cautious`. El primero exige score actual y confirmaciones
+>=0,60; el segundo >=0,27 y se dice «parece haber». Ambos requieren dos frames distintos
+en tres segundos, asociados uno a uno por clase e ID o IoU >=0,3 sin IDs contradictorios.
+Los pisos por clase de `describe.cautious_min_scores` también se aplican a las confirmaciones
+y al nivel alto: se endurecen las confusiones observadas, incluido horno/lavarropas (0,65).
+Pileta y heladera conservan el corte bajo; nunca se eximen de persistencia. Estos cortes
+se ajustaron en desarrollo: 39 frames, 247 candidatos etiquetados por el agente; curva,
+criterio de verdad, textos y límites en `outputs/t11/NOTAS.md`, sección «Ronda 3».
+
+Solo el nivel alto puede aportar metros, y únicamente desde `SPEAK_METERS` del mismo frame
+dentro de `depth.range_m`. Se agrupa por zona, clase y nivel; la reserva no se extiende a
+los objetos afirmados ni hereda sus medidas. Si solo quedan candidatos medios, se describen
+con reserva. La abstención por confianza exige que no quede ningún candidato persistente.
+El presupuesto estimado es ocho segundos, incluidos avisos y pausas. Se recortan primero
+los «parece haber», después los metros secundarios y luego los nombres por relevancia.
+Se conservan los metros del afirmado más cercano de cada zona mientras alcance; el de
+menor Z de toda la escena nunca se retira. Los grupos con medidas parciales se separan
+para no perder esos metros ni comparar contra instancias sin medida. Todo nombre omitido
+cuenta en «y N cosas más». Si un override no admite ni el hecho global mínimo con conteo,
+prevalecen sus metros aunque exceda el presupuesto; no ocurre en las corridas a ocho segundos.
+Evidencia y comparación R3→R4 en `outputs/t11/NOTAS.md`, sección «Ronda 4».
+La espera de cuatro segundos permite recibir una segunda vista tardía. Hasta ocho instancias;
+sin audio real medido todavía. Tests sin dispositivos/modelos; los clips no sustituyen M10.
+
 ## Ejecucion y audio
 
 ### Interactivo y científico — T07
+
+La app construye B0–B5 y Fusion en `app.depth_registry.build_estimator`. B5 lee `depth.b5`
+(anclas de `depth.b4.estereo`). `fusion` llama a `load_estimator(cfg, geometry)` de A con la
+config completa y el paquete de `depth.fusion.paquete`; una entrada
+`depth.estimadores.NOMBRE: {tipo: fusion, paquete: carpeta}` arma otro paquete con la misma config
+(para comparar candidatos). Cualquier otro método se declara como
+`depth.estimadores.NOMBRE: {fabrica: "paquete.modulo:funcion", ...}`: la fábrica recibe
+`(cfg: dict, geometry: StereoGeometry)` con los parámetros de esa entrada sin `fabrica`, y
+devuelve un `DepthEstimator`. Si reescala el mapa, expone su geometría de salida en `geometry`.
+`--profundidad`, `--profundidad-precisa`, `recibir-profundidad` y los protocolos admiten esos nombres.
+
+**Recepción de un estimador** (`app/recepcion.py`), antes de usarlo en la app:
+
+```text
+uv run python -m visionx.app recibir-profundidad fusion --config configs/local.yaml
+    --clip recordings/dev-1114-distancias --pares 5 --contra B0 B4 B5
+```
+
+Verifica el contrato sobre pares reales (`DepthResult` del mismo frame, dtype, geometría si
+reescala, finitos donde es válido, `status`/`reason`, `model_id` estable, `close()`), informa la
+incertidumbre si viene, latencia P50/P95 de `predict` y RAM pico, y los metros por objeto con la
+ubicación de la app en las marcas con cinta del clip (vaso/taza frame 152, botella frame 240;
+0,50/1,00/1,00 m), lado a lado con `--contra`. Salida en `outputs/recepcion/FECHA-NOMBRE/`
+(`tabla.md`, `recepcion.json`); código ≠ 0 si falla el contrato o la carga. Una sospecha de
+unidades (metros donde va disparidad) se avisa por rango. 0 es recepción técnica correcta, no
+aceptación científica; no equivale a M9. Primera corrida (17/11): B0 246 ms, B4 1269 ms por par
+a 1280×720; 0,53/1,07/1,04 m contra cinta 0,50/1,00/1,00.
+
+Para Fusion, en `configs/local.yaml`: `depth.fusion.paquete: <carpeta del paquete>` (con
+`modelo.pt`, `paquete.yaml` y su sha256: `load_package` rechaza hash, canales o base distintos) y,
+en Windows sin CUDA, `depth.fusion.dispositivo: cpu`. Después,
+`ejecutar ... --profundidad B0 --profundidad-precisa fusion`.
+
+`--profundidad-precisa NOMBRE|ninguna` pisa `depth.precisa.estimador` (default `ninguna`).
+Distancia y describir solicitan una medición en un worker independiente; buscar/guiar conserva
+la continua. `depth.precisa.espera_s` limita la espera (2 s iniciales, también limitada por la
+vigencia menos el margen de respuesta); `depth.precisa.compute` permite otra resolución sin
+cambiar los parámetros de SGBM/B4. Se congela una detección vigente y su par, se verifica
+`check_same_frame`, y se descarta el resultado si cambió/canceló el `request_id` o llegó tarde.
+Si la precisa falla o no admite metros del objetivo, se usa la continua con su propia detección.
+La traza registra petición, resultado/descarte y `profundidad-elegida` con modelo, latencia y
+motivo; el dashboard muestra el método elegido y el estado del worker. Cancelar es inmediato
+para el controlador; una inferencia nativa ya iniciada termina en su hilo antes de cerrar.
 
 Mantener una aplicación modular, con lógica pública compartida. **Interactivo:** captura sigue
 avanzando; detector, profundidad y audio tienen ritmos propios. Una cola acotada mantiene
@@ -1627,7 +1756,7 @@ monotónicos de Pi y PC sin sincronización y error conocido.
 | `science.compare` | Todos los métodos sobre todos los pares, en orden fijo y sin descartes; CSV por frame y método con tiempo y estado; los fallos quedan como filas | 12 frames × 2 métodos = 24 filas, con un fallo registrado |
 | `TraceWriter` | JSONL de eventos (frames, resultados con latencia y edad, uniones, órdenes, audio, resumen) | Seguro entre hilos |
 | `fakes.py` | `SyntheticStereoSource` (par rectificado con el ojo derecho corrido según Z), `ScriptedDetector`, `FakeDepthEstimator`. Todos con `model_id` `fake-…` | No miden nada: sustituyen la ELP y la profundidad real |
-| `spatial.py` | `ProvisionalSpatialEstimator`: capa más cercana de la máscara, percentil 20 y política candidata (ver T09) | Provisoria hasta que A entregue la suya (T09/T13) |
+| `spatial.py` | `ProvisionalSpatialEstimator`: capa más cercana de la máscara, percentil 20 y política candidata (ver T09). Desde el 17/11 la app usa `build_locator` de A (`depth/spatial`); la provisoria queda con `spatial_provisional.usar: true` para comparar | Reemplazada por la de A (T09) |
 
 Por qué la profundidad sigue al detector: si cada modelo tomara su propio último frame, con la
 cámara más rápida que ambos casi nunca coincidirían y no habría unión del mismo frame. El costo
@@ -1648,11 +1777,11 @@ uv run python -m visionx.app comparar --fuente recordings/X --detector yolo
 ```
 
 Con `--fuente` grabación o `usb` se rectifica con `camera.calibration`. `--profundidad
-B0|B1|B2` usa el `SgbmEstimator` de T05 con la sección `depth` (cómputo en `depth.compute`,
+B0|B1|B2` usa `SgbmEstimator`; B3/B4 usan `HybridEstimator`, con la sección `depth` (cómputo en `depth.compute`,
 1280×720): la máscara del detector (1920×1080) se reduce a esa resolución por vecino más
-cercano antes de tomar la mediana de Z (`ProvisionalSpatialEstimator(depth_geometry=…)`), y el ángulo
-sale de la caja en la geometría del frame. Esa ubicación por objeto sigue siendo provisoria
-hasta T09/T13. `fake` solo tiene sentido con la fuente sintética: con una grabación da un plano.
+cercano antes de medir la capa cercana (`build_spatial(cfg, geometry, depth_geometry)`, que arma el
+`ObjectLocator` de A desde el 17/11), y el ángulo sale del centroide de la capa en la geometría
+del frame. Los umbrales siguen siendo candidatos hasta el banco ELP (T04/T13). `fake` solo tiene sentido con la fuente sintética: con una grabación da un plano.
 Cada unión queda en la traza con clase, ID, Z, dispersión, fracción válida, ángulo y política;
 `--captura` guarda el dashboard final como PNG. Teclas: c cancelar, espacio hablar (con
 `--voz`), q salir. `--consola` acepta órdenes escritas.
@@ -1693,6 +1822,7 @@ medirlo. Si falla, usar micrófono separado y registrar límite; no bloquea desa
 | `AudioOutput` | `AudioSink` con un hilo: prioridad y luego llegada, corte por prioridad mayor si lo actual es cancelable, `cancel`/`cancel_all`, vencimiento antes y después de sintetizar, cola acotada. Cada evento deja un `PlaybackRecord` con resultado y espera | Síntesis o dispositivo fallido: resultado `error`, la salida sigue. Lo cortado no se retoma |
 | `sonido:<nombre>` | Tonos generados (bip, ok, error, cancelado) sin pasar por TTS | Nombre desconocido: `InvalidInput` |
 | `PiperSynth` + `CachedSynth` | Voz de Piper en CPU; las frases de `audio.tts.preload` y las recientes no se recalculan | Voz ausente o extra sin instalar: `EstimatorError` |
+| `build_synth` (`audio.tts.engine: edge`, desde el 18/11) | Voz por defecto: es-UY-MateoNeural de Microsoft Edge (`EdgeSynth`, **usa internet**; el texto dicho sale de la máquina), sin el silencio que Edge agrega en los bordes, con caché en disco (`DiskCachedSynth`, `data/cache/voz`) y Piper `es_ES-davefx-medium` de respaldo (`FallbackSynth`). `engine: piper` vuelve a la voz local sola | Sin red o timeout: esa frase la dice Piper y Edge no se reintenta por `edge_retry_s`; lo dicho alguna vez sale de la caché también sin red |
 | `WhisperTranscriber` | faster-whisper local en español, sin timestamps ni contexto previo | Modelo ausente: `EstimatorError` |
 | `PushToTalk` | Botón: el callback solo copia bloques a una cola; si el micrófono no acepta 16 kHz graba a su frecuencia y remuestrea (FFT, sin aliasing) | Micrófono que no abre: `SourceError` |
 | `SoundDevicePlayer` | Escribe bloques de `audio.block_ms` y mira el pedido de corte entre bloques; al cortar usa `abort()` para descartar el búfer | Errores de PortAudio: resultado `error` |
@@ -1703,7 +1833,7 @@ se mide con y sin prompt antes de dejarlo. Cancelar tiene que tener un botón: c
 sintética, ni «pará» ni «basta» se transcribieron bien de forma consistente.
 
 ```text
-uv run python -m visionx.voice descargar --voz es_AR-daniela-high --whisper base small
+uv run python -m visionx.voice descargar --voz es_ES-davefx-medium --whisper base small
 uv run python -m visionx.voice orden "¿A qué distancia está la taza?"   # solo reglas
 uv run python -m visionx.voice frases                  # reglas contra tests/fixtures/voz-frases.csv
 uv run python -m visionx.voice bucle --whisper base small --csv X   # Piper -> Whisper -> reglas
@@ -2161,6 +2291,37 @@ No verificable solo leyendo código: modos/sincronía/exposición de ELP, escala
 movimiento, distancias físicas, inferencia concurrente M2 Max, micrófono/auriculares y latencia
 audible, Pi/Wi-Fi/reconexión, batería/consumo/calor. Registrar equipo, commit, configuración,
 hashes, resolución, backend, n y unidades cuando se mida. La CI de macOS no reemplaza esa prueba.
+
+### Herramientas de protocolo B: M1, M7, M8, M10 y voz
+
+Todas siguen el mismo camino: **planilla → comando → tabla**. `plantilla` crea `planilla.csv` (y
+una guía) sin pisar anotaciones; `evaluar` escribe detalle, tabla y `resumen.json` con config
+efectiva, equipo, comando, commit y hashes de entradas. Rutas de clip/traza relativas a la
+planilla; `t_s` desde el primer `received_ns` del clip (hay descartes). No abren cámara.
+
+- **M1** (`python -m visionx.app m1 --repeticiones 3`): banco de 8 casos con reloj virtual
+  (detección duplicada, modelo ausente, cámara/audio desconectados, eventos fuera de orden,
+  cancelar OCR/inferencia/TTS, vencimiento durante TTS). Oráculos: eventos correctos, cero audio
+  viejo, cancelación lógica P95 ≤ 200 ms, detección → bip P95 ≤ 500 ms. No mide latencia audible.
+- **Voz** (`python -m visionx.protocolos voz dispositivos|plantilla|grabar|evaluar`): las 61
+  frases de T08 con intención/objeto esperados; `grabar` usa el micrófono elegido
+  (`--dispositivo "yeti nano"`), WAV PCM16 mono 16 kHz, Enter/r/s/q, retoma pendientes;
+  `evaluar` corre Whisper base y small sobre los mismos WAV. `sintetizar` genera WAV de Piper
+  rotulados como sintéticos, que no se mezclan con micrófono.
+- **M7** (`protocolos m7`): 10 objetos × 1/2/3 m × 3 repeticiones + 0,5 m; cinta desde el vidrio
+  de la lente izquierda. Mediana de hasta 3 frames en 0,4 s = una muestra por fila; con iguales,
+  `instancia_x/y` en la imagen rectificada. Tabla por método: MAE, sesgo, P95, cobertura y, con
+  incertidumbre, MAE al retener 100/90/75/50 %. Usa la misma ubicación que la app.
+- **M8** (`protocolos m8`): 30 búsquedas en 3 ambientes, ≥ 600 s ausente, 20 cancelar, 10
+  pérdidas; el éxito lo marca la persona. Desde la traza: bips/min en ausencia, respuestas que
+  empiezan tras cancelar o vencer y guías que empiezan vencidas (`started_ns`, `valid_until_ns`).
+- **M10** (`protocolos ocr` y `protocolos describir`): ≥ 30 textos a 0,5 y 1 m (CER, recall de
+  palabras, errores numéricos con `reading.evaluate`) y ≥ 30 escenas con instancias anotadas
+  (menciones reales/extra por clase y zona, metros sin respaldo = 0 exigido).
+
+Traza para M8 (desde el 17/11): `orden` con `request_id`, `issued_ns`, `deadline_ns`; `audio`
+con `started_ns`/`finished_ns` (bordes de la llamada al reproductor, no medición acústica),
+`ended_ns`, `deadline_ns`, `valid_until_ns`, `fact_received_ns` y `fact_age_ms`.
 
 ## Reproducibilidad
 

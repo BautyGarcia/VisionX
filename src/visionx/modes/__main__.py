@@ -1,4 +1,4 @@
-"""Modos buscar y distancia (T09) sobre una grabación, con tiempo grabado y latencias emuladas.
+"""Modos buscar, distancia y describir sobre clips, con tiempo y latencias emulados.
 
     uv run python -m visionx.modes simular --fuente recordings/dev-1114-buscar-a \\
         --orden "1:buscá la botella" [--orden "20:a qué distancia está"] \\
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from collections import Counter
 from pathlib import Path
@@ -24,7 +25,10 @@ from types import SimpleNamespace
 
 import yaml
 
+from visionx.app.camera_status import CameraStatus, CameraStatusSettings
 from visionx.app.controller import Controller
+from visionx.app.proximity import ProximityAlert, ProximitySettings
+from visionx.assistant import build_assistant
 from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
 from visionx.modes import build_handlers
 from visionx.modes.simulate import simulate
@@ -92,16 +96,57 @@ def cmd_simular(args: argparse.Namespace) -> int:
         str(k): float(v) for k, v in ((cfg.get("audio") or {}).get("deadlines_s") or {}).items()
     }
 
+    assistant = build_assistant(cfg)
+
     def make_controller(latest_view, sink, on_event):
         return Controller(
-            CommandParser(catalog),
+            CommandParser(catalog, questions=assistant is not None),
             sink,
             latest_view=latest_view,
-            handlers=build_handlers(cfg, geometry, catalog.spoken, on_event),
+            handlers=build_handlers(cfg, geometry, catalog.spoken, on_event, assistant=assistant),
             deadlines_s=deadlines,
             clock=clock,
             on_event=on_event,
+            watchers=[
+                CameraStatus(CameraStatusSettings.from_config(cfg)),
+                ProximityAlert(ProximitySettings.from_config(cfg), geometry=geometry),
+            ],
         )
+
+    # Capturas del frame que respalda lo dicho, no del frame actual de la cámara: detector
+    # y profundidad pueden llegar más tarde. Sirve para revisar cualquier modo sin audio.
+    spoken_count = 0
+
+    def capture(t_s, frame, view, sink):
+        nonlocal spoken_count
+        if not args.capturas or len(sink.spoken) == spoken_count:
+            return
+        import cv2
+
+        folder = Path(args.capturas)
+        folder.mkdir(parents=True, exist_ok=True)
+        spoken_count = len(sink.spoken)
+        for kind, joint in (("seen", view.seen), ("measured", view.measured)):
+            if joint is None:
+                continue
+            canvas = joint.frame.left.copy()
+            for i, (box, label) in enumerate(
+                zip(joint.detection.boxes, joint.detection.classes, strict=True)
+            ):
+                x1, y1, x2, y2 = (int(v) for v in box)
+                cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                cv2.putText(
+                    canvas,
+                    f"{i}: {label}",
+                    (x1, max(20, y1)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 255),
+                    2,
+                )
+            path = folder / f"{t_s:07.3f}-{kind}-{joint.frame.frame_id}.jpg"
+            if not cv2.imwrite(str(path), canvas):
+                raise InvalidInput(f"no se pudo escribir {path}")
 
     result = simulate(
         source,
@@ -116,6 +161,7 @@ def cmd_simular(args: argparse.Namespace) -> int:
         every=args.cada,
         tick_s=tick_s,
         tail_s=args.cola,
+        on_frame=capture,
     )
     print(f"fuente: {args.fuente}  ({result.frames} frames, {result.duration_s:.1f} s grabados)")
     print(f"detector: {detector.model_id} ({result.detections} frames procesados, "
@@ -127,7 +173,9 @@ def cmd_simular(args: argparse.Namespace) -> int:
     for s in result.spoken:
         print(f"  {s.t_s:7.2f} s  [#{s.request_id}] {s.text}")
     counts = Counter(
-        kind for _, kind, _ in result.events if kind.startswith(("buscar", "distancia"))
+        kind
+        for _, kind, _ in result.events
+        if kind.startswith(("buscar", "distancia", "describir"))
     )
     print("\neventos:", dict(counts) or "-")
     for t, kind, data in result.events:
@@ -164,6 +212,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
         Painter,
         W,
         add_subtitles,
+        mix_sonar,
         mux,
         render_frame,
         write_wav,
@@ -178,29 +227,40 @@ def cmd_demo(args: argparse.Namespace) -> int:
         str(k): float(v) for k, v in ((cfg.get("audio") or {}).get("deadlines_s") or {}).items()
     }
     holder: dict = {}
+    assistant = build_assistant(cfg)
+    print(f"asistente: {assistant.s.model}" if assistant else "asistente: apagado")
 
     def make_controller(latest_view, sink, on_event):
-        holder["handlers"] = build_handlers(cfg, geometry, catalog.spoken, on_event)
+        holder["handlers"] = build_handlers(
+            cfg, geometry, catalog.spoken, on_event, assistant=assistant
+        )
         holder["controller"] = Controller(
-            CommandParser(catalog),
+            CommandParser(catalog, questions=assistant is not None),
             sink,
             latest_view=latest_view,
             handlers=holder["handlers"],
             deadlines_s=deadlines,
             clock=clock,
             on_event=on_event,
+            watchers=[
+                CameraStatus(CameraStatusSettings.from_config(cfg)),
+                ProximityAlert(ProximitySettings.from_config(cfg), geometry=geometry),
+            ],
         )
         return holder["controller"]
 
     synth = None
     sample_rate = 22050
     if not args.sin_voz:
-        from visionx.voice.engines import PiperSynth, VoiceSettings
-        from visionx.voice.output import CachedSynth
+        from visionx.voice.engines import VoiceSettings, build_synth
 
-        synth_obj = CachedSynth(PiperSynth(VoiceSettings.from_config(cfg)))
+        synth_obj = build_synth(VoiceSettings.from_config(cfg))
         synth, sample_rate = synth_obj.synthesize, synth_obj.sample_rate
     schedule = AudioSchedule(synth, sample_rate)
+    from visionx.modes.sonar import Sonar, SonarSettings, target_of
+
+    sonar = Sonar(SonarSettings()) if settings.guide_style == "sonar" else None
+    sonar_cues: list = []
     painter = Painter()
     out = Path(args.salida)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -232,6 +292,12 @@ def cmd_demo(args: argparse.Namespace) -> int:
             st.target_angle = (target.angle_h_deg, target.angle_v_deg) if target else None
         else:
             st.mode, st.state, st.target_angle = "-", "inactivo", None
+        if sonar is not None:
+            guiding = active is not None and active.mode.value == "search"
+            handler = holder["handlers"].get(active.mode) if guiding else None
+            cue = sonar.step(t_s, target_of(handler, clock.now_ns()) if guiding else None)
+            if cue is not None:
+                sonar_cues.append(cue)
         while cursor["base"] is not None and cursor["next"] <= t_s:
             writer.write(add_subtitles(cursor["base"], schedule, cursor["next"], painter))
             cursor["next"] += 1 / args.fps
@@ -244,18 +310,30 @@ def cmd_demo(args: argparse.Namespace) -> int:
         det_latency_s=args.latencia_detector, depth_latency_s=args.latencia_profundidad,
         every=args.cada, tick_s=tick_s, tail_s=args.cola, on_frame=on_frame,
     )  # fmt: skip
+    if args.traza:
+        with open(args.traza, "w", encoding="utf-8", newline="\n") as f:
+            for s in result.spoken:
+                f.write(json.dumps({"t_s": s.t_s, "tipo": "dice", "request_id": s.request_id,
+                                    "texto": s.text}, ensure_ascii=False) + "\n")  # fmt: skip
+            for t, kind, data in result.events:
+                f.write(json.dumps({"t_s": t, "tipo": kind, **data}, ensure_ascii=False,
+                                   default=str) + "\n")  # fmt: skip
     end = max([result.duration_s] + [s.end_s for s in schedule.segments]) + 0.5
     while cursor["base"] is not None and cursor["next"] <= end:
         writer.write(add_subtitles(cursor["base"], schedule, cursor["next"], painter))
         cursor["next"] += 1 / args.fps
     writer.release()
-    write_wav(tmp / "audio.wav", schedule.mix(end), sample_rate)
+    audio = schedule.mix(end)
+    if sonar is not None and sonar_cues:
+        audio = mix_sonar(audio, sonar_cues, sonar.s, sample_rate)
+    write_wav(tmp / "audio.wav", audio, sample_rate)
     if mux(tmp / "video.mp4", tmp / "audio.wav", out):
         print(f"demo: {out} ({end:.1f} s, con audio)")
     else:
         silent = out.with_name(out.stem + "-sin-audio.mp4")
-        tmp.joinpath("video.mp4").replace(silent)
-        tmp.joinpath("audio.wav").replace(out.with_suffix(".wav"))
+        # move y no replace: el temporal puede estar en otro disco (C: contra D: en Windows).
+        shutil.move(tmp / "video.mp4", silent)
+        shutil.move(tmp / "audio.wav", out.with_suffix(".wav"))
         print(f"sin ffmpeg: video {silent} y audio {out.with_suffix('.wav')} por separado")
     for s in result.spoken:
         print(f"  {s.t_s:7.2f} s  [#{s.request_id}] {s.text}")
@@ -269,23 +347,30 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("simular", help="buscar/distancia sobre una grabación, tiempo grabado")
+    p = sub.add_parser("simular", help="modos sobre una grabación, tiempo grabado")
     p.add_argument("--fuente", required=True, help="carpeta de grabación o 'sintetica'")
     p.add_argument("--orden", action="append", help="SEGUNDO:frase (se puede repetir)")
     p.add_argument("--ordenes", help="JSONL con {t_s, texto}")
-    p.add_argument("--profundidad", choices=["B0", "B1", "B2", "ninguna"], default="B0")
+    p.add_argument(
+        "--profundidad",
+        default="B0",
+        help="B0–B5, fusion, crestereo, crestereo-preciso, depth.estimadores o ninguna",
+    )
     p.add_argument("--latencia-detector", type=float, default=0.0, help="s emulados")
     p.add_argument("--latencia-profundidad", type=float, default=0.0, help="s emulados")
     p.add_argument("--cada", type=int, default=1, help="el detector mira 1 de cada N frames")
     p.add_argument("--frames", type=int, default=0, help="solo sintética: cuántos frames")
     p.add_argument("--cola", type=float, default=3.0, help="s simulados tras el último frame")
     p.add_argument("--traza", help="JSONL con lo dicho y los eventos")
+    p.add_argument(
+        "--capturas", help="carpeta para frames anotados al pedir audio (sin reproducirlo)"
+    )
     p.add_argument("--config")
     p.set_defaults(fn=cmd_simular)
 
     d = sub.add_parser("demo", help="como simular, más un MP4 con imagen, subtítulos y voz")
     for action in p._actions:  # mismas opciones que simular
-        if action.dest not in ("help", "traza"):
+        if action.dest not in ("help", "capturas"):
             d._add_action(action)
     d.add_argument("--salida", required=True, help="archivo .mp4")
     d.add_argument("--sin-voz", action="store_true", help="sin Piper: subtítulos y silencio")

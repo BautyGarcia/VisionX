@@ -40,6 +40,510 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T08/T09: la frase de distancia ya no se corta al vencer; «maus»
+
+**Tareas:** T08, T09. **Persona/agente:** Bauty (vivo, traza `outputs/beta/voz-cortes.jsonl`,
+pedido 3) lo diagnosticó con su agente; Tomás / Claude Code. **Rama:** `b/vencimiento-no-corta`.
+
+**Problema.** La respuesta a «¿a qué distancia está…?» se cortaba a la mitad, justo antes de los
+metros. `deadlines_s.distance` es 10 s y, al vencer, `Controller.tick()` cortaba también lo que
+estaba sonando; Whisper (~4 s) + síntesis (~2,7 s) + una frase de ~7 s no entra en 10 s, y Claude
+ponía los metros al final. Además «¿A qué distancia está el mouse?» salió de Whisper como «maus»
+y la app respondió «No reconozco maus».
+
+**Hecho.**
+- El vencimiento es un plazo para **empezar** a responder: si para entonces la respuesta no empezó
+  a sonar, la orden vence como antes; si ya suena, termina con todos sus tramos, con un tope de
+  `AudioOutput.answer_grace_s` (20 s) después del plazo. La confirmación de la orden («Leo.»,
+  «Busco taza.», registrada con `note_ack`) y los sonidos no cuentan como respuesta, así que una
+  respuesta que nunca empezó sigue sin decirse tarde.
+- Distancia: Claude dice primero el objeto y los metros, y después el costado, la altura y sobre
+  qué está («La taza blanca está a 1,4 metros, unos 20 cm a tu izquierda, sobre el taburete.»).
+  Con los tramos del PR #44, el número suena en el primero.
+- Catálogo: «maus» y «mause» son mouse.
+- Tests: `tests/test_vencimiento.py` (5).
+
+**Próximo paso.** Bauty: repetir «¿a qué distancia está…?» con `--traza`; en `latencias` no
+tendría que haber frases `vencido` del pedido después de la primera que sonó.
+
+## 2026-11-19 (noche) — T08: la frase de distancia se cortaba antes de los metros; vigencia a 25 s
+
+Tarea: T08. Persona/agente: Bauty (vivo en la Mac) / Claude Code. Rama: `a/vigencia-distancia`.
+Problema: en vivo, «¿a qué distancia está…?» decía la frase de Claude y se cortaba justo antes
+del número.
+Causa (traza `outputs/beta/voz-cortes.jsonl`, request 3): no son cortes de audio (0 de 7 frases
+con `cortes`). Es la vigencia: `deadlines_s.distance: 10` cuenta desde que Whisper termina, y
+`Controller.tick()` cancela el audio que está sonando al vencer. Claude tuvo el texto a +3,1 s,
+la síntesis de la frase nueva tardó 2,7 s y empezó a sonar a +5,8 s; a +10 s se cortó en «…con
+remera bordó y auriculares, a», antes de «1,6 metros». Lo mismo pasó en el vivo de C0 (la frase
+de distancia figura `cancelado`).
+Hecho: `audio.deadlines_s.distance` de 10 a 25 s en `configs/default.yaml`. Tests de app, modos,
+voz, audio y lectura pasan.
+Límites: es un parche de tiempo. Lo de fondo es de Tomás: que vencer impida empezar una frase
+vieja pero no corte una que ya suena, y que Claude diga los metros primero. Sin repetir en vivo.
+Otro hallazgo: Whisper transcribió «mouse» como «maus» y la app respondió «No reconozco maus».
+
+## 2026-11-19 (noche) — T08: Whisper en la GPU de la Mac y la respuesta de Claude por tramos
+
+**Tareas:** T08, T11. **Persona/agente:** Tomás (pedido) / Claude Code. **Rama:**
+`b/voz-mas-rapida`.
+
+**Por qué.** En el vivo de C0/C1 (entrada de Bauty, más abajo), de los ~11 s de «¿a qué distancia
+está la taza?» ~8 eran voz: **Whisper ~4,2 s por orden** (faster-whisper en CPU, con la CPU
+cargada por la profundidad) y **~4 s** desde que Claude terminaba la frase hasta que sonaba
+(Edge sintetiza la frase entera antes de sonar, y la de distancia es una sola frase larga).
+
+**Hecho.**
+- **Whisper con MLX** (la implementación de Apple para su GPU): `MlxWhisperTranscriber`, mismo
+  modelo `small` y mismas opciones (español, sin condicionar en lo anterior, el prompt de
+  vocabulario), precalentado al arrancar. `audio.stt.backend: auto` lo elige en una Mac con
+  Apple Silicon si `mlx-whisper` está instalado (extra `voz`, solo en esa plataforma) y los pesos
+  bajados (`python -m visionx.voice descargar --whisper-mlx small`); si no, faster-whisper como
+  antes. La app imprime cuál usa. faster-whisper no puede ir a la GPU de la Mac: CTranslate2 no
+  tiene backend MPS.
+- **Respuesta por tramos:** `assistant.clause_chars: 30`. Además de en el punto, la respuesta se
+  corta en coma, punto y coma o dos puntos cuando el tramo ya tiene 30 caracteres, nunca dentro
+  de una cita «…» ni en «1,4» (la coma tiene que ir seguida de espacio). El primer tramo se
+  sintetiza y suena mientras Claude sigue escribiendo; los siguientes se sintetizan por adelantado
+  mientras suena el anterior (la síntesis adelantada ya existía).
+- Tests: `tests/test_voz_rapida.py` (9).
+
+**Sin medir.** No hay Mac acá: MLX se probó con un transcriptor simulado y el corte por tramos sin
+Edge real. Esperado: Whisper `small` en MLX < 1 s para órdenes de 2–3 s, y la primera palabra de
+Claude ~2–3 s antes en respuestas largas. Puede notarse una pausa breve entre tramos; si molesta,
+subir `clause_chars` (p. ej. 50) o ponerlo en 0.
+
+**Próximo paso.** Bauty: `uv sync` con `--extra voz`, `descargar --whisper-mlx small`, repetir
+«buscá» y «¿a qué distancia?» con `--traza` y pasar `latencias` (columna STT y primera frase).
+
+## 2026-11-19 (noche) — T09: la búsqueda la termina la persona
+
+**Tareas:** T09, T08. **Persona/agente:** Tomás (pedido) / Claude Code. **Rama:**
+`b/voz-sin-cortes` (mismo PR que la voz entrecortada).
+
+**Pedido de Tomás.** «La búsqueda va a terminar cuando la persona diga que encontró el objeto o
+que quiere terminar la búsqueda, no la va a terminar sola.»
+
+**Antes.** Terminaba sola al llegar («Llegaste…») y al vencer los 30 s de
+`deadlines_s.search` («No encontré…» / «Terminé de buscar…»).
+
+**Hecho.**
+- Órdenes nuevas: **encontrado** («la encontré», «ya lo tengo», «listo», «ya está», «llegué»,
+  «encontrado») y **terminar** («terminá la búsqueda», «terminar», «fin de la búsqueda», «no
+  busques más»). Cancelar («pará», «basta», «dejá de buscar») sigue igual. Responde «Listo,
+  terminé de buscar taza.»; sin búsqueda activa, «No estoy buscando nada ahora.».
+- «Encontré la taza» sola sigue siendo buscar (Whisper escribe «encontré» por «encontrá»), pero
+  durante una búsqueda de la taza el controlador la toma como encontrado.
+- Llegar ya no cierra: la primera vez dice «Llegaste: taza adelante, a 0,6 metros. Cuando lo
+  tengas, decí: listo.» y se queda callado (sin «Perdí» aunque deje de verla). Si la persona se
+  aleja más de `arrive_m + leave_margin_m` (0,6 + 0,4 m), vuelve a decir los metros.
+- Sin plazo: `deadlines_s.search: 0`. Sin verla, «Sigo buscando taza.» cada
+  `searching_reminder_s` (15 s).
+- El cierre automático de antes sigue disponible (`modes.end_on_arrival: true` o un plazo): lo
+  usa el banco M1, que mide una búsqueda acotada; los tests de guía «palabras» lo fijan.
+- Tests: `tests/test_buscar_fin.py` (20) y tres en `tests/test_modes.py`.
+
+**Límites.** Las frases nuevas no están en la caché de Mateo: la primera vez tardan ~1–2 s
+(`python -m visionx.voice precalentar` las agrega). «Listo» al final de otra cosa no termina
+nada: tiene que ser la frase entera.
+
+## 2026-11-19 (noche) — T08: la voz se entrecortaba al preguntar distancias
+
+**Tareas:** T08. **Persona/agente:** Bauty (Mac, grabando el banco `s1`) lo reportó; Tomás /
+Claude Code. **Rama:** `b/voz-sin-cortes`.
+
+**Problema.** Con la app en vivo, al preguntar la distancia de un objeto la voz se entrecortaba
+mucho.
+
+**Causa (probable, por el código).** `SoundDevicePlayer` abría el parlante con
+`latency="low"` (búfer de pocos ms en la Mac) y escribía bloques de 20 ms desde un hilo de
+Python: el hilo tenía que llegar cada 20 ms sin falta. Preguntar la distancia dispara la
+profundidad precisa (1280×720, ~1,6 s de cómputo en vivo) junto con el detector, la U-Net, Claude
+y la síntesis; el hilo llega tarde, el búfer se vacía y la voz se corta. Coincide con que solo
+pasaba en las preguntas de distancia.
+
+**Hecho.**
+- Búfer del parlante configurable, `audio.output_latency_s: 0.2` (0 = «low» como antes). Cancelar
+  sigue siendo inmediato: `abort()` descarta el búfer. Cada frase arranca ~0,2 s más tarde.
+- Cortes contados por frase (`stream.write` avisa cuando el búfer se vació): van a la traza como
+  `cortes` y `latencias` agrega la línea «voz entrecortada: N de M frases con cortes».
+- Tests: `tests/test_voz_cortes.py` (4).
+
+**Límites.** No reproducido en la Mac todavía: la causa sale del código y del síntoma. Si con
+0,2 s sigue, probar 0,4 y mirar `cortes` en la traza; si aun así se corta, el siguiente paso es
+reproducir desde un callback de PortAudio con la frase entera ya en memoria.
+
+**Próximo paso.** Bauty: pull, repetir la pregunta de distancia con `--traza` y pasar
+`latencias`.
+
+## 2026-11-19 (noche) — T07: vivo de C0 y C1; C1 gana, pero lo lento no es el detector
+
+Tarea: T07. Persona/agente: Bauty (cámara, guion de VELOCIDAD) / Claude Code (análisis). Rama:
+`a/velocidad-medicion`. Completa la entrada siguiente (la de clips).
+Hecho: sección **C** con C1 y C0, misma escena, taza a 1,5 m de cinta, arrancando con la cámara
+girada 60–90°. Trazas en `outputs/velocidad/C0|C1/vivo.jsonl`; filas de la planilla completas.
+
+| | C0 (YOLO cpu) | C1 (YOLO mps) |
+|---|---:|---:|
+| Duración, s | 100,5 | 224,4 |
+| Detector / profundidad continua, fps | 3,94 / 3,88 | **9,34** / 4,38 |
+| Errores (detector, profundidad, preciso, espaciales) | 0 | 0 |
+| Preciso, ms | 1832 (n=1) | 1945 mediana (n=3, 1832–2079) |
+| Distancia a la taza de 1,5 m de cinta | 1,452 m | 1,461 m |
+| Primera frase de «buscá», ms desde soltar | 4460 | 4251 |
+| Primera frase de «¿a qué distancia?», ms | 11427 | 12761 mediana (n=2) |
+
+Decisión: **C1** (`detection.device: mps` en `configs/local.yaml` de la Mac). Ninguna llega a
+10/5 fps; C1 es la más cercana que cumple 2–4, como dice la regla de VELOCIDAD. `default.yaml` no
+cambia. Bauty: «se sintió todo bastante igual». Coincide con los números: lo que se siente no es
+el detector.
+Dónde se va el tiempo (C0, «¿a qué distancia está la taza?», desde soltar el espacio):
+Whisper 4,19 s → preciso 1,9 s (llega a 6,1 s) → Claude 1,3 s (texto listo a 7,45 s) → la primera
+palabra suena a 11,4 s. **Whisper tarda ~4,2 s en cada orden** (4090–4457 ms en las 6 órdenes,
+para 1,7–3,0 s de audio) y la frase nueva de Claude tarda ~4 s en sintetizarse y empezar a sonar.
+Esas dos piezas suman ~8 de los 11 s; el detector y la profundidad continua no están en ese camino.
+Límites: n chico (1–2 órdenes por tipo); C1 duró más que el guion (2 «¿a qué distancia?»; la
+primera, a otra taza a 0,86 m). El fps de vivo es del pipeline, no de la red sola.
+Próximo paso (Tomás, voz): Whisper en MPS o un modelo más chico, y decir la respuesta de Claude por
+frases para que la primera salga antes. Profundidad en la app a ~4 fps: sigue pendiente.
+
+## 2026-11-19 (noche) — T07: velocidad medida sin cámara; gana C1 (YOLO en la GPU), falta el vivo
+
+Tarea: T07 (velocidad, [VELOCIDAD](VELOCIDAD.md)). Persona/agente: Bauty / Claude Code. Rama:
+`a/velocidad-medicion`, sobre `main` 0426c57.
+Objetivo: medir C0–C4 con el criterio fijado antes de medir y proponer la config ganadora.
+Hecho: secciones **A** (presencia y latencia del detector en 4 clips) y **B** (CREStereo con 3 y
+4 iteraciones: latencia y cinta) para las 5 configs. La sección **C** (vivo) no se hizo: la pidió
+Bauty sin cámara. Como referencia del ritmo con todo junto se corrió la app completa sobre el clip
+`dev-1114-buscar-a` (sin ventana ni órdenes, con `--profundidad-precisa`), una config por vez.
+Contexto: Mac M2 Max, MPS, `configs/velocidad/C*.yaml` sobre `configs/local.yaml`; YOLO
+`yolo26s-seg@3da1d83e31ca`; CREStereo `2271ab61`, 640×360, 2 pasadas. Planilla:
+`datasets/velocidad/resultados.csv`; crudos en `outputs/velocidad/` (log en `log.txt`).
+
+| | C0 | C1 | C2 | C3 | C4 |
+|---|---:|---:|---:|---:|---:|
+| YOLO / imgsz / iteraciones | cpu/960/4 | mps/960/4 | mps/768/4 | mps/960/3 | mps/768/3 |
+| Detector solo, distancias: mediana / p90 ms | 163,5 / 318,8 | 34,2 / 42,1 | 29,4 / 42,5 | 34,9 / 57,7 | 28,6 / 35,7 |
+| Presencia botella / taza / mochila (buscar-a/b/c), % | 61,3 / 41,4 / 33,4 | igual a C0 | 60,4 / 38,1 / 35,9 | igual a C0 | igual a C2 |
+| Presencia taza / botella / bolso (distancias), % | 100 / 100 / 62,0 | igual a C0 | 100 / 100 / **4,0** | igual a C0 | 100 / 100 / **4,0** |
+| CREStereo solo, en caliente: P50 / P95 ms | 128 / 182 | 128 / 182 | 128 / 182 | 97 / 149 | 97 / 149 |
+| Cinta, continuo: error a 1 / 1,5 / 2 m, mm | −1,3 / +16,1 / +109,9 | ídem | ídem | **+16,0** / +7,6 / **+152,2** | ídem C3 |
+| App sobre clip: detector / profundidad, fps | 4,0 / 4,0 | 9,0 / 4,1 | 9,7 / 4,4 | 9,8 / 5,2 | 10,7 / 5,6 |
+| Criterio 2 (detección) / 3 (cinta) | — | sí / sí | **no** / sí | sí / **no** | **no** / **no** |
+
+Resultado: **C1 es la única que cumple 2 y 3**. La GPU no cambia nada de la detección (presencia
+idéntica cuadro a cuadro) y YOLO baja de 164 a 34 ms. 768 px pierde el bolso de distancias (de
+62 % a 4 %, y `handbag` de 19,7 % a 0). 3 iteraciones empeora la cinta 14,7 mm a 1 m y 42,3 mm a
+2 m (a 1,5 m mejora 8,5 mm): falla el límite de 1 cm. Propuesta: `detection.device: mps` en
+`configs/local.yaml` de la Mac (ya está), sin tocar `configs/default.yaml` (la PC de Tomás no
+tiene MPS).
+Hallazgo: sobre el clip, ninguna config salvo C4 llega a 10/5 fps. La **profundidad queda en ~4 fps
+en la app** aunque CREStereo solo tarde 128 ms (en la app, mediana 153–182 ms): hay tiempo fuera
+de la red por cuadro (rectificar 1920×1080, preparar, unir) o espera del pipeline. Con YOLO en la
+GPU el cuello pasa a ser la profundidad, no el detector. YOLO en la app tarda 95 ms contra 34 ms
+solo: compite por la GPU con CREStereo.
+Límites: sin vivo, el criterio 1 y el 4 no están medidos (`cumple` de C1 = «pendiente vivo»). La
+cinta tiene 3 pares por distancia, cada uno en frío para las dos variantes. El ritmo sobre clip
+no es el de la cámara (el clip se reproduce a su velocidad y salta cuadros).
+Próximo paso: Bauty corre la sección C con C1 (y C0 para comparar) con el guion de VELOCIDAD;
+Tomás mira por qué la profundidad de la app no pasa de ~4 fps.
+
+## 2026-11-19 (noche) — T13/T15: cómo llega la incertidumbre a la voz y mini dataset con ground truth
+
+**Tareas:** T13, T15. **Persona/agente:** Tomás (decisiones) / Claude Code (búsqueda y
+especificación). **Rama:** `b/decision-t12`.
+
+**Objetivo.** Responder a la devolución de la cátedra antes de que se diseñe la red de entrada:
+cómo entiende Sonnet el resultado de la red y con qué datos con verdad de referencia se mide.
+
+**Decisiones de Tomás.**
+- **Tres niveles de certeza** decididos por código (precisa / aproximada / no segura) a partir
+  del intervalo del 90 % por objeto; Sonnet solo los dice y se verifica que no agregue números.
+- **Mini dataset: A + C.** A = escenas sintéticas de Replica renderizadas con la geometría de la
+  ELP (con variantes de cámara hermana y distinta), primero y completo, a cargo de Tomás / Claude
+  Code. C = el banco ELP de Bauty, con medidor láser si se consigue en la facultad. Booster queda
+  descartado por ahora.
+
+**Hecho.** [INCERTIDUMBRE-Y-GT](INCERTIDUMBRE-Y-GT.md): contrato (qué tiene que entregar la
+profundidad: b calibrada, intervalo por objeto, confianza y estados de cámara,
+`calibrar_distancia`), cálculo del intervalo de Laplace, niveles y frases, formato para Sonnet,
+verificación, banco de 60 casos, generación y partición del sintético, Booster y métricas por
+objeto. Enlazado desde AGENTS (paso 6).
+
+**Búsqueda.** No hay un dataset real con estéreo + profundidad densa + labels de objetos en
+interiores: los estéreo reales (InStereo2K, Middlebury, Booster) no traen labels, y los de
+interiores con labels (NYU, ScanNet, Hypersim) no son estéreo. InStereo2K y Middlebury además
+probablemente los vio CREStereo. Replica: licencia de investigación o educación, sin
+redistribuir. Habitat-Sim no corre en Windows: el renderizador se decide en la factibilidad.
+
+**Límites.** Los umbrales de los niveles (10 % y 25 %) son iniciales y se ajustan en val. El
+sintético tiene brecha de dominio: el banco ELP sigue siendo la prueba real.
+
+**Próximo paso.** Claude Code: factibilidad del render de Replica y el conjunto A completo.
+Bauty: intervalo por objeto en el ubicador y factor de b.
+
+## 2026-11-19 (noche) — Decisión T12: la red de entrada estima el campo de corrección (opción a); devolución de la cátedra
+
+**Tareas:** T12, T13, T15. **Persona/agente:** Tomás (decisión, acordada con Bauty) / Claude
+Code (registro). **Rama:** `b/decision-t12`.
+
+**Decisión (Tomás, 19/11).** De las tres opciones que dejó abiertas la entrada «regla de decisión,
+generador de etapa 2 y cámaras hermanas», se elige la **(a)**: la red de entrada, antes de
+CREStereo, estima el **campo de corrección completo** del ojo derecho (giros + centro óptico +
+distorsión) que lleva «esta cámara» a la geometría de la ELP calibrada, más una **confianza**.
+
+- **Referencia única:** la red lleva adentro solo la calibración de nuestra ELP
+  (`elp-2026-11-11-corregida.yaml`); se entrena con **cámaras hermanas simuladas** (el generador
+  de etapa 2 ya existe: `CameraModel`, `sample_sibling`, `mismatch_field`).
+- **Cámaras parecidas:** se autocalibran (red + clásico para los giros).
+- **Cámaras muy distintas:** si la confianza de la red o la incertidumbre de la U-Net de salida no
+  cumple el umbral, la app **pide un objeto a distancia conocida** («calibrá, está a 2 metros»;
+  el comando ya existe en la app y llama a `calibrar_distancia(frame, mask, z_m)` del estimador).
+  Con eso se corrige la escala. Una distorsión muy distinta (gran angular, ojo de pez) no se
+  corrige con un objeto: necesita una calibración corta con damero o queda fuera de alcance.
+- **Reparto:** clásico = giros de nuestra cámara; red de entrada = diferencias de lente y «¿conozco
+  esta cámara?»; distancia conocida = escala; U-Net de salida = cuánto creerle a cada píxel.
+
+**Por qué (lo medido, entradas del 19/11).** El clásico con la regla ya resuelve roll, pitch y
+focal en nuestra cámara (precinto −4,8 % → −2,3 %), así que una red ahí casi no gana. En cámaras
+hermanas, corregir solo cuatro números deja 3–11 % aun con distancia conocida, y el campo exacto
+deja 0,3–0,9 %: lo que falta es centro y distorsión, que es lo que la red puede aprender.
+
+**Alcance.** Cualquier cámara estéreo sincronizada, de lentes paralelas y sin ojo de pez, con la
+captura adaptada si no entrega el par lado a lado como la ELP. **No sirve para una sola cámara**
+(sin par no hay disparidad; un modo monocular sería otro modelo y otro proyecto).
+
+**Lo que falta (Bauty, con lo que ya está del lado de la app).**
+1. La red de entrada (campo + confianza) entrenada con hermanas de la ELP; ampliar a cámaras
+   virtuales más variadas si sobra tiempo.
+2. El umbral de confianza/incertidumbre que dispara el pedido de distancia conocida.
+3. En el estimador: `calibrar_distancia` y los códigos de estado `alineando`,
+   `camara-desconocida`, `no-medible` (la app ya los dice).
+4. Probarlo con cámaras reales: la segunda ELP (pedírsela al profesor) y una cámara distinta.
+
+**Devolución de la cátedra (Agus, 19/11)**, sobre el mail donde se explicó el sistema:
+- «Cuando estén satisfechos con el funcionamiento intentaría hacer la **conexión con la LLM**, ya
+  que no creo que sea trivial hacer que entienda el resultado de la red sin alguna vuelta.» Es
+  decir: que Sonnet reciba y use bien distancias **con incertidumbre** (y la confianza de la
+  cámara) para responder.
+- «Después, cuando tengan algo mínimo funcionando, pueden seguir mejorando la performance.»
+- «Tal vez pueden conseguir algún **mini dataset de escenas** cuyo input sea similar a lo que
+  verían en la realidad pero tengan **ground truth de las distancias y labels**, así pueden medir
+  con más casos y tener más precisión en esa medición en comparación con medir con regla pocos
+  casos.» Afecta a T15 (evaluación): sumar un conjunto con verdad de distancias y etiquetas de
+  objetos, además del banco ELP con cinta.
+- Conclusión de la cátedra: «van bien así».
+
+**Próximo paso.** Bauty: red de entrada (a). Tomás / Claude Code: conexión de la salida de la red
+(metros + incertidumbre + confianza) con el asistente, y búsqueda del mini dataset con verdad de
+distancias y etiquetas.
+
+## 2026-11-19 (noche) — T07: plan para pasar de 4 a 10 fps, con el criterio fijado antes de medir
+
+**Tareas:** T07 (y T12 por CREStereo). **Persona/agente:** Tomás (decisiones) / Claude Code.
+**Rama:** `b/velocidad`.
+
+**Diagnóstico.** En el primer vivo, YOLO tardaba 299 ms por cuadro y CREStereo continuo 160 ms:
+el detector es el cuello (la app va al ritmo del más lento). YOLO corre en CPU por defecto
+(`detection.device: cpu`). En la PC de Tomás, YOLO solo a 960 px tarda ~150 ms (CPU, 30 cuadros).
+
+**Decisiones de Tomás.** Probar las tres opciones (YOLO en MPS, 768 px, CREStereo continuo con 3
+iteraciones) sobre clips y en vivo; elegir con umbrales fijados antes (detector ≥ 10 fps y
+profundidad ≥ 5 fps en vivo; detección −5 puntos como máximo; cinta +1 cm como máximo; sin
+errores); reportar en una planilla del repo y en BITACORA. El preciso (1280×720, 4 it., 2
+pasadas) queda congelado para las métricas finales de la red y también a pedido en vivo (con
+espera de 3 s).
+
+**Hecho.** [VELOCIDAD](VELOCIDAD.md) con qué correr para cada config y cómo reportar;
+`configs/velocidad/C0…C4.yaml` (incluyen `configs/local.yaml`; `incluir:` nuevo en la carga de
+configuración); `python -m visionx.detection presencia` (% de cuadros con cada objeto y latencia)
+y `--dispositivo` en `medir`; planilla `datasets/velocidad/resultados.csv`. Tests OK.
+
+**Próximo paso.** Bauty mide C0–C4 en la Mac y completa la planilla.
+
+## 2026-11-19 (noche) — Primera prueba en vivo en la Mac y buscar rehecho: centrar y después distancia
+
+**Tareas:** T07, T08, T09. **Persona/agente:** Bauty (Mac, ELP) y Tomás (Discord) en vivo;
+Tomás / Claude Code (cambios). **Rama:** `b/buscar-centrar`.
+
+**Lo que se vio en vivo** (Mac M2 Max, CREStereo continuo 640×360 + preciso 1280×720, todos los
+modos; captura del dashboard, sin traza todavía):
+- Captura 25 fps; detector 4,1 fps (299 ms); CREStereo continuo 4,1 fps (160 ms) con 565 ms
+  de edad; **preciso 1588 ms** y la espera de 2 s se vencía (`espera-vencida`).
+- Las respuestas tardaban **~5 s** (percibido). Parte se explica por la espera del preciso.
+- Buscar no convenció: no aparecía la flecha en pantalla (el dashboard en vivo no la dibujaba;
+  solo existía en las demos) y a Tomás no le gustó el bip del sonar.
+
+**Decisiones de Tomás.** Buscar con palabras, en dos etapas: primero centrar el objeto («Girá a
+la izquierda», «Más a la izquierda», «Un poco a la izquierda», «Abajo», «Un poco más abajo») y
+después la distancia hacia adelante; una vez centrado, decir sobre qué está apoyado. Sin bips.
+Voz un poco más rápida.
+
+**Hecho.**
+- `modes.guide_style: centrar` (por defecto): «Veo taza.» y enseguida la instrucción por zonas
+  con histéresis (`turn_deg` 30, `more_deg` 15, `center_deg` 8; vertical `low_deg` 22,
+  `center_v_deg` 12); una instrucción nueva corta la anterior y la misma se repite cada 2,5 s.
+  Centrado: «Centrado. Está a 1,4 metros, adelante.» (o los metros apenas llega la medición) y,
+  con el asistente, una frase de apoyo (pedido «apoyo»: «Está sobre la mesa…»). Al acercarse,
+  metros cada 2,5 s; «Llegaste» corta lo que suena. `sonar` y `palabras` siguen disponibles.
+- Dashboard en vivo: flecha verde del centro al objetivo guiado (`draw_target_arrow`).
+- Voz a `speech_rate` 1,15 (Edge «+15 %»); caché regenerada a esa velocidad
+  (`data/cache/voz/edge_es-UY-MateoNeural_15_`, también en Drive) con las frases de centrar.
+- Guía en vivo: se corre **sin** `--profundidad-precisa`.
+- M1 mide el contrato del aviso con bip (guía `palabras`), explícito en el banco.
+
+**Evidencia.** Tests 1159 OK, ruff OK (con tests de zonas, centrado, apoyo, llegada y flecha).
+Sin probar en vivo todavía.
+
+**Límites.** El tiempo de ~5 s no está desglosado: falta la traza de la Mac
+(`ejecutar --traza` + `latencias`). En vivo «Abajo» supone que la persona inclina la cámara (en el
+pecho, el cuerpo). La histéresis y los límites de ángulo son de desarrollo, sin medir con gente.
+
+**Próximo paso.** Repetir en vivo con la traza y pasar `latencias` para ver cuánto es Whisper,
+Claude, la voz y la profundidad.
+
+## 2026-11-19 (tarde) — T08/T09/T10/T11: sonar en buscar, «¿cuál?» describiendo, distancia con detalle, solo Mateo; lista para la Mac
+
+**Tareas:** T07–T11. **Persona/agente:** Tomás (decisiones, revisión de demos) / Claude Code.
+**Rama:** `b/beta-2` (PR siguiente al #27, que se mergeó a `main` como `904f412` el 19/11).
+
+**Decisiones de Tomás tras ver las demos (19/11).**
+- Lectura «es la que mejor anda». Buscar no: «queda la voz corriendo o se corta de la nada y no
+  ubica bien al objeto». Eligió guía con **sonar** + pocas palabras.
+- **Una sola voz (Mateo)**: sin respaldo de Piper.
+- Distancia con detalle en **una sola frase** (color, sobre qué está, metros, costado, altura
+  respecto del cuerpo); 2 s de espera «está perfecto».
+- Al ver varios iguales, preguntar **describiéndolos** y aceptar «la verde».
+- Describir con frases más cortas; distancia con varios: primero cuántos son.
+- La key nueva de Claude es **solo** para las consultas de VisionX (~1000).
+
+**Hecho.**
+- `modes/sonar.py`: bip estéreo con paneo de potencia constante según el ángulo; más seguido y
+  agudo al centrar (0,12 s al frente, 0,7 s en el borde), silencio si no se ve el objetivo hace
+  1 s. En vivo `SonarPlayer` (stream estéreo propio, `ejecutar --voz`); en la demo se mezcla en
+  estéreo. `modes.guide_style: sonar` (por defecto) habla solo al encontrar, metros nuevos cada
+  `sonar_meters_s`, «Perdí…» y «Llegaste»; `palabras` = guía anterior. «Llegaste» corta lo que
+  suena. La demo mantiene la flecha a la última posición del objetivo.
+- Buscar con asistente: al ver varios iguales, bip + pedido «opciones» (1–3 palabras por objeto
+  y una pregunta que empieza con «Veo…»); el controlador toma «la verde» / «la de la mesa» como
+  elección mientras se espera; también al reencontrar iguales tras una pérdida.
+- Distancia con asistente: el estéreo calcula metros, costado X = Z·tan(ángulo) (si ≥ 15 cm) y
+  altura respecto de la cámara al pecho (cabeza/pecho/cintura/rodillas/piso); Sonnet arma la
+  frase con esos números tal cual. Respaldo: la frase de siempre.
+- Voz: `audio.tts.fallback: none`; el tiempo de Edge crece con el largo de la frase y se
+  reintenta; si igual falla, la frase se saltea.
+- Asistente: describir en frases de ≤ 15 palabras; distancia con varios, primero cuántos;
+  conocimiento general aclarado para lo que no está escrito («en general, la ashwagandha…»).
+- `visionx.modes demo --profundidad` acepta cualquier estimador del registro; órdenes de las
+  demos versionadas en `datasets/demos/`; `docs/PRUEBA-EN-VIVO.md` reescrita para la Mac.
+
+**Evidencia.**
+- Tests: 1154 OK, ruff OK; ningún test usa la API ni ve la key (`tests/conftest.py`).
+- Demos con B0 en la PC (Drive `VisionX-artefactos/demos/beta-1119c/`, audio estéreo):
+  buscar con sonar (habla solo en momentos clave); elegir («Buscá la taza» → a los 1,8 s
+  «…la taza blanca de la banqueta a la izquierda o el vaso rojo… ¿Cuál querés?» → «La blanca» →
+  guía a −35°); distancias («Hay dos tazas.» y una frase por cada una, ~1,4 s después de la
+  orden; Sonnet corrigió «taza» por «vaso rojo» conservando los metros); escenas y lectura.
+- App completa con CREStereo (`ejecutar` sobre `dev-1114-distancias`, sin ventana, CPU):
+  detector 44 cuadros, CREStereo continuo 8 y preciso 1, **0 errores**; la precisa no llegó en
+  `espera_s` 2 s por la CPU (en la Mac mide 617 ms).
+- Gasto de la key nueva: 36 consultas, 0,19 USD (`outputs/vlm/gasto.jsonl`).
+
+**Límites.** Nada de esto corrió en vivo en la Mac: sonar + voz en auriculares, latencia de
+punta a punta, YOLO + CREStereo juntos en MPS. La altura respecto del cuerpo supone la cámara
+nivelada. Sin red, una frase que no está en la caché no suena (no hay segunda voz). En el clip
+de buscar, al reencontrar dos botellas quedó una sola a la vista antes de la pregunta y guió a
+esa (correcto, pero la demo no muestra la elección: por eso `ordenes-elegir.jsonl`).
+
+**Próximo paso.** Bauty: prueba en vivo en la Mac siguiendo `docs/PRUEBA-EN-VIVO.md` (con
+Tomás por Discord) y las demos finales con CREStereo de la sección 5.
+
+## 2026-11-19 — T07/T08/T10/T11/T20: asistente con Claude, guía que corta, caché de voz y alerta de cercanía
+
+**Tareas:** T07, T08, T10, T11, T20 (y registro de T12). **Persona/agente:** Tomás (decisiones) /
+Claude Code (noche del 18 al 19/11, sin supervisión). **Rama:** `b/beta-integracion` (PR #27).
+
+**Pedido de Tomás (18/11).** Las demos de leer sonaban robóticas («TITA», «EXCESO EN AZÚCARES»
+sueltos); quiere algo interactivo («adelante tenés un envase médico que dice "Fusion"») y poder
+preguntarle cualquier cosa a la IA. En buscar, si el objeto cambia de lado, la frase vieja tiene
+que cortarse. Decisiones suyas: Claude por API (no local), en leer + describir + preguntas libres,
+citas verificadas contra el OCR, memoria corta, guía con corte y frases cortas; tope de gasto de
+la API de 2 USD para la noche.
+
+**Elección del modelo (medida).** 20 casos de los clips (6 leer, 5 describir, 9 preguntas) con
+Opus 5.5, Sonnet 5.5 y Haiku 5.5, effort low, imagen 1280×720, streaming
+(`outputs/vlm/comparar.py`, informe local `outputs/vlm/comparativa.html`, 0,33 USD):
+
+| | Opus 5.5 | Sonnet 5.5 | Haiku 5.5 |
+|---|---|---|---|
+| Primera palabra, mediana / P90 | 1,79 / 3,36 s | 0,91 / 1,31 s | 0,55 / 0,90 s |
+| Respuesta completa, mediana | 3,14 s | 2,31 s | 1,23 s |
+| USD por consulta | 0,011 | 0,0047 | 0,00025 |
+| Citas confirmadas por el OCR | 17/18 | 17/23 | 16/21 |
+
+Haiku dijo que las Tita «parecen saladas» (con el sello de exceso de azúcar) y contó 2 notebooks
+donde hay 3. Tomás eligió **Sonnet 5.5**.
+
+**Hecho.**
+- `visionx.assistant`: imagen + OCR + objetos medidos a Claude por streaming; entrega de a
+  frases; `verify_quotes` pasa a «parece decir X» lo citado que el OCR no confirma; memoria de
+  2 min; gasto por consulta en `outputs/vlm/gasto.jsonl` con tope (`assistant.budget_usd`, 5 USD
+  por defecto). En replay, cada frase llega al modo cuando su reloj avanzó lo que tardó la API
+  (`Delivery`): las demos no adelantan respuestas.
+- Leer: «Adelante tenés … que dice …» con el OCR de la imagen elegida; «leé todo» y cualquier
+  falla vuelven a la lectura por bloques. Describir: frases naturales con los metros del estéreo,
+  sin esperar la confirmación en varios cuadros (Claude ve la imagen). Preguntas libres: con el
+  asistente, lo que no es una orden va como pregunta (acuse `sonido:ok`); «¿para qué sirve…?»
+  ya no es «pará». Sin red o sin key: todo como antes.
+- Guía de buscar: `Say.replace` corta lo que suena si la dirección cambió (después de
+  `preempt_min_s` 0,6 s) y las frases siguientes no repiten el nombre («Un poco a la izquierda.»).
+- Voz: `voice precalentar` generó 866 frases frecuentes en `data/cache/voz` (220 s, 0 errores,
+  150 MB; copia en Drive `VisionX-artefactos/voz/cache-mateo/`). La síntesis de Edge se adelanta
+  apenas la frase entra a la cola: sin eso quedaba ~1 s de silencio entre frases de una respuesta.
+- T20 alerta de cercanía (`app/proximity.py`): zona central, piso y techo excluidos por altura
+  con la cámara nivelada, persistencia, profundidad fresca, prioridad ALERT, pausa, callada en
+  leer/buscar/distancia y 5 s después de una orden. **Apagada por defecto** (ver evidencia).
+- «Calibrar distancia» (`app/calibrate.py`): «calibrá, está a 2 metros» llama a
+  `calibrar_distancia(frame, mask, z_m)` del estimador si existe (acuerdo con Bauty).
+- `crestereo` / `crestereo-preciso` en el registro; `latencias --traza` (tabla por orden desde
+  que se suelta el botón); `docs/PRUEBA-EN-VIVO.md` para la Mac.
+
+**Evidencia.**
+- Tests: 1108 OK (unos 40 nuevos), ruff OK. Ningún test llama a la API ni ve la key (`tests/conftest.py`).
+- CREStereo desde el registro, CPU de la PC (`outputs/recepcion/1119-crestereo/`): P50 1738 ms
+  (B0 287 ms); vaso / taza / botella 0,530 / 1,053 / 1,053 m contra cinta 0,50 / 1,00 / 1,00 (B0
+  0,525 / 1,069 / 1,035). En la Mac Bauty midió 120 ms el continuo (BITACORA 2026-11-18).
+- Demos con asistente (Drive `VisionX-artefactos/demos/beta-1119/`): leer y preguntas sobre
+  `lectura` (TITA, Ashwa, Fusion, «¿es dulce o salado?», «¿para qué sirve?», «¿cuántas
+  cápsulas trae?» → «parece decir 120 cápsulas, no lo puedo asegurar»; la etiqueta dice 120);
+  describir y preguntas sobre `escenas` (con la cámara al techo responde que no puede ver y usa
+  lo dicho antes). Primera frase de Claude 1,2–2,3 s después de la orden en las demos.
+- Problemas que mostraron y se corrigieron: «alfajores Tita» (son galletitas), «alguien tiene la
+  caja» (son las manos de la persona), «la cámara detectó como horno», descripciones de 4–5
+  frases, y la guía que cortaba cada 0,4 s al barrer (pasó a 0,6 s).
+- Alerta de cercanía con B0 en clips (`outputs/beta/evaluar_cercania.py`): avisa a 0,64 m de una
+  puerta y a 0,74 m de una pared (`acercarse-2/3`), no avisa al acercarse a la silla; en la
+  recorrida por la casa (211 s) 6 avisos: escalera a la altura de la cabeza y mesa (razonables),
+  pared lisa, contraluz y techo (falsos), y uno justo después de «Llegaste» en `buscar-a`.
+- Gasto de VisionX en la API en la noche: 19 consultas, 0,10 USD (`outputs/vlm/gasto.jsonl`).
+
+**Incidente con la key (19/11, corregido).** Se había guardado la key de VisionX como variable de
+usuario `ANTHROPIC_API_KEY`. Al reiniciarse la sesión de Claude Code, la CLI la tomó sola y cobró
+la conversación a esa key hasta agotar sus 5 USD (el tope de 2 USD solo controlaba a VisionX).
+Corrección: la variable se borró; la key vive en `~/.visionx/anthropic_api_key` (solo el usuario
+puede leerla), el asistente la lee de ahí y se la pasa explícita al SDK, ignora
+`ANTHROPIC_API_KEY`, y los tests no pueden encontrarla. Regla: **nunca** guardar la key de
+VisionX como `ANTHROPIC_API_KEY` (tampoco en la Mac) y usar un workspace con tope de gasto.
+
+**Límites.** Todo sobre clips grabados en la PC de escritorio: falta la prueba en vivo en la Mac
+(latencia real de punta a punta, micrófono, red del lugar). El asistente necesita internet; la
+voz también (lo frecuente está en caché). Las respuestas de Claude no tienen un test cuantitativo
+(solo 20 casos de comparación y las demos). La alerta no se probó con CREStereo ni caminando.
+`scripts/profundidad/descargar_crestereo.py` falla en Windows al borrar `.git` (solo lectura).
+
+**Próximo paso.** Prueba en vivo en la Mac con `docs/PRUEBA-EN-VIVO.md` (Tomás y Bauty);
+`latencias --traza` para la tabla; probar la alerta con `proximity.enabled: true` y CREStereo.
+
 ## 2026-11-19 — T12: red de alineación implementada, sin entrenar
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-red-alineacion`.
@@ -322,6 +826,48 @@ por defecto). Sigue sin existir la regla que decide cuándo aplicar una correcci
 comparador final; generador de etapa 2; red de alineación (22–26/11). Bauty: sesión `s1` del
 banco y pares con distancia medida y la cámara apretada a propósito.
 
+## 2026-11-18 — T07: la app dice el estado de la cámara que mande CREStereo adaptable
+
+**Tareas:** T07 (para T12). **Persona/agente:** Tomás / Claude Code. **Rama:** `b/beta-integracion`.
+
+**Acordado con Bauty (18/11).** El estimador avisa el estado global de la cámara en cada
+`DepthResult` con `status=UNMEASURABLE` y `reason` = `alineando` | `camara-desconocida` |
+`no-medible`, opcionalmente seguido de «: detalle». Sin cambios de contrato.
+
+**Hecho.** `app/camera_status.py`: observador del controlador que dice la frase de
+`camera_status.frases` cuando el estado dura `hold_s` (1 s), la recuerda cada `repeat_s` (60 s)
+y dice «Listo, ya puedo medir distancias.» al volver a medir. Habla con un `request_id` propio:
+no corta ni vence con la orden activa; «repetí» lo repite. Conectado en `ejecutar` y en las
+demos. Con B0 (siempre VALID) no dice nada. Tests: 8 nuevos, suite 1040 OK.
+
+**Límites.** Sin estimador real que mande los códigos: probado con resultados sintéticos.
+Pendiente del mismo acuerdo: «no estoy seguro» por objeto (umbral de Bauty en el locator),
+«calibrar distancia» (método opcional del estimador) y el par crudo para la etapa 2.
+
+## 2026-11-18 — T08: voz de la app pasa a Mateo (Edge) con Piper de respaldo
+
+**Tarea:** T08. **Persona/agente:** Tomás (elección) / Claude Code. **Rama:** `b/beta-integracion` (PR #27).
+
+**Hecho.** Tomás descartó las voces locales (Piper daniela, claude, davefx, sharvard; Kokoro dora,
+alex, santa: «suenan robóticas») y eligió `es-UY-MateoNeural` entre 8 voces neuronales de
+Microsoft Edge en español latino (muestras en `outputs/voz/voces-naturales/`, no versionadas).
+Se descartó clonar la voz propia: F5-TTS en español tardó ~38 s por frase en la PC de escritorio
+(CPU). Integración: `audio.tts.engine: edge` (`EdgeSynth` → `DiskCachedSynth` → `FallbackSynth`
+con Piper `es_ES-davefx-medium`), dependencia `edge-tts` en el extra `voz`.
+
+**Evidencia (PC de escritorio, red doméstica, 18/11).** Primera vez de cada frase: 1,1–2,1 s hasta
+tener el audio completo (Piper: ~0,15 s); desde la caché en disco, ~1 ms. Edge agrega ~150 ms de
+silencio antes y 0,8–1,2 s después: se recortan (quedan 30/120 ms). Ya recortada, Mateo dura
+0,03 s + 61 ms por carácter (10 frases de guía), dentro de la estimación de los modos
+(`speech_base_s` 0,3 + 0,065/car): no se cambió. Tests 1032 OK (7 nuevos de voz, sin red).
+
+**Límites.** Necesita internet: en la expo, sin red, la app habla con Piper y cambia de voz. El
+texto leído por «leé» y las descripciones se envían a Microsoft. Latencia en la Mac y con la red
+del lugar sin medir. Las frases nuevas suman ~1,5 s a la primera respuesta hasta que quedan en
+caché.
+
+**Próximo paso.** Precalentar la caché con las frases frecuentes de la guía antes de la expo y
+probar la voz en el bucle con micrófono (Tomás).
 ## 2026-11-18 — T12: compuerta de CREStereo (wrapper, latencia, cinta y robustez)
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-compuerta-crestereo`
@@ -388,6 +934,7 @@ cuadros en frío, que cuestan lo mismo que una.
 **Próximo paso (Bauty / Claude Code).** Medir el continuo contra el preciso en escenas naturales;
 repetir robustez con las capturas del precinto y con el clásico promediado en el tiempo; después,
 generador de etapa 2 y red de alineación (22–26/11).
+
 
 ## 2026-11-18 — Decisión: T12 pivotea de Fusion a CREStereo adaptable (solo planificación)
 
@@ -493,6 +1040,362 @@ No cambia la decisión del 17/11.
 **Próximo paso.** Grabar la sesión `s1` (Bauty, con la cámara); después, herramienta para marcar
 los stickers en la imagen izquierda rectificada y evaluador por puntos.
 
+## 2026-11-17 — T08: prueba de micrófono (M10 voz) con Whisper base y small
+
+**Tarea:** T08. **Persona/agente:** Tomás (locutor) / Claude Code. **Rama:** `b/beta-integracion`.
+**Equipo:** PC de escritorio (i7-10700K, CPU), micrófono Yeti Nano (WASAPI, 48 kHz → 16 kHz),
+habitación con ruido bajo, ~30 cm de la boca. Una persona, una sesión.
+
+**Hecho.** `protocolos voz plantilla|grabar|evaluar` con las 61 frases de T08: 61/61 tomas
+aceptadas al primer intento; las mismas WAV pasaron por faster-whisper base y small (int8,
+`initial_prompt` de la config). Evidencia: `outputs/voz/tomas-1117/resultados/` (fuera de Git).
+
+| Modelo | intención | objeto (n = 24) | STT P50 / P95 |
+|---|---|---|---|
+| base | 78,7 % | 70,8 % | 421 / 457 ms |
+| small | **96,7 %** (59/61) | 95,8 % | 1347 / 1783 ms |
+
+- **Decisión: Whisper small** (ya era el default): supera el umbral de M10 (≥ 90 %); base no.
+- Los 2 fallos de small son la «ll» rioplatense: «Llevame a la silla» → «Chebame la silla»,
+  «Callate» → «Cachate» (este es un modo de cancelar). Base además falla en «Leé la etiqueta» →
+  «Leila etiqueta», «Stop» → «Esto», «Buscá el teclado» → «Buscal de clado».
+- Costo: ~1,35 s de STT por orden; en vivo, orden → primera palabra estimado en 2–2,5 s.
+
+**Límites.** Un solo locutor y una sesión; las frases las leyó Tomás (no espontáneas). No mide
+latencia audible ni el botón en vivo.
+
+**Próximo paso.** Agregar variantes «sh» de «ll» (llevame, callate) a las reglas o al
+`initial_prompt` y validarlas con otra grabación (Bauty), no con esta misma; sesión en vivo
+con la ELP.
+
+## 2026-11-17 — Beta (tarde): profundidad a pedido, Fusion/B5 enchufables, M1, protocolos y revisión
+
+**Tarea:** T07, T08, T09, T10, T11 (y recepción de T12). **Persona/agente:** Tomás / Codex
+(implementación P1–P5, F1, F2, revisión R1) y Claude Code (coordinación, revisión, integración).
+**Rama:** `b/beta-integracion` (PR #27), con `main` integrado en `60d0135` (PR #28 Fusion y #29
+ubicación de A). **Equipo:** i7-10700K, Windows 11, CPU.
+
+**Objetivo.** Avanzar sin Fusion lo que la beta necesita: profundidad precisa a pedido con lugar
+para Fusion, arreglos de buscar/distancia, M1 automatizado, M9 en esta PC y herramientas de
+anotación para M7/M8/M10.
+
+**Hecho.**
+- **Profundidad a pedido (P1, `141a92e`, `98290da`).** `app/depth_registry.build_estimator`
+  arma B0–B5, `fusion` (con `load_estimator` de A sobre la config completa, `87cb0fd`) y
+  entradas de `depth.estimadores` (fábrica o `{tipo: fusion, paquete}`). `--profundidad-precisa`
+  hace que distancia y describir pidan una medición en un worker aparte (`app/precision.py`),
+  con espera `depth.precisa.espera_s` y caída a la continua. Comando
+  `python -m visionx.app recibir-profundidad NOMBRE --contra ...` para recibir un estimador.
+- **Buscar/distancia (P2, `8c8781c`; F1, `93e902a`).** La elección entre iguales sobrevive a
+  una pérdida y no se repite «¿Cuál?» más de una vez cada 12 s; distancia sin objeto usa el
+  último pedido (60 s); «eso/esa» solo es referencia implícita; «la más cercana» ya no cae en
+  una instancia más lejana; leer conserva «no/ni/sin» y números («-5» → «menos 5»).
+- **M1 (P3, `97383fb`, `3428e99`).** `python -m visionx.app m1 --repeticiones 3`: 8 casos con
+  reloj virtual. El banco encontró audio viejo (guía de 1,12 s de edad): se agregó la vigencia
+  del hecho (`Say.valid_until_ns`, `AudioEvent.valid_until_ns` opcional, sin cambio de schema);
+  `AudioOutput` descarta lo vencido antes y después de sintetizar (`vencido-hecho`).
+- **Protocolos (P5, `954ce40`, `786bca2`, `abe2449`).** `python -m visionx.protocolos`
+  `voz|m7|m8|ocr|describir plantilla|evaluar`: planilla → comando → tabla (TECNICO).
+- **Revisión R1** del PR: 5 bugs confirmados. F1 arregló 1, 2 y 4; F2 (`948bd36`) el 3 (el aviso
+  de vencimiento se cortaba: ahora cada modo reserva la duración del cierre) y el 5 («Repetí»
+  sobrevivía a una orden nueva: ahora tiene id propio y se cancela). Si la orden repetida ya
+  venció, dice «Ya no está vigente. Pedilo de nuevo.» en vez de callar. Traza para M8:
+  `orden` con `request_id`/`issued_ns`/`deadline_ns`; `audio` con `started_ns`, `finished_ns`,
+  `valid_until_ns`, `fact_received_ns`, `fact_age_ms`.
+- **Ubicación de A adoptada** (`87cb0fd`): `build_spatial` devuelve `build_locator` de
+  `depth/spatial`; `spatial_provisional.usar: true` vuelve a la provisoria. Mide en disparidad:
+  un estimador sin `depth_m` ahora da metros.
+- **Vigencia de distancia 5 → 10 s.** Con F2 la respuesta ya no se corta, y eso mostró que una
+  respuesta con dos instancias («Veo 2 tazas: …», ~5,2 s estimados) nunca entraba en 5 s: el
+  primer pedido del clip decía «No pude medir a tiempo.» teniendo la medida (unión a los 2,1 s,
+  arranque en frío). Candidato sin medir, como el resto de `deadlines_s`.
+
+**Evidencia.**
+- Suite con extras: 1022 aprobados; core (`outputs/venv-core`): 893 aprobados y 8 omitidos. Ruff OK.
+- M1 ×3 (`outputs/beta/final3/m1`): los 8 casos PASAN 3/3, cero audio viejo, cancelación lógica
+  P95 ≤ 200 ms, detección → bip P95 ≤ 500 ms (lógicos, con reloj virtual).
+- Recepción sobre `dev-1114-distancias` (5 pares, 1280×720; cinta 0,50 / 1,00 / 1,00 m):
+
+  | Método | P50 / P95 ms | vaso | taza | botella |
+  |---|---|---|---|---|
+  | B0 | 280 / 377 | 0,525 | 1,069 | 1,035 |
+  | B4 | 1531 / 1619 | 0,528 | 1,081 | 1,043 |
+  | B5 | 1647 / 1717 | 0,528 | 1,081 | 1,046 |
+
+- Humo de los 4 modos sobre clips con la ubicación de A (`outputs/beta/final3/`): 0 errores;
+  61 frases reproducidas y 1 guía descartada por vencida (en `buscar-a`, justo al «Repetí»).
+  Buscar espera la elección entre dos botellas (recuerda a los 12 s) en vez de elegir sola;
+  «¿A qué distancia está?» tras buscar mide la botella (antes: una bicicleta).
+
+**M9 de la app en esta PC** (`outputs/m9/exp2/`, scripts `outputs/m9/correr.py` y
+`analizar.py`, fuera de Git). `ejecutar` sobre 120 s de `dev-1114-escenas` (yolo26s @960,
+1280×720), una corrida por variante, en serie y sin otra carga; 50 eventos de calentamiento.
+Detector n = 420–510; profundidad n = 190–250 (B2: 76), menos que los 300 del protocolo.
+
+| Variante | detector P50/P95 | profundidad P50/P95 | edad de la unión P50/P95 | uniones/s |
+|---|---|---|---|---|
+| B0, replay sin ritmo | 207 / 268 | 424 / 476 | 812 / 1056 | 2,1 |
+| B0, ritmo real | 199 / 228 | 418 / 439 | 797 / 953 | 2,1 |
+| B0, ritmo real, torch 6 hilos | 208 / 286 | 323 / 459 | 703 / 1031 | 2,6 |
+| B0, ritmo real, torch 6 + OpenCV 4 | 241 / 292 | 409 / 484 | 875 / 1022 | 2,2 |
+| B2, ritmo real | 206 / 291 | 878 / 1032 | 1282 / 1570 | 1,1 |
+| B0 + B4 a pedido, ritmo real | 203 / 258 | 384 / 474 | 781 / 1052 | 2,3 |
+
+(ms.) Orden → primera frase de describir: 906 ms con B0 (n = 3); 2000 ms con B4 a pedido.
+- Replay con o sin ritmo da lo mismo: la carga de captura no explica la lentitud.
+- B0 tarda ~420 ms dentro de la app contra 61 ms solo: compite con YOLO (torch usa 15 hilos
+  por defecto). Con `detection.threads: 6` baja a 323 ms y la unión gana ~0,5 uniones/s;
+  acotar OpenCV a 4 hilos empeora. Con una corrida por variante no alcanza para cambiar el
+  default: queda como candidato para `configs/local.yaml` de esta PC.
+- **B4 a pedido no llega:** tarda ~2,2 s dentro de la app (1,5 s en la recepción, 1,1 s solo),
+  supera `depth.precisa.espera_s` (2 s) las 3 veces y se usa B0, con 2 s de espera perdidos.
+  En esta PC, B4 a pedido necesita `depth.precisa.compute: [640, 360]` (0,6 s en la prueba de
+  humo de P1, mismos metros que B0) o no usarse; Fusion (~2× B4 en la Mac) tampoco entraría
+  a 1280×720 en esta CPU.
+
+**Problemas.** Codex se quedó sin créditos a las 10:38 con F2 casi terminado (faltaba la
+verificación final, que hizo Claude Code). El CI de macOS del PR #27 falló porque GitHub no
+asignó máquina («job was not acquired», capacidad), no por un test.
+
+**Límites.** Sin ELP, micrófono ni parlantes reales; clips de desarrollo de una sesión. Las
+vigencias y la espera de la precisa son candidatos. Fusion no se probó: el paquete está en la Mac.
+
+**Próximo paso.** Prueba de micrófono (CHECKLIST §0); recepción de Fusion cuando Bauty suba el
+paquete a Drive `pesos/fusion/`; sesión en vivo con la ELP.
+
+## 2026-11-17 — Tiempos por componente en la PC de escritorio (Windows CPU, sin carga ajena)
+
+**Tarea:** T06, T05 (uso en T07), T08, T10. **Persona/agente:** Tomás / Claude Code.
+**Rama/commit:** `b/beta-integracion` (`8cd497c` + merges). **Equipo:** i7-10700K, 32 GB,
+Windows 11, Python 3.11.18, torch 2.15.0+cpu (8 hilos). Sin otros procesos pesados durante la
+medición. Datos: pares de `dev-1114-distancias` (1920×1080 por ojo, rectificados).
+
+| Componente | Comando | Resultado |
+|---|---|---|
+| yolo26s-seg @960 | `detection medir --max 60 --imgsz 960` | total P50 163 ms, P90 230 ms (red 153 ms) |
+| yolo26n-seg @960 | ídem | P50 70 ms, P90 75 ms |
+| yolo26s-seg @640 | `--imgsz 640` | P50 83 ms, P90 88 ms |
+| yolo26n-seg @640 | ídem | P50 39 ms, P90 42 ms |
+| SGBM B0 | `depth latencia --metodo B0 --calentamiento 10 --medidos 60 --pares 30` | 640×360: 12 ms · 960×540: 28 ms · 1280×720: 61 ms (P50) |
+| SGBM+WLS B2 | ídem `--metodo B2` | 640×360: 30 ms · 960×540: 68 ms · 1280×720: 134 ms |
+| B4 (DA V2 Small en CPU) | `--metodo B4 --calentamiento 5 --medidos 30 --pares 20` | 640×360: 263 ms · 1280×720: 1081 ms |
+| Piper es_AR-daniela-high | `voice bucle` | síntesis mediana 141 ms por frase (61 frases) |
+| faster-whisper base / small, int8 | `voice bucle --whisper base small` | STT mediana 443 / 1392 ms; P90 512 / 1449 ms |
+| RapidOCR (de la entrada T10) | `reading evaluar` | ~300 ms por frame (240–410 ms según recorte) |
+
+- La laptop daba ~500 ms por frame para yolo26s @960 (BITACORA 2026-11-15); acá son 163 ms.
+- Con lo que usa la beta en vivo (yolo26s @960 + B0 a 1280×720, en hilos separados), el
+  detector es el componente lento: ~6 detecciones/s como techo, antes de captura y rectificación.
+- B4 en CPU (~1,1 s a 1280×720) no sirve en vivo en esta PC; la app ya ofrece solo B0–B2.
+- `voice bucle` usa frases **sintetizadas con Piper**: 36/61 (small) y 29/61 (base) órdenes
+  interpretadas bien. Es un mal sustituto de una persona; decide la prueba de micrófono.
+- **OpenVINO descartado.** `yolo26s-seg` exportado a OpenVINO (instalado solo para la prueba con
+  `uv run --with openvino`, sin tocar el lock), 61 imágenes de distancias y escenas, imgsz 960:
+  P50 188 ms contra 149 ms de PyTorch en la misma corrida, y detecciones distintas (494 contra
+  557; 468 coinciden con misma clase e IoU > 0,9; |Δscore| mediana 0,027, máx. 0,28). No se
+  incorpora. Script: `outputs/bench/ov/cmp.py`.
+
+**Límites.** Una sola corrida por componente, sin las tres repeticiones de M9; tiempos de componente,
+no de punta a punta (M1). No representan la Mac de la demo.
+
+**Próximo paso.** Medir punta a punta en vivo con la ELP (orden → primera palabra) y elegir
+Whisper base o small con la prueba de micrófono de Tomás.
+
+## 2026-11-17 — Beta de los 4 modos: integración local y pruebas de humo sobre clips
+
+**Tarea:** T07, T09, T10, T11. **Persona/agente:** Tomás / Claude Code (coordinación, revisión e
+integración). **Rama:** `b/beta-integracion` (local, sin publicar), que une `b/T07-vivo`,
+`b/T08-reglas`, `b/T10-leer` y `b/T11-describir` sobre `8e0a94a`.
+
+**Objetivo.** Dejar los cuatro modos (buscar/guiar, distancia, leer, describir) listos para la
+beta en vivo con la ELP, probados de punta a punta sobre clips.
+
+**Hecho.**
+- `b/T07-vivo` `c26cf1a`: con el botón de hablar apretado, `ejecutar` no llama a
+  `controller.tick()`. Antes la guía podía hablar durante la grabación y, con parlantes, el
+  micrófono grababa la voz de VisionX encima de la orden. La vigencia se revisa al soltar.
+- Integración: T10 y T11 corrigieron lo mismo en `Controller` (una orden nueva cancela el audio
+  de un modo que ya terminó). Se conservó la versión de T10, que además corta ese audio al
+  vencer la orden. `modes/__init__.py` y `configs/default.yaml`: unión de ambos.
+- Guiones de órdenes para cada clip y checklist de la sesión en vivo (fuera de Git:
+  `outputs/beta/ordenes-*.jsonl`, `outputs/beta/CHECKLIST.md`).
+- `b/T08-reglas` `5be9e7b`: las reglas aceptan «encontré», «encuéntrame», cualquier «descri…»
+  («descríme») y «cuéntame», que Whisper escribió en el bucle con Piper. Sobre las mismas
+  transcripciones del bucle: small 36/61 → 39/61; base sin cambios (29/61). El resto de los
+  fallos del bucle son de reconocimiento de la voz sintética («¡Givas!» por «¿Qué ves?»).
+  Este commit se hizo por error salteando el hook de pre-commit; ruff se había corrido antes y
+  el hook se corrió a mano después, sin problemas.
+
+**Evidencia.** Suite en `b/beta-integracion` (`99830cc`, con las rondas 4 de T10/T11 y T08):
+**614 aprobados** con todos los extras; **611 aprobados y 3 omitidos** en un entorno
+solo-núcleo como CI. Ruff y formato OK.
+
+Prueba de humo final, CPU libre (`outputs/beta/final2/`), orden → primera frase útil:
+
+| Modo | Latencia | Ejemplo dicho |
+|---|---|---|
+| Distancia | 0,6–2,5 s (2,5 s en la primera orden, a 1,5 s de arrancar) | «Veo 2 tazas: a la izquierda, a 1,1 metros; a la derecha, abajo, a 0,5 metros.» |
+| Buscar | 0,1 s a la primera frase | «Veo 2 botellas. ¿Cuál?…», «Botella al frente, a 1,6 metros.», «Perdí botella: quedó a la izquierda.» |
+| Leer | 0,9–1,2 s | «TITA» «EXCESO EN AZÚCARES»… · «FORCE AMAZING ASHWA» · «fusion» |
+| Describir | 0,9–1,3 s | «Al frente, una silla a 1,5 metros. A la derecha, tres sillas, la más cercana a 0,6 metros, y 3 cosas más.» |
+
+Las corridas sobre clips no son deterministas: qué frames se saltean depende de los tiempos de
+cada hilo (en una corrida «buscar» preguntó «¿Cuál?» al empezar y en la otra no).
+La primera tanda, antes de las rondas 4 y con la CPU compartida con dos agentes:
+Pruebas de humo con el pipeline real (`python -m visionx.app ejecutar --fuente <clip> --detector
+yolo --profundidad B0 --sin-ventana --ordenes ... --traza ...`), yolo26s-seg @960, SGBM B0,
+Windows i7-10700K CPU, **con la CPU compartida con dos agentes**: tiempos solo indicativos.
+
+| Clip | Órdenes | Respuesta | Errores |
+|---|---|---|---|
+| distancias | distancia a taza y a botella; describí | «Veo 2 tazas: a la izquierda, a 1,1 metros; a la derecha, abajo, a 0,5 metros.» «Botella a la izquierda, a 1 metro.» (cinta 1,00 / 0,50 / 1,00 m). Orden → respuesta ~1,2 s | 0 |
+| buscar-a | buscá botella, distancia, otra búsqueda, repetí, cancelar | bip, guía, «Perdí botella: quedó a la derecha», «Llegaste… a 0,6 metros», «Veo 2 botellas. ¿Cuál?…», repetir y cancelar correctos | 0 |
+| lectura | leé ×4 y cancelar | ver entrada T10 | 0 |
+| escenas | describí ×5 | ver entrada T11 | 0 |
+
+Trazas JSONL y logs: `outputs/beta/humo-*.{jsonl,log}` (local; subir a Drive con la beta).
+
+**Problemas.**
+- El guion de `distancias` tenía órdenes después del final del clip (dura 20 s): se corrigió.
+- Clips incompletos **en el propio Drive**: `lectura-b` (118 de 1222 imágenes), `iguales`
+  (vacío) y `m2` (solo `frames.jsonl`). `verificar` lo detecta; hay que volver a subirlos.
+
+**Límites.** Sin ELP, micrófono ni parlantes reales; el reproductor fue el fake del modo sin voz.
+Sin anotación manual: no hay M7/M8/M10. Ver tiempos con la CPU libre en la entrada de mediciones.
+
+**Próximo paso.** Prueba de micrófono con Tomás (`outputs/voz/prueba_mic.py`); sesión en vivo con
+la ELP siguiendo el checklist; publicar los PR cuando Tomás lo decida.
+
+## 2026-11-17 — T11: describir con plantilla local, agrupado por zona y dos niveles de confianza
+
+**Tarea:** T11. **Persona/agente:** Tomás / Codex (implementación, 3 rondas), Claude Code
+(especificación, revisión, commits). **Rama:** `b/T11-describir`: `546d9e6`, `d066b8f`, `8cd497c`,
+`ec5f08a` (4 rondas).
+
+**Hecho.**
+- `modes/describe.py::DescribeHandler`: congela una unión medida posterior a la orden (misma
+  regla de frescura que distancia); si no llega en `describe.wait_measure_s`, describe con lo
+  visto, sin metros. Interfaz `SceneNarrator` con `TemplateNarrator`; el futuro VLM se enchufa
+  ahí y no puede generar distancias. Metros solo desde `SpatialObject` con `SPEAK_METERS` y
+  dentro de `depth.range_m`.
+- Ronda 2: un enunciado por zona con lista natural («A la derecha, tres sillas, la más cercana a
+  0,6 metros, y una botella…»), score mínimo propio y persistencia (2 frames en 3 s), y
+  presupuesto de ~8 s hablados.
+- Ronda 3: dos niveles. Afirma con score ≥ 0,60 persistente; dice «parece haber…» con score
+  ≥ 0,27 persistente, nunca con metros. Pisos por clase para confusiones vistas en desarrollo
+  (cama/ropa, banco y portátil/estructura de jardín, banana/peluche, horno/lavarropas). «No
+  reconozco objetos…» solo si no queda ningún candidato persistente.
+- Ronda 4 (`ec5f08a`): la ronda 3 quitaba todos los metros para entrar en 8 s («A la izquierda,
+  una silla, una botella y una taza.»). Ahora el recorte sigue prioridades: (1) metros del
+  objeto afirmado más cercano, que nunca se quitan; (2) nombres por relevancia; (3) metros del
+  resto; (4) los «parece haber». Cláusulas con metros: escenas 2 → 11, distancias 0 → 2; duración
+  máxima estimada ≤ 8 s y 0 sin respaldo en ambas.
+
+**Evidencia** (clips de desarrollo `escenas` y `distancias`, simulador con yolo26s @960 + B0;
+revisión visual de un agente, no anotación humana independiente):
+
+| Métrica, 7 fases comparables | R1 | R2 | R3 |
+|---|---:|---:|---:|
+| Objetos reales mencionados | 29 | 15 | 27 |
+| Afirmaciones sin respaldo | 4 | 0 | 0 |
+| Reales de R1 que se pierden | — | 12 | 5 |
+
+- Calibración de R3: 39 frames, 247 candidatos revisados (197 con respaldo y 50 sin él). Con dos
+  frames a 0,60: 99 reales y 0 falsos; con pisos + 0,27: 163 reales y 8 falsos (4,7 %). Se eligió
+  0,27 como el máximo de reales con ≤ 5 % sin respaldo. Detalle: `outputs/t11/` del worktree.
+- Duración estimada (65 ms/carácter): 13/13 respuestas ≤ 8 s (R1: 9 de 13 superaban 8 s).
+- Suite: 514 aprobados en la rama (con extras).
+
+**Límites.** Umbrales y pisos ajustados sobre los mismos clips de desarrollo con los que se
+evalúan: **no es una tasa de test** y puede estar sobreajustado. Persisten nombres imprecisos del
+catálogo COCO (taza por vaso; «pantalla»/televisor por monitor). La heladera no siempre persiste.
+Falta M10: 30 escenas anotadas por personas, audio real y Mac.
+
+**Próximo paso.** Anotar escenas propias con la ELP en la beta; VLM a pedido después.
+
+## 2026-11-17 — T10: leer con RapidOCR, recortes, orden por regiones y habla filtrada
+
+**Tarea:** T10. **Persona/agente:** Tomás / Codex (implementación, 3 rondas), Claude Code
+(especificación, revisión, commits). **Rama:** `b/T10-leer`: `8d810d7`, `2d997c4`, `de17327`,
+`aa60c3e` (4 rondas).
+
+**Hecho.**
+- `visionx.reading`: interfaz `TextReader`, backend RapidOCR 3.10.0 + ONNX Runtime CPU con
+  modelos PP-OCRv5 latin fijados por hash (`python -m visionx.reading descargar`), `FakeReader`
+  para tests. Extra `ocr` en `pyproject.toml`; se excluye `opencv-python-headless` como ya se
+  hacía con `opencv-python`, para no pisar el cv2 de contrib.
+- `modes/read.py::ReadHandler`: elige la izquierda más nítida (varianza del Laplaciano) dentro
+  de `reading.window_s` desde la orden; OCR en un worker persistente, fuera del hilo del
+  controlador; cancelable (una inferencia ONNX en curso termina en segundo plano y se descarta).
+- Ronda 2: recortes configurables (`reading.crop`: none, center, text, object; se eligió
+  `center` 60 %), orden visual por regiones (los sellos «EXCESO EN…» ya no se intercalan) y
+  lectura con el título primero, con tope de bloques y «…y más texto chico.».
+- Ronda 3: renglones de una región unidos en una frase; filtro **solo para hablar**
+  (`speech_min_score` 0,90 + heurística de palabra plausible). La evaluación usa todos los
+  bloques aceptados.
+- `python -m visionx.reading evaluar`: CER contra la etiqueta completa de `textos.txt`, más
+  recall/precisión de palabras y aciertos numéricos, por objeto × distancia.
+
+**Evidencia** (`lectura`, 7 segmentos completos de 3 envases a 0,25/0,5/1 m; n = 1 frame por
+segmento; Windows CPU):
+
+| | R1 | R2 (center 60 %) | R3 |
+|---|---:|---:|---:|
+| Recall de palabras de referencia (macro) | 9,3 % | 10,4 % | igual que R2 |
+| CER de etiqueta completa (macro) | 91,0 % | 88,4 % | igual que R2 |
+| Números acertados | 0/19 | 0/19 | 0/19 |
+| Precisión de lo **hablado** | — | 77,3 % | 95,8 % (23 correctas, 1 fuera de referencia) |
+
+- Lo hablado, prueba de humo antes → después de R3: Tita «TITA» «Terrabus» «EXCESO EN»
+  «AZÚCARES»… → «TITA» «Terrabus» «EXCESO EN AZÚCARES» «EXCESO EN GRASAS TOTALES»…; Ashwa
+  «ASHWA» «FORCE» «HEWLOOE» «AMAZING» → «FORCE AMAZING ASHWA»; Fusion «fusion» «haur skin &na»
+  → «fusion». R3 pierde una palabra correcta («hair»).
+- OCR caliente: P50 ~300 ms por frame (rango 240–410 ms según recorte), CPU, 4 hilos.
+- Suite: 502 aprobados en la rama (con extras); 499 + 3 omitidos sin extras.
+
+- Ronda 4 (`aa60c3e`): el OCR se precalienta en segundo plano al armar la app, y la elección de
+  frame usa también los que llegaron hasta `reading.pre_s` = 0,8 s antes de la orden, con
+  `window_s` = 0,4 s después y corte temprano si la nitidez ≥ 90. Para que «leer» guarde frames
+  sin orden activa, `Controller.tick` llama a `observe(view, now)` de los modos que lo tienen
+  (liviano; la nitidez se calcula en el worker). Orden → primera palabra en la traza del
+  pipeline con reproductor fake: «Leé.» 3,50 → 1,28 s; «¿Qué dice?» 1,97 → 0,50 s; «Leé la
+  etiqueta.» 2,14 → 0,61 s; «Leeme esto.» 2,09 → 0,95 s. Calidad en los 7 segmentos: precisión
+  hablada 95,8 → 96,0 %, recall 8,8 → 9,2 % (se pierde «Terrabusi» y se ganan dos palabras).
+
+**Hallazgo.** La letra chica no se puede leer con la ELP a 1920×1080: ningún recorte la recupera,
+porque recortar no agrega detalle que el sensor no capturó. La beta lee títulos y leyendas
+grandes; a 1 m casi solo el título. Los CER altos también reflejan que la referencia incluye
+leyendas que no se ven desde ese ángulo.
+
+**Límites.** 3 envases, n = 1 por celda, sin repeticiones: muy lejos de los 30 textos de M10.
+`lectura-b` está incompleto en Drive (sus 2 segmentos quedaron como piloto parcial). Sin audio
+real; tiempos de Windows CPU, no de la Mac.
+
+**Próximo paso.** En la beta, probar lectura a 25–40 cm, que es donde funciona; grabar textos
+propios para M10.
+
+## 2026-11-16 — PC de escritorio de Tomás como equipo de pruebas Windows
+
+**Tarea:** T01/T02. **Persona/agente:** Tomás / Claude Code.
+
+**Hecho.**
+- Tomás pasa a probar en su PC de escritorio: i7-10700K (8 núcleos/16 hilos), 32 GB, AMD RX 5700
+  XT. **Sin CUDA:** la RX 5700 XT (RDNA1) tampoco tiene ROCm en Windows; todo corre en CPU. La
+  laptop deja de usarse para medir.
+- Clon en `D:\VisionX`; uv 0.13.8, Python 3.11.18, extras ml/deteccion/voz/ocr; `doctor` OK.
+- **Bloqueo resuelto:** el DNS de Movistar resolvía `files.pythonhosted.org` a 127.9.9.9
+  («walledgardenloopback.telefonica»), así que no se podía bajar ningún paquete de PyPI. Tomás
+  puso 1.1.1.1/8.8.8.8 en la placa de red. Si vuelve a fallar `uv sync`, revisar esto primero.
+- Pesos: yolo26s-seg (SHA-256 `3da1d83e…`, igual al de la BITACORA del 15/11), yolo26n-seg
+  (`361fbfab…`), Piper es_AR-daniela-high, faster-whisper small y base, DA V2 Small y RapidOCR.
+- Clips de Drive copiados a `recordings/` (18 868 archivos, 5,4 GB) y calibraciones a
+  `data/calibraciones/` (978). `camera verificar`: lectura 2035/2035 pares con hash correcto.
+  Incompletos en Drive: `lectura-b`, `iguales` y `m2` (ver entrada de la beta).
+- Audio: micrófono por defecto Yeti Nano, salida auriculares HyperX. `voice decir`: síntesis 2,7 s
+  para 5,5 s de audio y 0,8 s hasta que empieza a sonar (primera llamada).
+- Cámaras: solo está conectada la C922; la ELP no se probó en esta PC.
+
+**Límites.** Ninguna medición de esta PC representa la Mac de la demo.
 ## 2026-11-17 — T09 (parte A): ubicación espacial en `depth/spatial/`
 
 **Tarea:** T09, parte de A. **Persona/agente:** Bauty / Claude Code (coordinador + subagente).
