@@ -40,6 +40,41 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T15/T12: GT sintético de Replica con la geometría de la ELP, generado
+
+**Tareas:** T15, T12, T13. **Persona/agente:** Tomás (decisión A + C) / Claude Code. **Rama:**
+`b/gt-sintetico` (sobre `b/incertidumbre-voz`: usa `shared.uncertainty`).
+
+**Hecho.**
+- `scripts/gt_sintetico/render_habitat.py` (entorno de Habitat-Sim, en WSL): pares rectificados
+  con la geometría de la ELP (fx 601 px, 116°, 5,98 cm) y de una cámara `distinta` (90°, 12 cm),
+  Z exacta e instancias del ojo izquierdo, apuntando a objetos desde 0,5–4 m a 1,2–1,4 m de altura.
+- `visionx.gtsynth`: lectura, tabla de objetos con la misma distancia de referencia que el
+  ubicador (percentil 20 de Z visible), clases de Replica -> COCO, partición fija por escena
+  (8 train / 4 val / 6 test congelado), cámaras hermanas al vuelo con el generador de etapa 2 de A
+  (solo lectura), `verificar` y `evaluar` (CREStereo + ubicador con la máscara exacta; error por
+  rango, cobertura del 90 % y factor de b para val). Tests: `tests/test_gtsynth.py`.
+- Guía: [GT-SINTETICO](GT-SINTETICO.md).
+
+**Evidencia.** 1440 vistas (720 `elp` + 720 `distinta`) en 65 min, 12 GB, en Drive
+`VisionX-artefactos/gt-sintetico-elp/`. Verificación de 108 vistas (3 por escena y cámara): la
+izquierda reconstruida desde la derecha con la Z del render tiene 2,9 niveles de gris de error
+medio en zonas con textura (ELP; 3,5 la distinta) contra 13,3 (23,9) con ±10 % de disparidad:
+la convención de profundidad, el centro y la separación son los correctos. 15 088 objetos `elp`;
+con clase del detector y a 0,5–4 m: 2413 train, 1115 val, 1990 test.
+
+**Problemas en el camino.** Habitat-Sim no corre en Windows: WSL + micromamba sin `sudo`, faltaba
+`libOpenGL.so.0` (conda-forge `libopengl`) y con `gpu_device_id = 0` busca CUDA (AMD: -1). Con la
+config del dataset de Replica dibuja `mesh.ply` con PTex (no soportado) y sale negro: se carga
+`mesh_semantic.ply` directo. La primera verificación marcaba «mal» vistas de paredes lisas (la
+mediana da 0 con cualquier disparidad): se mide solo en píxeles con textura.
+
+**Límites.** Ver GT-SINTETICO: escaneo estático sin gente, huecos de escaneo en algunos FRL,
+texturas por vértice, pinhole ideal sin ruido. Es la cantidad; la realidad la da el banco ELP (C).
+
+**Próximo paso.** Bauty (Mac, con la U-Net): `gtsynth evaluar` en val con `elp`, `hermana-0.5`,
+`hermana-1` y `distinta`; con val, el factor de b. Test una sola vez, al final.
+
 ## 2026-11-19 (noche) — T13: la incertidumbre llega a la voz (tres niveles) y se verifica
 
 **Tareas:** T13, T11, T15. **Persona/agente:** Tomás (pedido; devolución de la cátedra) / Claude
