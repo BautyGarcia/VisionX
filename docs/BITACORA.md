@@ -40,6 +40,40 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T13/T15: cómo llega la incertidumbre a la voz y mini dataset con ground truth
+
+**Tareas:** T13, T15. **Persona/agente:** Tomás (decisiones) / Claude Code (búsqueda y
+especificación). **Rama:** `b/decision-t12`.
+
+**Objetivo.** Responder a la devolución de la cátedra antes de que se diseñe la red de entrada:
+cómo entiende Sonnet el resultado de la red y con qué datos con verdad de referencia se mide.
+
+**Decisiones de Tomás.**
+- **Tres niveles de certeza** decididos por código (precisa / aproximada / no segura) a partir
+  del intervalo del 90 % por objeto; Sonnet solo los dice y se verifica que no agregue números.
+- **Mini dataset:** escenas sintéticas de Replica renderizadas con la geometría de la ELP (con
+  variantes de cámara hermana y distinta) + Booster (real, con máscaras revisadas a mano), los
+  dos a cargo de Tomás / Claude Code; el banco ELP con cinta sigue siendo de Bauty. El medidor
+  láser queda como mejora si hay uno en la facultad.
+
+**Hecho.** [INCERTIDUMBRE-Y-GT](INCERTIDUMBRE-Y-GT.md): contrato (qué tiene que entregar la
+profundidad: b calibrada, intervalo por objeto, confianza y estados de cámara,
+`calibrar_distancia`), cálculo del intervalo de Laplace, niveles y frases, formato para Sonnet,
+verificación, banco de 60 casos, generación y partición del sintético, Booster y métricas por
+objeto. Enlazado desde AGENTS (paso 6).
+
+**Búsqueda.** No hay un dataset real con estéreo + profundidad densa + labels de objetos en
+interiores: los estéreo reales (InStereo2K, Middlebury, Booster) no traen labels, y los de
+interiores con labels (NYU, ScanNet, Hypersim) no son estéreo. InStereo2K y Middlebury además
+probablemente los vio CREStereo. Replica: licencia de investigación o educación, sin
+redistribuir. Habitat-Sim no corre en Windows: el renderizador se decide en la factibilidad.
+
+**Límites.** Los umbrales de los niveles (10 % y 25 %) son iniciales y se ajustan en val. El
+sintético tiene brecha de dominio: el banco ELP sigue siendo la prueba real.
+
+**Próximo paso.** Claude Code: factibilidad del render de Replica y primeras vistas; descarga de
+Booster. Bauty: intervalo por objeto en el ubicador y factor de b.
+
 ## 2026-11-19 (noche) — Decisión T12: la red de entrada estima el campo de corrección (opción a); devolución de la cátedra
 
 **Tareas:** T12, T13, T15. **Persona/agente:** Tomás (decisión, acordada con Bauty) / Claude

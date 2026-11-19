@@ -10,6 +10,8 @@
    [PRUEBA-EN-VIVO](docs/PRUEBA-EN-VIVO.md); para medir y elegir la velocidad,
    [VELOCIDAD](docs/VELOCIDAD.md). La key de Claude de VisionX va en
    `~/.visionx/anthropic_api_key`, **nunca** como `ANTHROPIC_API_KEY`.
+6. Antes de diseñar o cambiar la red de profundidad (T12/T13): qué tiene que entregarle a la app
+   y con qué datos se la evalúa está en [INCERTIDUMBRE-Y-GT](docs/INCERTIDUMBRE-Y-GT.md).
 
 **Leer un plan no autoriza implementarlo.** Respetar el pedido concreto de la persona:
 planificación = documentación; implementación = código del alcance solicitado.
