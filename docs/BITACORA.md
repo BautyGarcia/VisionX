@@ -40,6 +40,63 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 — T12: red de alineación implementada, sin entrenar
+
+**Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-red-alineacion`.
+
+**Hecho (código).** `alignnet.py` (red, mapas de jacobiano y rayos, vector de calibración),
+`align_data.py` (fuentes InStereo2K y ELP, campo exacto en grilla gruesa), `align_train.py`
+(pérdida, entrenamiento, evaluación contra el clásico y `correct_right` para usarla a
+resolución de captura). CLI `alin-entrenar`, `alin-evaluar` y `hermanas --red`. Tests en
+`tests/test_crestereo_alignnet.py` (9). Diseño y uso en
+[TECNICO](TECNICO.md#red-de-alineación-implementación-1911).
+
+**Evidencia.** Tests sin GPU, cámara ni pesos: el jacobiano predice el campo de una corrección
+chica con menos de 0,02 px de error; el campo en grilla gruesa coincide con el exacto en menos
+de 0,05 px; la red sin entrenar ya mide la dirección de un corrimiento de filas conocido; con
+dos ejemplos, 40 pasos bajan la pérdida más de 30 %. Prueba de punta a punta en CPU con pocas
+muestras: entrenamiento y evaluación corren. Red: 0,70 M de parámetros, 275 ms por par en CPU.
+
+**Problemas en el camino.**
+- Sin entrenar, las celdas de los bordes de arriba y abajo miden basura (su pareja cae fuera de
+  la imagen) y arrastraban el ajuste. Se las excluye del ajuste.
+- El prior de los giros era más estrecho que corrimientos posibles con focales chicas; se
+  aflojó a 4° (pitch y roll) y 2° (yaw).
+
+**Lo que no se sabe todavía.** Si la red le gana al clásico. En la prueba chica, el clásico con
+lente dejó 0,15–0,6 px de error de campo: es una vara alta para una red que mide a 1/8 de
+resolución. No se entrenó: la Mac está reservada para la grabación del banco.
+
+**Próximo paso.** Cuando Bauty termine de grabar: `alin-entrenar` (estimado: varias horas en
+MPS), `alin-evaluar` y `hermanas --red`. Si no supera al clásico, probar la variante que corrige
+encima del clásico.
+
+## 2026-11-19 — Decisión: se hace la red de alineación, apuntada a lo que el clásico no cubre
+
+**Tarea:** T12. **Persona/agente:** Bauty (decisión) / Claude Code (propuesta y registro).
+**Rama:** `a/T12-red-alineacion`.
+
+**Decisión.** Se implementa la red de alineación. Con lo medido el 18 y 19/11, su objetivo es
+el tramo que el clásico no alcanza: en cámaras hermanas simuladas, el clásico con lente y una
+distancia conocida deja ~2–6 % de cambio de profundidad y la corrección densa exacta ~0,3 %. El
+clásico con regla queda como base, comparador y respaldo. La red no se hace cargo del
+corrimiento constante de columnas: eso lo arregla la distancia conocida.
+
+**Diseño elegido (propuesta del agente, aceptada).** Emparejado aprendido con correlación entre
+los dos ojos; las mediciones de filas pasan a giro, focal y resto radial con un ajuste de
+mínimos cuadrados dentro de la red; un resto denso, suave y que arranca en cero, para lo que esos
+parámetros no explican; la calibración entra por FiLM y por el mapa de rayos. Se entrena con el
+generador de etapa 2 sobre InStereo2K (cámaras virtuales variadas) y clips de desarrollo de la
+ELP, sin disparidad de referencia.
+
+**Cómo se va a juzgar** (escrito antes de entrenar): error del campo de corrección en px contra
+el clásico con lente, en validación simulada; y cambio de profundidad en el experimento de
+cámaras hermanas, sola y con distancia conocida, contra el clásico y el techo. Si no le gana al
+clásico, se informa así y el sistema usa el clásico.
+
+**Recursos.** El entrenamiento usa la GPU de la Mac: se lanza cuando Bauty termine de grabar el
+banco, para no competir con la cámara.
+
 ## 2026-11-19 — T12/T04: distancia conocida en cámaras hermanas y evaluador del banco
 
 **Tareas:** T12, T04, T15. **Persona/agente:** Bauty (indicó seguir sin supervisión durante la

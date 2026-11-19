@@ -959,6 +959,8 @@ def _siblings(args: argparse.Namespace) -> int:
     """
     from visionx.calibration import StereoCalibration
     from visionx.depth.crestereo_adapt import robustness
+    from visionx.depth.crestereo_adapt.align_data import ELP_SIZE
+    from visionx.depth.crestereo_adapt.align_train import correct_right
     from visionx.depth.crestereo_adapt.classic import ClassicParams, fit_significant, match_points
     from visionx.depth.crestereo_adapt.correction import homography, warp_image
     from visionx.depth.crestereo_adapt.lens import fit_lens, pull_maps
@@ -978,6 +980,11 @@ def _siblings(args: argparse.Namespace) -> int:
     range_m = (float(depth_cfg["range_m"][0]), float(depth_cfg["range_m"][1]))
     model, device = load_model(PortConfig.from_config(depth_cfg["crestereo"]))
     est = load_estimator(cfg, capture, args.modo, model=model, device=device)
+    network = None
+    if args.red:
+        from visionx.depth.crestereo_adapt.align_train import load_model as load_align
+
+        network = load_align(args.red, device)
     align_geom = capture.resized(capture.width // 2, capture.height // 2)
     small = (align_geom.width, align_geom.height)
     classic = ClassicParams()
@@ -1082,12 +1089,25 @@ def _siblings(args: argparse.Namespace) -> int:
                     perturbed, u + field[:, :, 0], v + field[:, :, 1], cv2.INTER_LINEAR
                 )
                 outputs["oraculo_denso"].append(run(frame, dense))
+                if network is not None:
+                    fixed = correct_right(
+                        network[0],
+                        network[1],
+                        frame.left,
+                        perturbed,
+                        capture,
+                        cal.right.D,
+                        ELP_SIZE,
+                    )
+                    outputs.setdefault("red", []).append(run(frame, fixed))
 
             # Distancia conocida: una medición sobre el primer par da el corrimiento constante de
             # disparidad que quedó (centro óptico y yaw no se ven en las filas). Se emula con la
             # referencia de ese par y se aplica a los demás, que son los que se evalúan.
             offsets: dict[str, float] = {}
-            for name in ("sin_corregir", "clasico_regla", "clasico_lente"):
+            for name in ("sin_corregir", "clasico_regla", "clasico_lente", "red"):
+                if name not in outputs:
+                    continue
                 outputs[f"{name}+distancia"], offsets[name] = _with_known_distance(
                     outputs[name], references[0], est.geometry, range_m
                 )
@@ -1278,6 +1298,104 @@ def _unc_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- red de alineación ---------------------------------------------------------------------
+
+# Clips de desarrollo de la ELP (14/11). `escenas` queda para validar y `distancias` afuera:
+# los dos se usan en las mediciones de robustez y de cámaras hermanas.
+ALIGN_TRAIN_CLIPS = tuple(
+    f"recordings/dev-1114-{name}"
+    for name in (
+        "acercarse-1",
+        "acercarse-2",
+        "acercarse-3",
+        "buscar-a",
+        "buscar-b",
+        "buscar-c",
+        "iguales",
+        "lectura",
+        "lectura-b",
+    )
+)
+ALIGN_VAL_CLIPS = ("recordings/dev-1114-escenas",)
+
+
+def _align_sources(args: argparse.Namespace) -> tuple[list[Any], list[Any]]:
+    from visionx.calibration import StereoCalibration
+    from visionx.depth.crestereo_adapt.align_data import ElpSource, InStereoSource, elp_frames
+    from visionx.depth.datasets.catalog import CATALOG
+
+    cfg = load_config(args.config)
+    info = CATALOG["instereo2k"]
+    data_root = Path(args.datos)
+    cal = StereoCalibration.load(ROOT / cfg["camera"]["calibration"])
+    train = [
+        InStereoSource(_unc_refs(info, data_root, "train", args.limite)),
+        ElpSource(cal, elp_frames([ROOT / c for c in ALIGN_TRAIN_CLIPS], args.cada)),
+    ]
+    val = [
+        InStereoSource(_unc_refs(info, data_root, "val", args.limite_val)),
+        ElpSource(cal, elp_frames([ROOT / c for c in ALIGN_VAL_CLIPS], args.cada_val)),
+    ]
+    if args.limite:
+        train[1].frames = train[1].frames[:: max(len(train[1].frames) // args.limite, 1)]
+    if args.limite_val:
+        val[1].frames = val[1].frames[:: max(len(val[1].frames) // args.limite_val, 1)]
+    return train, val
+
+
+def _align_train(args: argparse.Namespace) -> int:
+    from visionx.depth.crestereo_adapt.align_train import AlignTrainParams, train
+
+    run_dir = Path(args.salida)
+    if (run_dir / "meta.json").exists():
+        raise InvalidInput(f"{run_dir} ya tiene una corrida: elegí otra carpeta")
+    train_sources, val_sources = _align_sources(args)
+    params = AlignTrainParams(
+        epochs=args.epocas, batch=args.lote, seed=args.semilla, device=args.dispositivo
+    )
+    extra = {
+        "commit": _git_commit(),
+        "comando": " ".join(sys.argv),
+        "clips_train": list(ALIGN_TRAIN_CLIPS),
+        "clips_val": list(ALIGN_VAL_CLIPS),
+    }
+    meta = train(params, train_sources, val_sources, run_dir, extra_meta=extra)
+    print(f"mejor error de validación {meta['mejor_error_val_px']:.3f} px; corrida en {run_dir}")
+    return 0
+
+
+def _align_eval(args: argparse.Namespace) -> int:
+    from visionx.depth.crestereo_adapt.align_train import evaluate
+    from visionx.depth.crestereo_adapt.align_train import load_model as load_align
+
+    model, device = load_align(args.checkpoint, args.dispositivo)
+    _, val_sources = _align_sources(args)
+    result = evaluate(model, val_sources, device, seed="eval")
+    print("mediana del error del campo, px (columnas: sin su corrimiento constante)")
+    print(f"{'grupo':>20} {'n':>3} | {'sin corregir':>15} | {'clásico':>15} | {'red':>15}")
+    for group, st in result["resumen"].items():
+        cells = []
+        for name in ("sin", "clasico", "red"):
+            cells.append(f"{st[name + '_filas']:5.2f} / {st[name + '_columnas']:5.2f}")
+        print(f"{group:>20} {st['muestras']:3d} | " + " | ".join(f"{c:>15}" for c in cells))
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = Path(args.salida) / f"{stamp}-red-alineacion"
+    _write_report(
+        out_dir,
+        "alineacion.yaml",
+        {
+            "checkpoint": str(args.checkpoint),
+            "commit": _git_commit(),
+            "comando": " ".join(sys.argv),
+            "nota": "filas / columnas sin su corrimiento constante; mediana por muestra, en px",
+            "resumen": result["resumen"],
+            "muestras": result["filas"],
+        },
+    )
+    print(f"resultados en {out_dir}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m visionx.depth.crestereo_adapt",
@@ -1358,6 +1476,7 @@ def main(argv: list[str] | None = None) -> int:
     he.add_argument("--modo", default="preciso", choices=["preciso", "continuo"])
     he.add_argument("--pares", type=int, default=6)
     he.add_argument("--hermanas", type=int, default=3, help="cámaras sorteadas por nivel")
+    he.add_argument("--red", default=None, help="checkpoint de la red de alineación")
     he.add_argument(
         "--fracciones",
         nargs="+",
@@ -1395,6 +1514,26 @@ def main(argv: list[str] | None = None) -> int:
             un.add_argument("--grupo", default="val")
             un.add_argument("--limite", type=int, default=0)
             un.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
+    for name, text in (
+        ("alin-entrenar", "entrenar la red de alineación"),
+        ("alin-evaluar", "comparar la red de alineación con el clásico"),
+    ):
+        al = sub.add_parser(name, help=text)
+        if name == "alin-entrenar":
+            al.add_argument("--salida", required=True, help="carpeta nueva de la corrida")
+            al.add_argument("--epocas", type=int, default=15)
+            al.add_argument("--lote", type=int, default=4)
+            al.add_argument("--semilla", type=int, default=0)
+        else:
+            al.add_argument("checkpoint")
+            al.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
+        al.add_argument("--dispositivo", default="auto")
+        al.add_argument("--cada", type=int, default=10, help="1 de cada N cuadros de la ELP")
+        al.add_argument("--cada-val", type=int, default=60)
+        al.add_argument("--limite", type=int, default=0, help="prueba rápida: N por fuente")
+        al.add_argument("--limite-val", type=int, default=40)
+        al.add_argument("--datos", default=str(ROOT / "data" / "raw"))
+        al.add_argument("--config", default=None, help="override YAML explícito")
     args = parser.parse_args(argv)
     try:
         if args.comando == "latencia":
@@ -1413,6 +1552,10 @@ def main(argv: list[str] | None = None) -> int:
             return _unc_train(args)
         if args.comando == "inc-evaluar":
             return _unc_eval(args)
+        if args.comando == "alin-entrenar":
+            return _align_train(args)
+        if args.comando == "alin-evaluar":
+            return _align_eval(args)
         return _tape(args)
     except (InvalidInput, EstimatorError, SourceError) as exc:
         print(f"error: {exc}", file=sys.stderr)

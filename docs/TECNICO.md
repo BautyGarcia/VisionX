@@ -1010,6 +1010,46 @@ profundidad contra la cinta más el cero de la cinta.
   de precisión. Los tres métodos coinciden entre sí dentro de 1–3 %, y el modo continuo queda a
   menos de 1 % del preciso por objeto. `marcar` no se pudo probar: necesita pantalla.
 
+### Red de alineación: implementación (19/11)
+
+Implementada y probada en CPU; **todavía sin entrenar** (se entrena cuando la Mac quede libre de
+la grabación del banco). Código en `alignnet.py`, `align_data.py` y `align_train.py`.
+
+```text
+uv run --extra ml python -m visionx.depth.crestereo_adapt alin-entrenar --salida CARPETA
+uv run --extra ml python -m visionx.depth.crestereo_adapt alin-evaluar CARPETA/mejor.pt
+uv run --extra ml python -m visionx.depth.crestereo_adapt hermanas recordings/CLIP --red CARPETA/mejor.pt
+```
+
+**Cómo está armada** (0,70 M de parámetros; 275 ms por par a 960×536 en CPU):
+1. Un codificador compartido reduce cada ojo 8 veces.
+2. Una correlación compara cada lugar del ojo derecho con el izquierdo corrido hasta 16 celdas
+   a la derecha (la disparidad) y ±3 filas. De ahí sale cuántas filas está corrido y con qué
+   confianza (b).
+3. Una cabeza afina esa medición. La calibración entra por FiLM (un vector de 13 números que
+   puede ir en cero: «cámara tipo ELP») y por el mapa de rayos.
+4. **Ajuste sin pesos dentro de la red:** las filas medidas se convierten en pitch, yaw, roll,
+   aumento y dos términos radiales por cuadrados mínimos pesados por 1/b², con un prior que
+   tira hacia cero. Las celdas a menos de 3 filas del borde no entran.
+5. Un resto denso, chico, que arranca en cero y se interpola a resolución completa.
+
+**Datos.** El generador de etapa 2 sobre InStereo2K (1119 pares, una cámara virtual sorteada
+por muestra: focal, centro y distorsión) y sobre clips de desarrollo de la ELP (~720 cuadros,
+cámaras hermanas de la ELP; la calibración se oculta en el 30 %). Validación: InStereo2K val y
+el clip `dev-1114-escenas`, que no entrena. El clip `dev-1114-distancias` queda afuera.
+
+**Pérdida.** Error del campo en filas, más el de columnas **sin su corrimiento constante**
+(eso lo arregla la distancia conocida), más una pérdida auxiliar para que la cabeza mida filas
+y diga cuánto confía.
+
+**La vara.** En una prueba chica (pocas muestras, red sin entrenar), el clásico con lente dejó
+entre 0,15 y 0,6 px de error de campo. Para ser útil, la red tiene que bajar de eso; la
+corrección exacta da ~0,03 px. Si no lo logra, el sistema usa el clásico y se informa así.
+
+**Riesgo de diseño.** Medir a 1/8 de resolución exige precisión de una fracción chica de celda.
+El clásico usa miles de puntos con precisión de subpíxel. Si la red no alcanza, la variante
+siguiente es que la red corrija **encima** del clásico (aprender solo lo que él deja).
+
 ### Orden de trabajo, orden de caída y ablaciones
 
 Fechas objetivo, **todavía no evidencia**; el estado vigente está en [ROADMAP](ROADMAP.md).
