@@ -70,8 +70,17 @@ class ModeSettings:
     side_min_m: float = 0.15
     # Guía de buscar: "sonar" (bips del lado del objeto, palabras solo en momentos clave) o
     # "palabras" (frases de dirección, la de antes). Tomás eligió sonar el 19/11.
-    guide_style: str = "sonar"
+    guide_style: str = "centrar"
     sonar_meters_s: float = 4.0  # con sonar: mínimo entre dos avisos de metros
+    # Estilo «centrar» (Tomás, prueba en vivo del 19/11): primero centrar el objeto con
+    # instrucciones («Girá a la izquierda», «Más a la izquierda», «Un poco a la izquierda»,
+    # «Un poco más abajo») y después decir a qué distancia está adelante mientras se acerca.
+    turn_deg: float = 30.0  # |ángulo| > esto: «Girá a la …»
+    more_deg: float = 15.0  # > esto: «Más a la …»; > center_deg: «Un poco a la …»
+    center_v_deg: float = 12.0  # |vertical| <= esto: centrado en altura
+    low_deg: float = 22.0  # > esto: «Abajo»/«Arriba»; si no, «Un poco más abajo/arriba»
+    center_repeat_s: float = 2.5  # repetir la misma instrucción si no cambia
+    approach_meters_s: float = 2.5  # centrado: mínimo entre dos avisos de metros
     # Metros nuevos durante la guía: se dicen solos («A 2 metros.») si cambiaron al menos esto
     # (lo mayor de los dos). Evita repetir la frase entera por un redondeo o por el borde del
     # rango (2,95 «a 3 metros» contra 3,05 «más de 3 metros»).

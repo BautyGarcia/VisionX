@@ -40,6 +40,47 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — Primera prueba en vivo en la Mac y buscar rehecho: centrar y después distancia
+
+**Tareas:** T07, T08, T09. **Persona/agente:** Bauty (Mac, ELP) y Tomás (Discord) en vivo;
+Tomás / Claude Code (cambios). **Rama:** `b/buscar-centrar`.
+
+**Lo que se vio en vivo** (Mac M2 Max, CREStereo continuo 640×360 + preciso 1280×720, todos los
+modos; captura del dashboard, sin traza todavía):
+- Captura 25 fps; detector 4,1 fps (299 ms); CREStereo continuo 4,1 fps (160 ms) con 565 ms
+  de edad; **preciso 1588 ms** y la espera de 2 s se vencía (`espera-vencida`).
+- Las respuestas tardaban **~5 s** (percibido). Parte se explica por la espera del preciso.
+- Buscar no convenció: no aparecía la flecha en pantalla (el dashboard en vivo no la dibujaba;
+  solo existía en las demos) y a Tomás no le gustó el bip del sonar.
+
+**Decisiones de Tomás.** Buscar con palabras, en dos etapas: primero centrar el objeto («Girá a
+la izquierda», «Más a la izquierda», «Un poco a la izquierda», «Abajo», «Un poco más abajo») y
+después la distancia hacia adelante; una vez centrado, decir sobre qué está apoyado. Sin bips.
+Voz un poco más rápida.
+
+**Hecho.**
+- `modes.guide_style: centrar` (por defecto): «Veo taza.» y enseguida la instrucción por zonas
+  con histéresis (`turn_deg` 30, `more_deg` 15, `center_deg` 8; vertical `low_deg` 22,
+  `center_v_deg` 12); una instrucción nueva corta la anterior y la misma se repite cada 2,5 s.
+  Centrado: «Centrado. Está a 1,4 metros, adelante.» (o los metros apenas llega la medición) y,
+  con el asistente, una frase de apoyo (pedido «apoyo»: «Está sobre la mesa…»). Al acercarse,
+  metros cada 2,5 s; «Llegaste» corta lo que suena. `sonar` y `palabras` siguen disponibles.
+- Dashboard en vivo: flecha verde del centro al objetivo guiado (`draw_target_arrow`).
+- Voz a `speech_rate` 1,15 (Edge «+15 %»); caché regenerada a esa velocidad
+  (`data/cache/voz/edge_es-UY-MateoNeural_15_`, también en Drive) con las frases de centrar.
+- Guía en vivo: se corre **sin** `--profundidad-precisa`.
+- M1 mide el contrato del aviso con bip (guía `palabras`), explícito en el banco.
+
+**Evidencia.** Tests 1159 OK, ruff OK (con tests de zonas, centrado, apoyo, llegada y flecha).
+Sin probar en vivo todavía.
+
+**Límites.** El tiempo de ~5 s no está desglosado: falta la traza de la Mac
+(`ejecutar --traza` + `latencias`). En vivo «Abajo» supone que la persona inclina la cámara (en el
+pecho, el cuerpo). La histéresis y los límites de ángulo son de desarrollo, sin medir con gente.
+
+**Próximo paso.** Repetir en vivo con la traza y pasar `latencias` para ver cuánto es Whisper,
+Claude, la voz y la profundidad.
+
 ## 2026-11-19 (tarde) — T08/T09/T10/T11: sonar en buscar, «¿cuál?» describiendo, distancia con detalle, solo Mateo; lista para la Mac
 
 **Tareas:** T07–T11. **Persona/agente:** Tomás (decisiones, revisión de demos) / Claude Code.

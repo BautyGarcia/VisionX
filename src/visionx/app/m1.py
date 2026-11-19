@@ -221,7 +221,9 @@ class Scenario:
         )
         self.sink = AuditSink(self, self.output)
         catalog = ClassCatalog(COCO_CLASSES)
-        self.settings = ModeSettings()
+        # M1 mide el contrato del aviso de presencia con bip (guía «palabras»); «centrar» avisa
+        # con «Veo X.» por el mismo camino.
+        self.settings = ModeSettings(guide_style="palabras")
         self.controller = Controller(
             CommandParser(catalog),
             self.sink,

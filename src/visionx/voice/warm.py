@@ -78,9 +78,15 @@ def frequent_phrases(cfg: dict[str, Any], spoken) -> list[str]:
     out += [_cap(m) + "." for m in metres]
     for h in H_WORDS[:3]:  # metros con el objeto al frente o «un poco» a un lado
         out += [f"{_cap(h)}, {m}." for m in metres]
+    # Guía «centrar» (19/11): instrucciones, centrado y distancia hacia adelante.
+    for side in ("izquierda", "derecha"):
+        out += [f"Girá a la {side}.", f"Más a la {side}.", f"Un poco a la {side}."]
+    out += ["Abajo.", "Arriba.", "Un poco más abajo.", "Un poco más arriba.", "Centrado."]
+    out += [f"Centrado. Está {m}, adelante." for m in metres if m.startswith("a ")]
+    out += [f"Está {m}, adelante." for m in metres if m.startswith("a ")]
     for cls in COMMON:
         name = spoken(cls)
-        out += [f"Busco {name}.", f"Perdí {name}.", f"No encontré {name}.",
+        out += [f"Veo {name}.", f"Busco {name}.", f"Perdí {name}.", f"No encontré {name}.",
                 f"Terminé de buscar {name}.", f"No veo {name} ahora. Sigo buscando."]  # fmt: skip
         out += [f"{_cap(name)} {w}." for w in wheres]
     return list(dict.fromkeys(out))  # sin repetidas, en orden

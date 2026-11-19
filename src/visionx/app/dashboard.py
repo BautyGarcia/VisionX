@@ -40,6 +40,9 @@ class DashboardState:
     max_age_ms: float = 500.0  # más viejo que esto se marca en naranja
     geometry: StereoGeometry | None = None  # la de la profundidad; sin ella no hay vista de arriba
     measurement: dict[str, Any] | None = None
+    # Buscar: ángulos (h, v) del objetivo guiado y la geometría de la imagen (para la flecha).
+    target_angle: tuple[float, float] | None = None
+    frame_geometry: StereoGeometry | None = None
 
 
 def depth_colormap(
@@ -140,6 +143,25 @@ def _status_lines(state: DashboardState) -> list[tuple[str, tuple[int, int, int]
     return lines
 
 
+def draw_target_arrow(
+    image: np.ndarray, angle: tuple[float, float], g: StereoGeometry
+) -> np.ndarray:
+    """Flecha verde del centro de la imagen al objetivo que se está guiando (buscar)."""
+    import math
+
+    h_deg, v_deg = angle
+    sx, sy = image.shape[1] / g.width, image.shape[0] / g.height
+    u = (g.cx + g.fx * math.tan(math.radians(h_deg))) * sx
+    v = (g.cy - g.fy * math.tan(math.radians(v_deg))) * sy
+    w, hh = image.shape[1], image.shape[0]
+    tip = (int(min(max(u, 0), w - 1)), int(min(max(v, 0), hh - 1)))
+    out = image.copy()
+    thick = max(2, w // 240)
+    cv2.arrowedLine(out, (w // 2, hh // 2), tip, (0, 220, 0), thick, tipLength=0.06)
+    cv2.circle(out, tip, thick * 4, (0, 220, 0), thick)
+    return out
+
+
 def render(state: DashboardState) -> np.ndarray:
     """Imagen BGR del dashboard."""
     joint = state.joint
@@ -151,7 +173,10 @@ def render(state: DashboardState) -> np.ndarray:
         depth_panel = np.zeros_like(left)
         cloud = np.zeros_like(left)
     else:
-        left = _fit(draw_detection(joint.frame.left, joint.detection), PANEL_W)
+        left = draw_detection(joint.frame.left, joint.detection)
+        if state.target_angle is not None and state.frame_geometry is not None:
+            left = draw_target_arrow(left, state.target_angle, state.frame_geometry)
+        left = _fit(left, PANEL_W)
         depth = joint.depth
         if depth is not None and depth.depth_m is not None:
             depth_panel = _fit(

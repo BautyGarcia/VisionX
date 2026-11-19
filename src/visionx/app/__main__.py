@@ -269,7 +269,20 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
             audio=last_audio[0],
             geometry=depth_geometry,  # la vista de arriba usa la geometría de la profundidad
             measurement=precise.selection if precise else None,
+            target_angle=guided_angle(),
+            frame_geometry=geometry,
         )
+
+    def guided_angle() -> tuple[float, float] | None:
+        """Ángulos del objetivo de buscar mientras se guía (la flecha del dashboard)."""
+        active = controller.active
+        if active is None or active.mode.value != "search":
+            return None
+        handler = controller.handlers.get(active.mode)
+        target = getattr(handler, "target", None)
+        if target is None or getattr(handler, "state", "") != "guiando":
+            return None
+        return target.angle_h_deg, target.angle_v_deg or 0.0
 
     window = not args.sin_ventana
     if window:

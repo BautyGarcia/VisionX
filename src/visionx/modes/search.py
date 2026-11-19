@@ -45,11 +45,12 @@ from visionx.modes.common import (
     horizontal,
     measure,
     measure_phrase,
+    meters,
     speech_s,
     vertical,
 )
 from visionx.modes.target import Target, TargetMemory, plural
-from visionx.shared.contracts import Command
+from visionx.shared.contracts import Command, Priority
 from visionx.shared.geometry import StereoGeometry
 
 BIP = "sonido:bip"
@@ -110,6 +111,16 @@ class SearchHandler:
         self._options_angles: list[float] = []
         self._options: list[tuple[float, str]] = []
         self._options_question: str | None = None
+        # Estilo «centrar»: instrucción dicha, si ya se centró y la descripción del apoyo.
+        self._instr: str | None = None
+        self._h_zone = self._v_zone = 0
+        self._centered = False
+        if getattr(self, "_support_job", None) is not None:
+            self._support_job.cancel()
+        self._support_job: Any = None
+        self._support_start_ns = 0
+        self._support_done = False
+        self._last_frame: Any = None
 
     # -- interfaz ModeHandler --------------------------------------------------------------
 
@@ -157,9 +168,11 @@ class SearchHandler:
         fresh = seen is not None and age_s(seen, now_ns) <= self.s.max_age_s
         if fresh and seen.frame.key != self._last_seen_key:  # type: ignore[union-attr]
             self._last_seen_key = seen.frame.key  # type: ignore[union-attr]
+            self._last_frame = seen.frame  # type: ignore[union-attr]
             cands = candidates(seen, label, self.geometry)  # type: ignore[arg-type]
             says += self._on_frame(cands, name, now_ns, seen.frame)  # type: ignore[union-attr]
         says += self._options_ready(name, now_ns)
+        says += self._support_ready(now_ns)
         if not fresh:
             self._choices = []
             self._single_since = None
@@ -210,6 +223,8 @@ class SearchHandler:
         if done:
             self._finished = True
             self._event("fin", {"motivo": "llegada"})
+        if self.s.guide_style == "centrar":  # sin bips: solo palabras (pedido de Tomás)
+            says = [s for s in says if s.text_or_sound != BIP]
         return [s for s in says if s.text_or_sound], done
 
     def awaiting_choice(self) -> bool:
@@ -407,6 +422,9 @@ class SearchHandler:
         self._measure = None
         self._event("adquirido", {"angulo_h": round(c.angle_h_deg, 1), "track_id": c.track_id,
                                   "reaparicion": reacquired})  # fmt: skip
+        self._instr, self._h_zone, self._v_zone, self._centered = None, 0, 0, False
+        if self.s.guide_style == "centrar":
+            return [self._phrase(f"Veo {name}.", now_ns)]  # la instrucción sale en el mismo tick
         text, valid_until, received = self._guide_fact(name, now_ns)
         return [
             Say(
@@ -424,7 +442,112 @@ class SearchHandler:
             return None
         return self.target.angle_h_deg, (now_ns - self.target.last_seen_ns) / 1e9
 
+    # -- estilo «centrar» -----------------------------------------------------------------
+
+    def _zone(self, a: float, limits: tuple[float, ...], prev: int) -> int:
+        """Zona 0..n de |a| con histéresis: cerca de un límite se conserva la anterior."""
+        raw = sum(abs(a) > lim for lim in limits)
+        if raw == prev:
+            return raw
+        h = self.s.hysteresis_deg
+        low = sum(abs(a) > lim + h for lim in limits)
+        high = sum(abs(a) > lim - h for lim in limits)
+        return prev if low <= prev <= high else raw
+
+    def _instruction(self, h: float, v: float) -> str | None:
+        """«Girá a la izquierda.» … «Un poco más abajo.»; None si está centrado."""
+        s = self.s
+        self._h_zone = self._zone(h, (s.center_deg, s.more_deg, s.turn_deg), self._h_zone)
+        self._v_zone = self._zone(v, (s.center_v_deg, s.low_deg), self._v_zone)
+        side = "derecha" if h > 0 else "izquierda"
+        if self._h_zone:
+            return {1: f"Un poco a la {side}.", 2: f"Más a la {side}.",
+                    3: f"Girá a la {side}."}[self._h_zone]  # fmt: skip
+        if self._v_zone:
+            where = "arriba" if v > 0 else "abajo"
+            return f"Un poco más {where}." if self._v_zone == 1 else f"{where.capitalize()}."
+        return None
+
+    def _guide_center(self, name: str, now_ns: int) -> list[Say]:
+        assert self.target is not None
+        t = self.target
+        valid_until = t.last_seen_ns + int(self.s.max_age_s * 1e9)
+        since = None if self._last_say_ns is None else (now_ns - self._last_say_ns) / 1e9
+        instr = self._instruction(t.angle_h_deg, t.angle_v_deg or 0.0)
+        if instr is not None:
+            first = self._instr is None  # primera tras «Veo …» o tras centrar: va en cola
+            changed = instr != self._instr
+            if changed and not first and since is not None and since < self.s.preempt_min_s:
+                return []
+            if not changed and since is not None and since < self.s.center_repeat_s:
+                return []
+            self._instr = instr
+            say = self._phrase(instr, now_ns, valid_until_ns=valid_until,
+                               fact_received_ns=t.last_seen_ns)  # fmt: skip
+            if not say.text_or_sound:
+                return []
+            return [say] if first else [replace(say, replace=True)]
+        self._instr = None
+        m = self._fresh_measure(now_ns)
+        z = m.z_m if m is not None and m.ok else None
+        close = m is not None and (
+            m.reason == "muy-cerca" or (z is not None and z <= self.s.arrive_m)
+        )
+        if close:
+            text = f"Llegaste: {name} adelante, {measure_phrase(m, self.s)}."  # type: ignore[arg-type]
+            say = self._phrase(text, now_ns, valid_until_ns=valid_until)
+            return [replace(say, replace=True)] if say.text_or_sound else []
+        if not self._centered:
+            self._centered = True
+            text = "Centrado." + (
+                f" Está a {meters(z, self.s)}, adelante." if z is not None else ""
+            )
+            self._said_z = z
+            self._event("centrado", {"z_m": z})
+            self._ask_support(name, now_ns)
+            say = self._phrase(text, now_ns, valid_until_ns=valid_until)
+            return [replace(say, replace=True)] if say.text_or_sound else []
+        if z is None:
+            return []
+        if self._said_z is None:  # centrado sin medición todavía: la primera, enseguida
+            self._said_z = z
+            text = f"Está a {meters(z, self.s)}, adelante."
+            say = self._phrase(text, now_ns, valid_until_ns=valid_until)
+            return [say] if say.text_or_sound else []
+        if not self._distance_news(m):  # type: ignore[arg-type]
+            return []
+        if since is not None and since < self.s.approach_meters_s:
+            return []
+        self._said_z = z
+        say = self._phrase(f"A {meters(z, self.s)}.", now_ns, valid_until_ns=valid_until)
+        return [say] if say.text_or_sound else []
+
+    def _ask_support(self, name: str, now_ns: int) -> None:
+        """Una vez centrado: «Está sobre la mesa de madera, al lado de una taza.»"""
+        a, frame = self.assistant, self._last_frame
+        if a is None or not a.available or frame is None:
+            return
+        if self._support_job is not None or self._support_done:
+            return
+        self._support_job = a.submit(self.request_id or 0, "apoyo", frame.left,
+                                     objects=[f"{name} en el centro de la imagen"])  # fmt: skip
+        self._support_start_ns = now_ns
+
+    def _support_ready(self, now_ns: int) -> list[Say]:
+        job = self._support_job
+        if job is None or not job.done.is_set() or job.text == "" and job.error is None:
+            return []
+        if job.error is None and now_ns < self._support_start_ns + int((job.total_s or 0) * 1e9):
+            return []  # replay: todavía no pasó lo que tardó la API
+        self._support_job, self._support_done = None, True  # una sola vez por objetivo
+        self._event("apoyo", {"texto": job.text, "error": job.error})
+        if job.error or self.state != GUIDING:
+            return []
+        return [Say(job.text, Priority.SHORT)]
+
     def _guide(self, name: str, now_ns: int) -> list[Say]:
+        if self.s.guide_style == "centrar":
+            return self._guide_center(name, now_ns)
         text, valid_until, received = self._guide_fact(name, now_ns)
         if text == "" or text.startswith("Llegaste"):
             if not text:
