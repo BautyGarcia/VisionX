@@ -428,3 +428,81 @@ def test_hermanas_reproducibles_y_dentro_del_rango() -> None:
     assert np.all(np.abs(a.D - nominal.D) <= ranges.distortion * np.abs(nominal.D) + 1e-12)
     with pytest.raises(InvalidInput):
         CameraRanges(focal=-0.1)
+
+
+# --- corrección con términos de lente -----------------------------------------------------
+
+
+def lens_matches(
+    lens, n: int = 1500, noise_px: float = 0.1, seed: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Puntos vistos por los dos ojos; el derecho necesita la corrección `lens`."""
+    from visionx.depth.crestereo_adapt.lens import pull_maps
+
+    rng = np.random.default_rng(seed)
+    left = np.column_stack([rng.uniform(20, GEOM.width - 20, n),
+                            rng.uniform(20, GEOM.height - 20, n)])  # fmt: skip
+    disparity = GEOM.fx * GEOM.baseline_m / rng.uniform(0.5, 6.0, n)
+    right_clean = left - np.column_stack([disparity, np.zeros(n)])
+    # El punto limpio q sale del lugar pull(q) de la derecha base: ahí es donde se lo observa.
+    map_x, map_y = pull_maps(lens, GEOM)
+    xs = right_clean[:, 0].astype(np.float32).reshape(-1, 1)
+    ys = right_clean[:, 1].astype(np.float32).reshape(-1, 1)
+    base = np.column_stack([cv2.remap(map_x, xs, ys, cv2.INTER_LINEAR).ravel(),
+                            cv2.remap(map_y, xs, ys, cv2.INTER_LINEAR).ravel()])  # fmt: skip
+    inside = (xs.ravel() > 1) & (xs.ravel() < GEOM.width - 2)
+    left, base = left[inside], base[inside]
+    return left + rng.normal(0, noise_px, left.shape), base + rng.normal(0, noise_px, base.shape)
+
+
+def test_mapas_de_lente_son_la_inversa_de_corregir_puntos() -> None:
+    from visionx.depth.crestereo_adapt.lens import LensCorrection, correct_points, pull_maps
+
+    lens = LensCorrection(Correction(roll_deg=0.5, pitch_deg=-0.3, log_focal=0.004), 0.004, -0.001)
+    map_x, map_y = pull_maps(lens, GEOM)
+    v, u = np.mgrid[40:320:40, 40:600:40]
+    source = np.column_stack([map_x[v, u].ravel(), map_y[v, u].ravel()])
+    back = correct_points(lens, GEOM, source)
+    assert np.abs(back - np.column_stack([u.ravel(), v.ravel()])).max() < 1e-3  # px
+    assert LensCorrection().is_identity and not lens.is_identity
+    identity_x, identity_y = pull_maps(LensCorrection(), GEOM)
+    assert np.allclose(identity_x[100, 200], 200.0) and np.allclose(identity_y[100, 200], 100.0)
+
+
+def test_sin_radial_la_correccion_de_lente_es_la_homografia() -> None:
+    from visionx.depth.crestereo_adapt.lens import LensCorrection, correct_points, warp_lens
+
+    c = Correction(roll_deg=0.6, pitch_deg=0.2, yaw_deg=0.1, log_focal=-0.003)
+    points = np.array([[100.0, 80.0], [500.0, 300.0]])
+    assert np.allclose(
+        correct_points(LensCorrection(c), GEOM, points),
+        apply_homography(homography(c, GEOM), points),
+    )
+    image = texture(9)
+    rows, cols = interior()
+    a = warp_lens(image, LensCorrection(c), GEOM)[rows, cols].astype(np.int16)
+    b = warp_image(image, homography(c, GEOM))[rows, cols].astype(np.int16)
+    assert np.abs(a - b).mean() < 0.5
+
+
+def test_el_ajuste_de_lente_recupera_giro_y_radial() -> None:
+    from visionx.depth.crestereo_adapt.lens import LensCorrection, LensDecision, fit_lens
+
+    truth = LensCorrection(Correction(roll_deg=0.5, pitch_deg=-0.4), radial2=0.006, radial4=0.0)
+    est = fit_lens(*lens_matches(truth), GEOM, decision=LensDecision(floor_radial2=1e-4))
+    assert est.ok, est.reason
+    assert {"roll", "pitch", "radial2"} <= set(est.applied)
+    assert est.lens.correction.roll_deg == pytest.approx(0.5, abs=0.05)
+    assert est.lens.correction.pitch_deg == pytest.approx(-0.4, abs=0.05)
+    assert est.lens.radial2 == pytest.approx(0.006, abs=0.0015)
+    assert est.residual_after_px < 0.3 < est.residual_before_px
+
+
+def test_el_ajuste_de_lente_no_toca_un_par_alineado() -> None:
+    from visionx.depth.crestereo_adapt.lens import LensCorrection, fit_lens
+
+    est = fit_lens(*lens_matches(LensCorrection(), seed=3), GEOM)
+    assert est.ok and est.applied == () and est.lens.is_identity
+    assert not est.fitted.is_identity  # el ajuste libre siempre encuentra "algo"
+    few = fit_lens(np.zeros((5, 2)), np.zeros((5, 2)), GEOM)
+    assert not few.ok and "pares" in few.reason

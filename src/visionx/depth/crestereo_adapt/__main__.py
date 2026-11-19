@@ -227,9 +227,16 @@ def _tape(args: argparse.Namespace) -> int:
     zero_m = zero_mm / 1000.0
 
     model, device = load_model(PortConfig.from_config(depth_cfg["crestereo"]))
+    head = None
+    if args.incertidumbre:
+        from visionx.depth.crestereo_adapt.uncertainty import UncertaintyHead
+
+        head = UncertaintyHead.load(args.incertidumbre, device)
     estimators: dict[str, Any] = {}
     for mode in args.modos:
-        estimators[f"crestereo-{mode}"] = load_estimator(cfg, g, mode, model=model, device=device)
+        estimators[f"crestereo-{mode}"] = load_estimator(
+            cfg, g, mode, model=model, device=device, uncertainty=head
+        )
     for text in args.variantes:  # p. ej. 640x360:i10p1 -> resolución, iteraciones y pasadas
         size_text, _, run_text = text.partition(":")
         try:
@@ -261,6 +268,9 @@ def _tape(args: argparse.Namespace) -> int:
     for tape_m, pairs in measurements:
         per_method: dict[str, list[float]] = {"esquinas": []}
         used: dict[str, list[int]] = {}
+        # Solo si el estimador trae incertidumbre: error y b en las esquinas, en px de cómputo.
+        corner_err: dict[str, list[np.ndarray]] = {}
+        corner_b: dict[str, list[np.ndarray]] = {}
         for n in pairs:
             left = cv2.imread(str(folder / f"left_{n}.jpg"))
             right = cv2.imread(str(folder / f"right_{n}.jpg"))
@@ -299,6 +309,15 @@ def _tape(args: argparse.Namespace) -> int:
                 used.setdefault(name, []).append(int(ok.sum()))
                 if ok.sum() >= 0.5 * len(z):
                     per_method.setdefault(name, []).append(_distance(u[ok], v[ok], z[ok], g))
+                if result.uncertainty is not None:
+                    # La disparidad de las esquinas detectadas en los dos ojos es la
+                    # referencia; se lleva a la resolución de cómputo para comparar en px.
+                    predicted = _sample(result.disparity_px, u * sx, v * sy)
+                    b_here = _sample(result.uncertainty, u * sx, v * sy)
+                    fine = np.isfinite(predicted) & np.isfinite(b_here)
+                    reference = (u - ur[:, 0]) * sx
+                    corner_err.setdefault(name, []).append((predicted - reference)[fine])
+                    corner_b.setdefault(name, []).append(b_here[fine])
         for name, dists in per_method.items():
             if not dists:
                 continue
@@ -314,6 +333,16 @@ def _tape(args: argparse.Namespace) -> int:
                     "esquinas_usadas": used.get(name),
                 }
             )
+            if name in corner_err:
+                err = np.abs(np.concatenate(corner_err[name]))
+                b_all = np.concatenate(corner_b[name])
+                lines[-1]["incertidumbre"] = {
+                    "error_px_mediana": round(float(np.median(err)), 3),
+                    "b_px_mediana": round(float(np.median(b_all)), 3),
+                    # Laplace: el 90 % de los errores debería caer dentro de b * ln(10).
+                    "cobertura_90": round(float(np.mean(err <= b_all * np.log(10.0))), 3),
+                    "cobertura_50": round(float(np.mean(err <= b_all * np.log(2.0))), 3),
+                }
 
     names = ["esquinas", *estimators]
     print(f"\ncero de cinta c = {zero_mm:.1f} mm; error = distancia - c - cinta")
@@ -326,6 +355,18 @@ def _tape(args: argparse.Namespace) -> int:
                 f"{hit[0]['error_mm']:+8.1f} mm {hit[0]['error_pct']:+6.2f} %" if hit else "—"
             )
         print(f"{tape_m:6.2f} " + " ".join(f"{c:>20}" for c in cells))
+
+    with_b = [x for x in lines if "incertidumbre" in x]
+    if with_b:
+        print("\nincertidumbre en las esquinas del damero (px a la resolución de cada método):")
+        for x in with_b:
+            i = x["incertidumbre"]
+            print(
+                f"  {x['cinta_m']:4.2f} m {x['metodo'][-20:]:>20}: "
+                f"error {i['error_px_mediana']:.3f} px, b {i['b_px_mediana']:.3f} px, "
+                f"cobertura 50 % -> {i['cobertura_50']:.2f}, "
+                f"90 % -> {i['cobertura_90']:.2f}"
+            )
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = Path(args.salida) / f"{stamp}-cinta-crestereo-{folder.name}"
@@ -595,6 +636,7 @@ def _real(args: argparse.Namespace) -> int:
         match_points,
     )
     from visionx.depth.crestereo_adapt.correction import apply_homography, homography
+    from visionx.depth.crestereo_adapt.lens import correct_points, fit_lens
 
     cal = StereoCalibration.load(args.calibracion)
     g = cal.geometry()
@@ -694,6 +736,41 @@ def _real(args: argparse.Namespace) -> int:
                 )
                 print(f"      par {n}: damero corregido: filas {dy:.2f} px, escala {scale:+.2f} %")
             report.append(entry)
+        # Con términos de lente: giro, aumento y resto radial, con su propia regla.
+        lens_est = fit_lens(all_l, all_r, align_geom)
+        fitted = lens_est.fitted
+        entry = {
+            "carpeta": name,
+            "variante": "con_lente",
+            "parametros_aplicados": list(lens_est.applied),
+            "ok": lens_est.ok,
+            "motivo": lens_est.reason,
+            "ajuste_completo": {
+                n: round(fitted.value(n), 6)
+                for n in ("pitch", "yaw", "roll", "log_focal", "radial2", "radial4")
+            },
+            "sigma": {k: round(float(x), 6) for k, x in lens_est.sigma.items()},
+            "filas_sift_antes_px": round(lens_est.residual_before_px * 2, 3),
+            "filas_sift_despues_px": round(lens_est.residual_after_px * 2, 3),
+            "damero": [],
+        }
+        print(
+            f"   con_lente: ajuste completo radial2 {fitted.radial2:+.5f} "
+            f"(±{lens_est.sigma['radial2']:.5f}) radial4 {fitted.radial4:+.5f} "
+            f"(±{lens_est.sigma['radial4']:.5f}) yaw {fitted.value('yaw'):+.3f}° focal "
+            f"{fitted.value('log_focal') * 100:+.3f} % | aplica: "
+            f"{', '.join(lens_est.applied) or 'nada'}"
+        )
+        for n, _, corners in pairs:
+            if corners is None:
+                continue
+            ul, ur = corners
+            dy, scale = board_check(ul, correct_points(lens_est.lens, g, ur))
+            entry["damero"].append(
+                {"par": n, "filas_px": round(dy, 3), "escala_pct": round(scale, 3)}
+            )
+            print(f"      par {n}: damero corregido: filas {dy:.2f} px, escala {scale:+.2f} %")
+        report.append(entry)
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = Path(args.salida) / f"{stamp}-descalibracion-real"
@@ -850,6 +927,7 @@ def _siblings(args: argparse.Namespace) -> int:
     from visionx.depth.crestereo_adapt import robustness
     from visionx.depth.crestereo_adapt.classic import ClassicParams, fit_significant, match_points
     from visionx.depth.crestereo_adapt.correction import homography, warp_image
+    from visionx.depth.crestereo_adapt.lens import fit_lens, pull_maps
     from visionx.depth.crestereo_adapt.perturb import (
         CameraModel,
         CameraRanges,
@@ -933,9 +1011,20 @@ def _siblings(args: argparse.Namespace) -> int:
                 classic,
             )
             ruled_fix = homography(ruled.correction, capture) if ruled.ok and applied else None
+            # El mismo ajuste con términos de lente (giro, aumento y resto radial).
+            lens_est = fit_lens(
+                np.vstack([m[0] for m in matches_all]),
+                np.vstack([m[1] for m in matches_all]),
+                align_geom,
+                classic,
+            )
+            lens_maps = None
+            if lens_est.ok and lens_est.applied:
+                lens_maps = pull_maps(lens_est.lens, capture)
             per_system: dict[str, list[dict[str, float]]] = {
                 "sin_corregir": [],
                 "clasico_regla": [],
+                "clasico_lente": [],
                 "oraculo_parametrico": [],
                 "oraculo_denso": [],
             }
@@ -952,6 +1041,11 @@ def _siblings(args: argparse.Namespace) -> int:
                     per_system["clasico_regla"].append(per_system["sin_corregir"][-1])
                 else:
                     per_system["clasico_regla"].append(change(warp_image(perturbed, ruled_fix)))
+                if lens_maps is None:
+                    per_system["clasico_lente"].append(per_system["sin_corregir"][-1])
+                else:
+                    fixed = cv2.remap(perturbed, lens_maps[0], lens_maps[1], cv2.INTER_LINEAR)
+                    per_system["clasico_lente"].append(change(fixed))
                 per_system["oraculo_parametrico"].append(change(warp_image(perturbed, undo)))
                 dense = cv2.remap(
                     perturbed, u + field[:, :, 0], v + field[:, :, 1], cv2.INTER_LINEAR
@@ -972,6 +1066,11 @@ def _siblings(args: argparse.Namespace) -> int:
                     "pitch_deg": round(ruled.correction.pitch_deg, 4),
                     "yaw_deg": round(ruled.correction.yaw_deg, 4),
                     "log_focal": round(ruled.correction.log_focal, 5),
+                },
+                "lente": {
+                    "aplica": list(lens_est.applied),
+                    "radial2": round(lens_est.lens.radial2, 6),
+                    "radial4": round(lens_est.lens.radial4, 6),
                 },
                 "filas_px_mediana": round(float(np.median(np.abs(field[:, :, 1]))), 2),
                 "resto_filas_px_mediana": round(float(np.median(np.abs(rest[:, :, 1]))), 2),
@@ -1005,6 +1104,125 @@ def _siblings(args: argparse.Namespace) -> int:
             "comando": " ".join(sys.argv),
             "equipo": _equipment(device),
             "filas": rows,
+        },
+    )
+    print(f"resultados en {out_dir}")
+    return 0
+
+
+# --- U-Net de incertidumbre ----------------------------------------------------------------
+
+
+def _unc_setup(args: argparse.Namespace) -> tuple[dict[str, Any], Any, Any, Path]:
+    """Config, catálogo del dataset, especificación del caché y carpeta de datos."""
+    from visionx.depth.crestereo_adapt.uncertainty_data import CacheSpec
+    from visionx.depth.datasets.catalog import CATALOG
+
+    cfg = load_config(args.config)
+    section = cfg["depth"]["crestereo"]
+    if args.dataset not in CATALOG:
+        raise InvalidInput(f"dataset {args.dataset!r}: opciones {sorted(CATALOG)}")
+    params = CreStereoParams(iters=args.iters, passes=args.pasadas)
+    spec = CacheSpec(
+        root=ROOT / "data" / "cache" / "crestereo_inc",
+        weights_id=section["weights_sha256"][:8],
+        run_tag=params.tag,
+        seed=args.semilla_cache,
+    )
+    return cfg, CATALOG[args.dataset], spec, Path(args.datos)
+
+
+def _unc_refs(info: Any, data_root: Path, group: str, limit: int) -> list[Any]:
+    from visionx.depth.__main__ import select_refs
+
+    return select_refs(info, data_root, group, limit)
+
+
+def _unc_cache(args: argparse.Namespace) -> int:
+    from visionx.depth.crestereo_adapt.matcher import CreStereoMatcher
+    from visionx.depth.crestereo_adapt.uncertainty_train import build_cache
+
+    cfg, info, spec, data_root = _unc_setup(args)
+    model, device = load_model(PortConfig.from_config(cfg["depth"]["crestereo"]))
+    matcher = CreStereoMatcher(
+        model, device, CreStereoParams(iters=args.iters, passes=args.pasadas)
+    )
+    for group in args.grupos:
+        refs = _unc_refs(info, data_root, group, args.limite)
+        # La disparidad del ojo derecho solo hace falta para evaluar (chequeo izq.-der.).
+        with_right = group != "train"
+        print(
+            f"{info.name}/{group}: {len(refs)} muestras x {args.variantes} variantes"
+            + (" (con disparidad del ojo derecho)" if with_right else "")
+        )
+        counts = build_cache(refs, info.name, spec, matcher, args.variantes, with_right)
+        print(f"  {counts}")
+    print(f"caché en {spec.root / info.name}")
+    return 0
+
+
+def _unc_train(args: argparse.Namespace) -> int:
+    from visionx.depth.crestereo_adapt.uncertainty_train import TrainParams, train
+
+    cfg, info, spec, data_root = _unc_setup(args)
+    params = TrainParams(
+        epochs=args.epocas,
+        seed=args.semilla,
+        variants=args.variantes,
+        train_delta=args.con_delta,
+    )
+    train_refs = _unc_refs(info, data_root, "train", args.limite_train)
+    val_refs = _unc_refs(info, data_root, "val", args.limite_val)
+    run_dir = Path(args.salida)
+    if (run_dir / "meta.json").exists():
+        raise InvalidInput(f"{run_dir} ya tiene una corrida: elegí otra carpeta")
+    extra = {"commit": _git_commit(), "comando": " ".join(sys.argv)}
+    meta = train(params, train_refs, val_refs, info.name, spec, run_dir, extra_meta=extra)
+    print(f"mejor NLL de validación {meta['mejor_nll_val']:.4f}; corrida en {run_dir}")
+    return 0
+
+
+def _unc_eval(args: argparse.Namespace) -> int:
+    from visionx.depth.crestereo_adapt.uncertainty import UncertaintyHead
+    from visionx.depth.crestereo_adapt.uncertainty_data import UncertaintyDataset
+    from visionx.depth.crestereo_adapt.uncertainty_train import evaluate
+
+    _, info, spec, data_root = _unc_setup(args)
+    head = UncertaintyHead.load(args.checkpoint)
+    refs = _unc_refs(info, data_root, args.grupo, args.limite)
+    dataset = UncertaintyDataset(refs, info.name, spec, args.variantes, crop=None)
+    summary = evaluate(head.model, dataset, head.device, bool(head.meta.get("train_delta")))
+    for group, stats in summary.items():
+        print(f"\n{info.name}/{args.grupo}, {group} ({int(stats['cuadros'])} cuadros)")
+        print(
+            f"  error de CREStereo {stats['epe_base_px']:.3f} px; b mediana "
+            f"{stats['b_mediana_px']:.3f} px; NLL {stats['nll']:.3f}"
+        )
+        print(
+            f"  AUSE (menos es mejor): b {stats['ause_b']:.4f} | fotométrico "
+            f"{stats['ause_fotometrico']:.4f} | izq.-der. "
+            f"{stats.get('ause_izq_der', float('nan')):.4f}"
+        )
+        print(
+            f"  cobertura de los intervalos: 50 % -> {stats['cobertura_50']:.3f}, "
+            f"90 % -> {stats['cobertura_90']:.3f}"
+        )
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_dir = Path(args.salida) / f"{stamp}-incertidumbre-{info.name}-{args.grupo}"
+    _write_report(
+        out_dir,
+        "incertidumbre.yaml",
+        {
+            "checkpoint": str(args.checkpoint),
+            "dataset": info.name,
+            "grupo": args.grupo,
+            "cuadros": len(dataset),
+            "entrenada_con": {k: v for k, v in head.meta.items() if k != "model"},
+            "commit": _git_commit(),
+            "comando": " ".join(sys.argv),
+            "resumen": {
+                g: {k: round(float(x), 5) for k, x in st.items()} for g, st in summary.items()
+            },
         },
     )
     print(f"resultados en {out_dir}")
@@ -1047,6 +1265,11 @@ def main(argv: list[str] | None = None) -> int:
         nargs="*",
         default=[],
         help="otras formas de correr la red, como 640x360:i10p1",
+    )
+    ci.add_argument(
+        "--incertidumbre",
+        default=None,
+        help="checkpoint de la U-Net de incertidumbre (pisa el de la config)",
     )
     ci.add_argument("--tablero", default="9x6")
     ci.add_argument("--cuadrado-mm", type=float, default=38.0)
@@ -1095,6 +1318,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     he.add_argument("--config", default=None, help="override YAML explícito")
     he.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
+    for name, text in (
+        ("inc-cache", "guardar la disparidad de CREStereo de cada muestra y variante"),
+        ("inc-entrenar", "entrenar la U-Net de incertidumbre con el caché"),
+        ("inc-evaluar", "medir una U-Net de incertidumbre entrenada"),
+    ):
+        un = sub.add_parser(name, help=text)
+        un.add_argument("--dataset", default="instereo2k")
+        un.add_argument("--variantes", type=int, default=2, help="0 limpia + desalineadas")
+        un.add_argument("--iters", type=int, default=4)
+        un.add_argument("--pasadas", type=int, default=2, choices=[1, 2])
+        un.add_argument("--semilla-cache", type=int, default=0)
+        un.add_argument("--datos", default=str(ROOT / "data" / "raw"))
+        un.add_argument("--config", default=None, help="override YAML explícito")
+        if name == "inc-cache":
+            un.add_argument("--grupos", nargs="+", default=["val", "train"])
+            un.add_argument("--limite", type=int, default=0, help="solo N muestras por grupo")
+        elif name == "inc-entrenar":
+            un.add_argument("--salida", required=True, help="carpeta nueva de la corrida")
+            un.add_argument("--epocas", type=int, default=12)
+            un.add_argument("--semilla", type=int, default=0)
+            un.add_argument("--con-delta", action="store_true", help="ablación: corregir d")
+            un.add_argument("--limite-train", type=int, default=0)
+            un.add_argument("--limite-val", type=int, default=0)
+        else:
+            un.add_argument("checkpoint")
+            un.add_argument("--grupo", default="val")
+            un.add_argument("--limite", type=int, default=0)
+            un.add_argument("--salida", default=str(ROOT / "outputs" / "profundidad"))
     args = parser.parse_args(argv)
     try:
         if args.comando == "latencia":
@@ -1107,6 +1358,12 @@ def main(argv: list[str] | None = None) -> int:
             return _coherence(args)
         if args.comando == "hermanas":
             return _siblings(args)
+        if args.comando == "inc-cache":
+            return _unc_cache(args)
+        if args.comando == "inc-entrenar":
+            return _unc_train(args)
+        if args.comando == "inc-evaluar":
+            return _unc_eval(args)
         return _tape(args)
     except (InvalidInput, EstimatorError, SourceError) as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -514,11 +514,17 @@ en Kaggle.
 
 ### U-Net de incertidumbre
 
-Es la segunda red propia, el paso [5]. Corre en cada cuadro, a media resolución, condicionada
-igual que la red de alineación.
+Es la segunda red propia, el paso [5]. Corre en cada cuadro. **Primera versión implementada el
+19/11** ([Incertidumbre: lo medido](#incertidumbre-lo-medido-el-1911)); difiere del diseño en
+tres cosas: corre a la resolución de cómputo y no a la mitad, todavía no está condicionada por
+la calibración y no recibe el mapa de estiramiento.
 
-- **Entradas:** la disparidad de CREStereo, la imagen izquierda, el error fotométrico (la
-  izquierda contra la derecha deformada según esa disparidad) y el mapa de estiramiento.
+- **Entradas implementadas** (8 canales, `uncertainty.py`): la imagen izquierda (3); el error
+  fotométrico, es decir la izquierda contra la derecha traída con esa disparidad; dónde ese
+  punto cae dentro de la derecha; cuánto cambia la disparidad entre vecinos; y dos subproductos
+  gratis de CREStereo: el **desacuerdo entre sus dos pasadas** y su **canal vertical**. La
+  disparidad entra aparte, como base.
+- **Entradas previstas y todavía no implementadas:** el mapa de estiramiento.
 - **Salida:** b de Laplace por píxel, la misma escala de error que explica
   [Incertidumbre y objetos](#incertidumbre-y-objetos).
 - **Pérdida:** verosimilitud negativa de Laplace, la NLL que ya usa Fusion.
@@ -861,6 +867,98 @@ conoce.** Tres cámaras sorteadas por nivel, 6 pares; mediana del cambio de prof
 
 **Decisión de la compuerta:** CREStereo queda como estéreo de base. El modo continuo no necesita
 el respaldo de B0 por latencia y sirve para guiar; los metros se anuncian con el modo preciso.
+
+### Incertidumbre: lo medido el 19/11
+
+```text
+uv run --extra ml python -m visionx.depth.crestereo_adapt inc-cache      # una vez, ~30 min
+uv run --extra ml python -m visionx.depth.crestereo_adapt inc-entrenar --salida CARPETA
+uv run --extra ml python -m visionx.depth.crestereo_adapt inc-evaluar CARPETA/mejor.pt
+```
+
+**Cómo se entrenó.** La U-Net de Fusion (`FusionNet`, 0,98 M de parámetros) con los 8 canales
+de arriba y la disparidad de CREStereo como base. La corrección de disparidad queda congelada
+en cero: solo se aprende b, con la NLL de Laplace. Datos: InStereo2K, 1119 pares de
+entrenamiento y 102 de validación (la partición por tramos de T04). CREStereo se corrió una vez
+por par, a resolución nativa (1080×860), 4 iteraciones y dos pasadas, y su salida se guardó.
+Cada par tiene dos variantes: limpia y con el ojo derecho desalineado por un error sorteado
+(dos de cada tres, chico: hasta 0,15° y 0,3 % de focal; una de cada tres, grande: hasta 1° y
+2 %). La referencia es siempre la disparidad real del par limpio. 12 épocas en la Mac, ~77 min.
+
+**Cómo se juzga** (`uncertainty_metrics.py`). Dos cosas distintas:
+- **Ordenar:** que los píxeles con más b sean los que más erran. Se mide con el **AUSE**: se van
+  descartando los píxeles menos confiables y se compara cuánto baja el error contra el mejor
+  orden posible. 0 es perfecto; menos es mejor.
+- **Calibrar:** que el tamaño de b sea creíble. Se mide la **cobertura**: qué parte de los
+  errores cae dentro del intervalo que debería contener el 50 % y el 90 %.
+
+**Ordenar: AUSE.** Comparadores sin entrenar: el error fotométrico y el chequeo
+izquierda-derecha, que necesita una segunda pasada completa de CREStereo.
+
+| Datos | b, primera versión (6 canales) | b, segunda versión (8 canales) | Izquierda-derecha | Fotométrico |
+|---|---|---|---|---|
+| InStereo2K val, limpio (102) | 0,330 | **0,276** | 0,276 | 1,023 |
+| InStereo2K val, desalineado (102) | 0,388 | 0,361 | **0,341** | 0,647 |
+| Middlebury 2014 extra, limpio (13) | — | **0,139** | 0,175 | 0,789 |
+| Middlebury 2014 extra, desalineado (13) | — | **0,307** | 0,320 | 0,696 |
+
+- La primera versión ordenaba **peor** que el chequeo izquierda-derecha. Lo que la mejoró fueron
+  los dos canales que salen de CREStereo. El desacuerdo entre pasadas, solo y sin red, ya da
+  0,35 en InStereo2K.
+- La segunda versión **empata** con izquierda-derecha en InStereo2K limpio, pierde por poco en
+  el desalineado y gana en Middlebury. No es una victoria clara; es el mismo orden a menos costo.
+- **Costo en la Mac** (M2 Max, MPS): la U-Net suma 94 ms al modo preciso (de 619 a 713 ms de
+  mediana) y 25 ms al continuo (de 119 a 144 ms). El chequeo izquierda-derecha sumaría una
+  pasada entera, unos 600 ms en preciso.
+
+**Calibrar: cobertura** de la segunda versión.
+
+| Datos | Intervalo de 50 % | Intervalo de 90 % | b mediana | Error medio de CREStereo |
+|---|---|---|---|---|
+| InStereo2K val, limpio | 0,75 | 0,95 | 0,76 px | 0,63 px |
+| InStereo2K val, desalineado | 0,39 | 0,82 | 2,29 px | 3,66 px |
+| Middlebury 2014 extra, limpio | 0,87 | 0,98 | 1,01 px | 1,18 px |
+| Middlebury 2014 extra, desalineado | 0,36 | 0,88 | 2,98 px | 5,17 px |
+
+- En pares limpios b es **prudente de más** (los intervalos cubren más de lo que prometen). En
+  pares desalineados se queda **corta**, sobre todo en el de 50 %.
+- Era esperable: un corrimiento de columnas por mala alineación no deja huella en ninguna
+  entrada de la red. Esa parte la tiene que aportar la confianza global de la alineación, que
+  todavía no está conectada.
+
+**En la ELP, b está descalibrada.** Única comprobación posible sin referencia densa: las esquinas
+del damero de `cinta-s7`, con el modo preciso. El error real en las esquinas es de 0,05 a 0,10 px
+y la red predice b de 1,0 a 3,3 px: entre 10 y 30 veces más. Con ese b la app diría «no estoy
+seguro» sobre un objeto bien medido. Causa probable, sin confirmar: sobre ese patrón repetitivo
+la pasada a media resolución falla (ya se vio en la prueba de cinta) y el canal de desacuerdo
+entre pasadas se dispara. No hay cómo medirlo en escenas naturales de la ELP sin referencia:
+**hace falta el banco con stickers** para calibrar b en la cámara real.
+
+**Límites.**
+- Una sola semilla. La época se eligió con la misma validación que se informa.
+- No hay un test limpio: CREStereo probablemente vio InStereo2K y Middlebury, así que sus
+  errores ahí son más chicos que en datos nuevos. El número de Middlebury son 13 pares.
+- La focal de InStereo2K se supuso igual al ancho de la imagen para armar las desalineaciones.
+- Pensada para dos pasadas (modo preciso). En el continuo, los cuadros en caliente no tienen
+  pasada a media resolución y ese canal va en cero: ahí no está validada.
+- b por píxel no es todavía la incertidumbre de un objeto ni está pasada a metros en la app.
+
+### Estimador clásico con términos de lente (19/11)
+
+`lens.py` extiende el ajuste clásico con un resto radial de dos coeficientes (r² y r⁴), para
+cubrir una diferencia de distorsión entre la cámara real y la nominal. El movimiento radial
+tiene una parte en filas, que se ve, y una en columnas, que queda determinada por la otra.
+
+- **En sesiones sanas** (respuesta correcta: cero) el ajuste devuelve r² entre +0,0007 y +0,0012
+  y r⁴ entre −0,0001 y −0,0004. De ahí salen sus pisos en la regla.
+- **En los pares reales del precinto empeora** respecto de la regla de cuatro parámetros: la
+  escala queda en −4,7 % (con el precinto) y −3,4 % (suelto), contra −2,3 % y −1,2 %. Los
+  términos nuevos le quitan señal al yaw, que deja de superar su umbral. Más parámetros, con los
+  mismos puntos, se estiman peor.
+- **En cámaras hermanas simuladas ayuda a veces y poco:** con la mitad de los rangos baja de
+  30,5 a 21,3 % y de 18,5 a 9,7 % en dos de las tres cámaras, y en la otra queda igual; con un
+  cuarto, mejora una y empeora otra. Sigue muy lejos del campo exacto (0,4–0,9 %). Lo que
+  falta es, sobre todo, el corrimiento de columnas del centro óptico, que no se ve en las filas.
 
 ### Orden de trabajo, orden de caída y ablaciones
 
