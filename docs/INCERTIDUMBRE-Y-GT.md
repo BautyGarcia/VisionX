@@ -127,6 +127,9 @@ para C se consigue, si se puede, en la facultad.
 
 ### 2.2 GT-sintético-ELP: cómo se genera
 
+**Estado (19/11, noche): generado y verificado** — 1440 vistas, 15 088 objetos; cómo
+reproducirlo, verificarlo y evaluar en [GT-SINTETICO](GT-SINTETICO.md).
+
 - **Cámara:** intrínsecos y separación de la calibración vigente de la ELP (solo lectura de
   `calibration/`), imagen rectificada a 1280×720; altura 1,2–1,4 m, inclinación −15° a 0°,
   posiciones al azar sobre el piso navegable de cada escena.
