@@ -223,7 +223,11 @@ def test_la_red_aprende_con_pocos_ejemplos() -> None:
 
 
 def test_corregir_a_resolucion_de_captura_escala_el_campo() -> None:
-    """Un campo constante de (1, −2) px a la resolución de la red es (2, −4) px al doble."""
+    """Un campo constante de (1, −2) px a la resolución de la red es (0, −4) px al doble.
+
+    Las filas se escalan; el corrimiento constante de columnas se descarta (lo arregla la
+    distancia conocida).
+    """
     torch = pytest.importorskip("torch")
     from visionx.depth.crestereo_adapt.align_train import correct_right
 
@@ -238,5 +242,17 @@ def test_corregir_a_resolucion_de_captura_escala_el_campo() -> None:
     )
     right = texture(7, (320, 192))
     out = correct_right(Constant(), "cpu", texture(8, (320, 192)), right, capture, None, (160, 96))
-    # El píxel (x, y) de la salida se toma de (x + 2, y − 4) de la entrada.
-    assert np.array_equal(out[40:150, 20:300], right[36:146, 22:302])
+    # El píxel (x, y) de la salida se toma de (x, y − 4) de la entrada.
+    assert np.array_equal(out[40:150, 20:300], right[36:146, 20:300])
+
+
+def test_sin_corrimiento_constante_de_columnas() -> None:
+    """Se va la mediana de las columnas; lo que varía en la imagen y las filas quedan."""
+    from visionx.depth.crestereo_adapt.align_train import without_column_shift
+
+    ramp = np.tile(np.linspace(-1.0, 1.0, 9, dtype=np.float32), (4, 1))
+    field = np.stack([ramp + 3.0, np.full((4, 9), -2.0, dtype=np.float32)])
+    out = without_column_shift(field)
+    assert np.allclose(out[0], ramp)
+    assert np.allclose(out[1], -2.0)
+    assert np.allclose(field[0], ramp + 3.0)  # no toca la entrada

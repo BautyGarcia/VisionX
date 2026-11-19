@@ -314,6 +314,19 @@ def load_model(checkpoint: str | Path, device: str = "auto") -> tuple[Any, str]:
     return model.to(device).eval(), device
 
 
+def without_column_shift(field: np.ndarray) -> np.ndarray:
+    """El campo (2, H, W) sin su corrimiento constante de columnas (la mediana de `field[0]`).
+
+    La pérdida no mira ese corrimiento (no se ve en las filas; lo arregla la distancia
+    conocida), así que la red lo deja en cualquier valor y distinto en cada par. Aplicarlo
+    corre la disparidad entera: con la v2, 0,7–1,3 px a 960 de ancho, ~3–10 % de profundidad a
+    1,5 m, y la distancia conocida medida en un par no lo cancela en los otros.
+    """
+    out = field.copy()
+    out[0] -= np.median(out[0])
+    return out
+
+
 def correct_right(
     model: Any,
     device: str,
@@ -354,7 +367,7 @@ def correct_right(
         "mask": np.ones((size[1], size[0]), dtype=bool),
         "strength": 0.0,
     }
-    field = predict_field(model, item, device)
+    field = without_column_shift(predict_field(model, item, device))
     height, width = right.shape[:2]
     scale_x, scale_y = width / size[0], height / size[1]
     fx = cv2.resize(field[0], (width, height), interpolation=cv2.INTER_LINEAR) * scale_x
