@@ -328,6 +328,9 @@ def test_command_and_audio_event_valid():
         lambda: AudioEvent(-1, Priority.SHORT, "hola", 0),
         lambda: AudioEvent(1, 2, "hola", 0),
         lambda: AudioEvent(1, Priority.SHORT, "", 0),
+        lambda: AudioEvent(1, Priority.SHORT, "hola", 0, valid_until_ns=-1),
+        lambda: AudioEvent(1, Priority.SHORT, "hola", 0, valid_until_ns=True),
+        lambda: AudioEvent(1, Priority.SHORT, "hola", 0, valid_until_ns=1.5),
     ],
 )
 def test_command_and_audio_reject_adversarial(build):

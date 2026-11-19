@@ -15,11 +15,11 @@ sección `modes` de la config para poder ajustarlos sin tocar código.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from typing import Any
 
 from visionx.app.runtime import Joint, View
-from visionx.shared.contracts import DistancePolicy, SpatialObject
+from visionx.shared.contracts import Command, DistancePolicy, SpatialObject
 from visionx.shared.geometry import StereoGeometry
 
 __all__ = ["Candidate", "Measure", "ModeSettings", "View", "age_s", "candidates", "direction",
@@ -49,6 +49,10 @@ class ModeSettings:
     # sobrevive a una salida de cuadro: BITACORA 2026-11-14).
     gate_deg: float = 15.0  # salto de ángulo aceptado entre dos frames seguidos...
     gate_deg_per_s: float = 60.0  # ...más esto por segundo transcurrido (la cámara gira)
+    reassociate_gate_deg: float = 35.0  # con varios: acotar la ventana tras una pérdida
+    match_margin_deg: float = 5.0  # ventaja mínima del mejor candidato; empate: aclarar
+    target_memory_s: float = 60.0  # referencia implícita tras buscar/medir, aun si no se ve
+    choice_repeat_s: float = 12.0  # mínimo entre preguntas «¿Cuál?», incluso tras pérdidas
     # Sin ver el objetivo durante esto: "lo perdí". En los clips buscar (cámara en mano), pasar
     # de 1,5 a 2,5 s bajó los avisos de pérdida que se recuperan en < 3 s y no bajó la cobertura
     # de guía (BITACORA T09 mejoras). Más largo demora en avisar una pérdida real.
@@ -56,6 +60,16 @@ class ModeSettings:
     # Ritmo de la voz durante la guía.
     min_interval_s: float = 1.2  # entre dos frases de guía
     repeat_s: float = 4.0  # repetir la dirección aunque no cambie
+    # Si la dirección cambia mientras suena la frase anterior, se corta y se dice la nueva
+    # (después de al menos esto desde la anterior, para no alternar en un límite).
+    preempt_min_s: float = 0.6
+    # Después de la primera frase, la guía no repite el nombre: «Un poco a la izquierda.»
+    short_guide: bool = True
+    # Metros nuevos durante la guía: se dicen solos («A 2 metros.») si cambiaron al menos esto
+    # (lo mayor de los dos). Evita repetir la frase entera por un redondeo o por el borde del
+    # rango (2,95 «a 3 metros» contra 3,05 «más de 3 metros»).
+    distance_change_m: float = 0.3
+    distance_change_frac: float = 0.15
     # Duración estimada de una frase hablada: base + por carácter. Piper es_AR (daniela, rate
     # 1,0) mide 50–70 ms por carácter. La guía no habla encima de su frase anterior: si lo
     # hiciera, las frases se encolarían y la dirección llegaría tarde.
@@ -65,6 +79,10 @@ class ModeSettings:
     # Metros.
     range_m: tuple[float, float] = (0.5, 3.0)  # fuera de esto no se dice un número
     round_m: float = 0.1  # redondeo de lo que se dice
+    # Lejos el error crece con Z²: desde acá los metros son aproximados («a unos 4,5 metros»),
+    # redondeados a approx_round_m. Con approx_from_m >= range_m[1] no hay tramo aproximado.
+    approx_from_m: float = 3.0
+    approx_round_m: float = 0.5
     arrive_m: float = 0.6  # al frente y a esta distancia o menos: "llegaste"
     # Distancia: un frame medido vale si llegó a lo sumo esto ANTES de la orden.
     accept_before_s: float = 0.5
@@ -105,8 +123,82 @@ def speech_s(text: str, s: ModeSettings) -> float:
     return 0.15 if text.startswith("sonido:") else s.speech_base_s + s.speech_s_per_char * len(text)
 
 
+def closing_text(
+    command: Command, now_ns: int, phrases: list[str], s: ModeSettings, *, reserve: bool = True
+) -> str:
+    """Elegir un cierre completo que quepa, reservando síntesis/cola además del habla.
+
+    Si ni el cierre mínimo cabe, callar: el deadline sigue siendo un límite duro.
+    Las alternativas van de más informativa a más breve; no se recortan palabras.
+    """
+    if command.deadline_ns is None:
+        return phrases[0]
+    remaining = (command.deadline_ns - now_ns) / 1e9
+    margin = s.end_margin_s if reserve else 0.0
+    return next((p for p in phrases if p and speech_s(p, s) + margin <= remaining), "")
+
+
+def closing_due(command: Command, now_ns: int, text: str, s: ModeSettings) -> bool:
+    return command.deadline_ns is not None and now_ns >= command.deadline_ns - int(
+        (speech_s(text, s) + s.end_margin_s) * 1e9
+    )
+
+
 def age_s(joint: Joint, now_ns: int) -> float:
     return max(0.0, (now_ns - joint.frame.received_ns) / 1e9)
+
+
+def request_precision(
+    view: View, command: Command, now_ns: int, s: ModeSettings, *, reserve_s: float | None = None
+) -> None:
+    """Congelar una detección para este request_id; desactivado por defecto."""
+    if view.precise is not None:
+        view.precise.request(
+            command,
+            view,
+            now_ns,
+            end_margin_s=s.end_margin_s if reserve_s is None else reserve_s,
+            accept_before_s=s.accept_before_s,
+        )
+
+
+def precision_view(
+    view: View,
+    command: Command,
+    now_ns: int,
+    s: ModeSettings,
+    geometry: StereoGeometry,
+    label: str | None = None,
+    guided_angle: float | None = None,
+) -> View | None:
+    """Esperar precisa sin bloquear; usar continua si vence/falla o no mide el objetivo.
+
+    Reutiliza la política pública de metros del modo. Para varios objetos nombrados todos
+    deben poder medirse; describir admite una escena con al menos un objeto medible.
+    """
+    if view.precise is None:
+        return view
+
+    def invalid(joint: Joint) -> str | None:
+        if age_s(joint, now_ns) > s.max_measure_age_s:
+            return "frame-viejo"
+        if joint.frame.received_ns < command.issued_ns - int(s.accept_before_s * 1e9):
+            return "frame-anterior-a-orden"
+        selected = candidates(joint, label, geometry)
+        if command.mode.value == "distance":
+            if guided_angle is not None and selected:
+                selected = [min(selected, key=lambda c: abs(c.angle_h_deg - guided_angle))]
+            elif label is None:
+                selected = [c for c in selected if abs(c.angle_h_deg) <= s.center_deg * 2]
+                selected = [min(selected, key=lambda c: abs(c.angle_h_deg))] if selected else []
+            selected = selected[: s.max_listed]
+            if not selected:
+                return "sin-objetivo"
+            return next((m.reason for c in selected if not (m := measure(c.obj, s)).ok), None)
+        return None if any(measure(c.obj, s).ok for c in selected) else "sin-metros"
+
+    chosen, pending = view.precise.select(command, view, now_ns, invalid)
+    return None if pending else replace(view, measured=chosen)
 
 
 # Dos cajas de la misma clase que se cubren tanto son el mismo objeto detectado dos veces (YOLO
@@ -202,8 +294,12 @@ def direction(angle_h_deg: float, s: ModeSettings, angle_v_deg: float | None = N
     return horizontal(angle_h_deg, s) + vertical(angle_v_deg, s)
 
 
-def meters(z_m: float, s: ModeSettings) -> str:
-    """Metros redondeados para decir: 1,07 -> "1,1 metros"; 1,0 -> "1 metro"."""
+def meters(z_m: float, s: ModeSettings, *, approx: bool = True) -> str:
+    """Metros redondeados para decir: 1,07 -> "1,1 metros"; 1,0 -> "1 metro". Más allá de
+    `approx_from_m` (y con `approx`), aproximados: 4,3 -> "unos 4,5 metros"."""
+    if approx and z_m > s.approx_from_m:
+        r = round(round(z_m / s.approx_round_m) * s.approx_round_m, 2)
+        return f"unos {r:g} metros".replace(".", ",")
     r = round(round(z_m / s.round_m) * s.round_m, 2)
     text = f"{r:g}".replace(".", ",")
     return "1 metro" if r == 1 else f"{text} metros"
@@ -247,8 +343,8 @@ def measure_phrase(m: Measure, s: ModeSettings) -> str:
         return f"a {meters(m.z_m, s)}"  # type: ignore[arg-type]
     near, far = s.range_m
     return {
-        "muy-cerca": f"muy cerca, a menos de {meters(near, s)}",
-        "muy-lejos": f"lejos, a más de {meters(far, s)}",
+        "muy-cerca": f"muy cerca, a menos de {meters(near, s, approx=False)}",
+        "muy-lejos": f"lejos, a más de {meters(far, s, approx=False)}",
         "reencuadrar": "pero está cortado en el borde: girá un poco hacia ese lado",
         "sin-medida": "pero no puedo medir su distancia",
         "sin-profundidad": "pero todavía no pude medir su distancia",

@@ -1,10 +1,11 @@
 """Comandos de voz (T08). Requieren `uv sync --extra voz` salvo `orden` y `frases`.
 
     uv run python -m visionx.voice dispositivos
-    uv run python -m visionx.voice descargar [--voz es_AR-daniela-high] [--whisper base small]
+    uv run python -m visionx.voice descargar [--voz es_ES-davefx-medium] [--whisper base small]
     uv run python -m visionx.voice orden "¿A qué distancia está la taza?"
     uv run python -m visionx.voice frases [tests/fixtures/voz-frases.csv]
     uv run python -m visionx.voice decir "Busco la taza." [--wav salida.wav]
+    uv run python -m visionx.voice precalentar [--hilos 4]   # caché de Edge (Mateo)
     uv run python -m visionx.voice transcribir audio.wav
     uv run python -m visionx.voice bucle [--whisper base small] [--csv X]
     uv run python -m visionx.voice escuchar
@@ -131,13 +132,21 @@ def cmd_frases(args: argparse.Namespace) -> int:
 
 
 def cmd_decir(args: argparse.Namespace) -> int:
-    from visionx.voice.engines import PiperSynth
+    import time
+
+    from visionx.voice.engines import build_synth
 
     s = VoiceSettings.from_config(load_config(args.config))
-    synth = PiperSynth(s)
+    synth = build_synth(s)
+    t0 = time.perf_counter()
     samples = synth.synthesize(args.texto)
+    ms = (time.perf_counter() - t0) * 1000
     duration = len(samples) / synth.sample_rate
-    print(f"{synth.voice_id}: síntesis {synth.last_ms:.0f} ms para {duration:.2f} s de audio")
+    engine = getattr(synth, "last_engine", "") or s.tts_engine
+    voice = getattr(synth, "voice_id", s.tts_voice)
+    print(f"{voice} ({engine}): síntesis {ms:.0f} ms para {duration:.2f} s de audio")
+    if getattr(synth, "last_error", None):
+        print(f"  Edge falló: {synth.last_error}")
     if args.wav:
         write_wav(Path(args.wav), samples, synth.sample_rate)
         print(f"guardado en {args.wav}")
@@ -226,13 +235,13 @@ def cmd_bucle(args: argparse.Namespace) -> int:
 
 def cmd_escuchar(args: argparse.Namespace) -> int:
     """Prueba manual con micrófono: Enter empieza a grabar, Enter termina; q + Enter sale."""
-    from visionx.voice.engines import PiperSynth, PushToTalk, WhisperTranscriber
-    from visionx.voice.output import AudioOutput, CachedSynth, SoundDevicePlayer
+    from visionx.voice.engines import PushToTalk, WhisperTranscriber, build_synth
+    from visionx.voice.output import AudioOutput, SoundDevicePlayer
 
     s = VoiceSettings.from_config(load_config(args.config))
     parser = _parser()
     stt = WhisperTranscriber(s)
-    synth = CachedSynth(PiperSynth(s))
+    synth = build_synth(s)
     synth.preload(s.preload)
     output = AudioOutput(synth, SoundDevicePlayer(s.output_device, s.block_ms))
     mic = PushToTalk(s.input_device, s.max_record_s)
@@ -267,6 +276,46 @@ def cmd_escuchar(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_precalentar(args: argparse.Namespace) -> int:
+    """Genera con Edge las frases frecuentes y las deja en la caché en disco (data/cache/voz)."""
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
+    from visionx.shared.config import ROOT
+    from visionx.voice.engines import DiskCachedSynth, EdgeSynth
+    from visionx.voice.warm import frequent_phrases
+
+    cfg = load_config(args.config)
+    s = VoiceSettings.from_config(cfg)
+    phrases = frequent_phrases(cfg, ClassCatalog(COCO_CLASSES).spoken)
+    if args.limite:
+        phrases = phrases[: args.limite]
+    folder = Path(s.tts_cache_dir or "data/cache/voz")
+    folder = folder if folder.is_absolute() else ROOT / folder
+    cache = DiskCachedSynth(EdgeSynth(s), folder)
+    todo = [p for p in phrases if not cache._path(p).is_file()]
+    print(f"{len(phrases)} frases; {len(phrases) - len(todo)} ya en caché; genero {len(todo)}")
+    t0, errors = time.perf_counter(), []
+
+    def one(text: str) -> None:
+        try:
+            DiskCachedSynth(EdgeSynth(s), folder).synthesize(text)
+        except Exception as exc:  # una frase que falla no corta el resto
+            errors.append((text, f"{type(exc).__name__}: {exc}"))
+
+    with ThreadPoolExecutor(max_workers=args.hilos) as pool:
+        for i, _ in enumerate(pool.map(one, todo), 1):
+            if i % 50 == 0:
+                print(f"  {i}/{len(todo)} ({time.perf_counter() - t0:.0f} s)", flush=True)
+    for text, err in errors[:10]:
+        print(f"  error {text!r}: {err}")
+    size = sum(f.stat().st_size for f in cache.folder.glob("*.npy")) / 1e6
+    print(f"listo en {time.perf_counter() - t0:.0f} s: {len(todo) - len(errors)} nuevas, "
+          f"{len(errors)} errores; caché {cache.folder} ({size:.0f} MB)")  # fmt: skip
+    return 1 if errors and len(errors) == len(todo) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m visionx.voice",
@@ -283,6 +332,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--whisper", nargs="+", help="tiny, base, small, medium...")
     p.add_argument("--config")
     p.set_defaults(fn=cmd_descargar)
+
+    p = sub.add_parser("precalentar", help="generar con Edge las frases frecuentes (caché)")
+    p.add_argument("--hilos", type=int, default=4)
+    p.add_argument("--limite", type=int, default=0, help="solo las primeras N (prueba)")
+    p.add_argument("--config")
+    p.set_defaults(fn=cmd_precalentar)
 
     p = sub.add_parser("orden", help="interpretar frases escritas (sin audio)")
     p.add_argument("texto", nargs="+")

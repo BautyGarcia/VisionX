@@ -146,39 +146,42 @@ def simulate(
         while pending and pending[0][0] <= t_s():
             controller.handle_text(pending.pop(0)[1])
 
-    index = 0
-    while True:
-        if tick_s:
-            clock.advance(int(tick_s * 1e9))
-        frame = source.read()
-        if frame is None:
-            break
-        if t0[0] is None:
-            t0[0] = clock.now_ns()
-        n_frames += 1
-        now = clock.now_ns()
-        give_orders()
-        if index % every == 0 and now >= det_free_ns:
-            try:
-                det = detector.predict(frame)
-            except EstimatorError as exc:
-                errors.append(f"detector frame {frame.frame_id}: {exc}")
-            else:
-                n_det += 1
-                det_free_ns = now + int(det_latency_s * 1e9)
-                seen_queue.append((det_free_ns, Joint(frame, det, None, ())))
-        index += 1
-        deliver(now)
-        controller.tick()
-        if on_frame is not None:
-            on_frame(t_s(), frame, state["view"], sink)
-    # Sin frames nuevos: el tiempo sigue para que los modos noten la ausencia y cierren.
-    step = int(0.1 * 1e9)
-    for _ in range(int(tail_s / 0.1)):
-        clock.advance(step)
-        give_orders()
-        deliver(clock.now_ns())
-        controller.tick()
-        if on_frame is not None:
-            on_frame(t_s(), None, state["view"], sink)
-    return SimulationResult(sink.spoken, events, n_frames, n_det, n_depth, t_s(), errors)
+    try:
+        index = 0
+        while True:
+            if tick_s:
+                clock.advance(int(tick_s * 1e9))
+            frame = source.read()
+            if frame is None:
+                break
+            if t0[0] is None:
+                t0[0] = clock.now_ns()
+            n_frames += 1
+            now = clock.now_ns()
+            give_orders()
+            if index % every == 0 and now >= det_free_ns:
+                try:
+                    det = detector.predict(frame)
+                except EstimatorError as exc:
+                    errors.append(f"detector frame {frame.frame_id}: {exc}")
+                else:
+                    n_det += 1
+                    det_free_ns = now + int(det_latency_s * 1e9)
+                    seen_queue.append((det_free_ns, Joint(frame, det, None, ())))
+            index += 1
+            deliver(now)
+            controller.tick()
+            if on_frame is not None:
+                on_frame(t_s(), frame, state["view"], sink)
+        # Sin frames nuevos: el tiempo sigue para que los modos noten la ausencia y cierren.
+        step = int(0.1 * 1e9)
+        for _ in range(int(tail_s / 0.1)):
+            clock.advance(step)
+            give_orders()
+            deliver(clock.now_ns())
+            controller.tick()
+            if on_frame is not None:
+                on_frame(t_s(), None, state["view"], sink)
+        return SimulationResult(sink.spoken, events, n_frames, n_det, n_depth, t_s(), errors)
+    finally:
+        controller.close()

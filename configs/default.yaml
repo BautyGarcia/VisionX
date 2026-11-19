@@ -16,6 +16,11 @@ camera:
 
 depth:
   compute: [1280, 720]      # resolución por ojo para profundidad
+  precisa:
+    estimador: ninguna     # --profundidad-precisa: B0–B5, fusion, crestereo-preciso o depth.estimadores
+    espera_s: 2.0          # margen sobre B4 CPU ~1,1 s; limitada por la vigencia de la orden
+    compute: null          # null hereda depth.compute; override solo para la precisa, [ancho, alto]
+  estimadores: {}           # nombre: {fabrica: "paquete.modulo:funcion", parámetros libres...}
   range_m: [0.5, 3.0]       # rango donde se anuncian metros
   min_coverage: 0.0         # bajo esto el DepthResult sale PARTIAL; se fija con el banco ELP
   # SGBM y filtros de B0-B2 (src/visionx/depth/stereo.py). CONGELADOS el 14/11 con InStereo2K
@@ -142,6 +147,7 @@ detection:
 # Z = percentil front_percentile de la capa más cercana de la máscara. Candidatos medidos en
 # clips de desarrollo, sin calibrar; ver BITACORA T09.
 spatial_provisional:
+  usar: false              # true = ubicación provisoria de B en vez de la de A (spatial), para comparar
   min_valid: 0.5            # fracción mínima de la máscara con profundidad para decir metros
   layer_min_frac: 0.25      # una capa de profundidad cuenta como objeto con al menos esto de la máscara
   front_percentile: 20      # percentil de Z dentro de la capa: la superficie del frente
@@ -179,8 +185,11 @@ spatial:
   bottom_band_px: 2         # franja inferior (px de la grilla de profundidad) para esa regla
 
 # Modos buscar y distancia (T09, src/visionx/modes/). Candidatos sin medir: M1/M7/M8 los fijan.
-# El rango que se anuncia en metros sale de depth.range_m.
+# El rango que se anuncia en metros: modes.range_m (si falta, depth.range_m).
 modes:
+  range_m: [0.5, 5.0]       # metros que se dicen; 3–5 m aproximados (abajo). Candidato: 3–5 m sin cinta
+  approx_from_m: 3.0        # desde acá «a unos 4,5 metros» (error ~Z²; bolso a 3 m: 3,05 ± 0,08 con B0)
+  approx_round_m: 0.5       # redondeo del tramo aproximado
   center_deg: 8.0           # |ángulo| <= esto: "al frente" (grados; + a la derecha)
   side_deg: 25.0            # <= esto: "un poco a la izquierda/derecha"; más: "a la izquierda"
   vertical_deg: 15.0        # |ángulo vertical| > esto: se agrega "arriba"/"abajo" (respecto de la cámara)
@@ -191,9 +200,18 @@ modes:
   max_measure_age_s: 3.0    # Z más viejo que esto no se dice, s (la profundidad tarda más)
   gate_deg: 15.0            # salto de ángulo aceptado para seguir al mismo objetivo...
   gate_deg_per_s: 60.0      # ...más esto por segundo sin verlo (la cámara gira)
+  reassociate_gate_deg: 35.0 # con varios iguales: límite de salto tras pérdida, grados
+  match_margin_deg: 5.0     # ventaja mínima en posición/continuidad; sin ella pide aclarar
+  target_memory_s: 60.0     # s desde buscar/ver/medir: «está/eso» refiere a ese objetivo
+  choice_repeat_s: 12.0     # s mínimos entre «¿Cuál?», también al perder/reasociar
   lost_s: 2.5               # sin ver el objetivo durante esto: "Perdí ...", s (clips buscar: menos avisos falsos)
   min_interval_s: 1.2       # mínimo entre dos frases de guía, s
   repeat_s: 4.0             # repetir la dirección aunque no cambie, s
+  preempt_min_s: 0.6        # dirección nueva mientras suena la vieja: se corta y se dice la nueva
+                            # (0,4 en la demo buscar-a del 19/11: cortes cada 0,4 s al barrer)
+  short_guide: true         # después de la primera frase, sin el nombre: «Un poco a la izquierda.»
+  distance_change_m: 0.3    # guía: metros nuevos se dicen solos si cambian al menos esto...
+  distance_change_frac: 0.15 # ...o esta fracción (lo mayor); sin cambio no se repite la frase
   speech_base_s: 0.3        # duración estimada de una frase: base...
   speech_s_per_char: 0.065  # ...más esto por carácter (Piper es_AR: 50–70 ms/car); la guía no habla encima
   end_margin_s: 1.0         # frase de cierre antes del vencimiento de la orden, s
@@ -201,6 +219,83 @@ modes:
   arrive_m: 0.6             # al frente y a esto o menos: "Llegaste", m
   accept_before_s: 0.5      # distancia: frame medido hasta esto ANTES de la orden, s
   max_listed: 3             # a lo sumo cuántos iguales se enumeran
+
+# OCR beta T10. Pesos aparte: `python -m visionx.reading descargar`. Siempre CPU.
+reading:
+  pre_s: 0.8                # s antes de la orden; la persona apunta y después habla
+  window_s: 0.4             # s máximos tras la orden; elegir la izquierda de mayor nitidez
+  early_sharpness: 90.0     # varianza Laplaciano absoluta (0 desactiva); piloto ELP rectificada 1920x1080
+  # Piloto ELP (7 segmentos completos): CER medio 90,95 % rectificada / 93,56 % original.
+  # Remap puede deformar texto en otras lentes: conservar ambas rutas y volver a comparar.
+  image_source: rectified  # original | rectified; `evaluar --imagen ambas`, mismo tamaño por ojo
+  min_score: 0.65           # [0,1], descartar reconocimiento inseguro; candidato de desarrollo
+  speech_min_score: 0.90    # solo voz: piloto de 7 segmentos; no modifica métricas OCR
+  line_height_ratio: 0.5   # centros de renglón a <= esta fracción de la menor altura se agrupan
+  region_gap_ratio: 0.15   # corredor vacío mínimo / altura mediana; sellos vecinos tienen poco margen
+  section_gap_ratio: 1.5   # separación vertical amplia / altura mediana: encabezado antes de columnas
+  max_age_s: 1.0           # s; no seleccionar una captura que llegó vieja al modo
+  border_px: 8.0          # px de la imagen OCR: sugerir reencuadre si una caja toca el borde
+  small_text_px: 20.0     # px de altura mediana: sugerir acercar solo si hay cajas pequeñas
+  max_chars: 160          # caracteres por Say; acota síntesis y permite cancelar entre bloques
+  speech_max_blocks: 6    # regiones habladas: unir sus renglones; título primero, luego orden visual
+  speech_max_chars: 320   # total, incluido «…y más texto chico.» si hay corte; sin diálogo
+  speech_base_s: 0.3      # estimación de duración para espaciar bloques, s...
+  speech_s_per_char: 0.065 # ...más s/carácter, Piper es_AR (T09); falta audio real en Mac
+  weights_dir: weights/rapidocr # modelos latinos PP-OCRv5; hashes fijados en reading/rapid.py
+  threads: 4              # hilos ONNX CPU; dejar núcleos para captura y demás modelos
+  det_limit_px: 1280       # lado mayor del detector OCR, px; conservar detalle en etiquetas
+  # Piloto CPU, 7 segmentos completos: recall macro center 10,39 %, none 9,34 %, text 9,95 %.
+  # Center prioriza cobertura con costo cercano a none; text baja ms pero pierde texto de Ashwa.
+  # Ganancia pequeña: mismo recall micro que none, sin aciertos numéricos. Validar otros envases/Mac.
+  crop: center            # none | center | text | object; candidato de desarrollo, central 60 %
+  center_fraction: 0.6     # fracción del ancho Y alto conservada, centrada; luego escala a det_limit_px
+  crop_margin: 0.15        # margen por lado / tamaño de envolvente de texto u objeto; limita al cuadro
+  text_probe_px: 640       # primera pasada solo detección a baja resolución; segunda det+rec a 1280
+  # object usa la detección más central del MISMO frame/geometría; sin ella aplica text.
+
+# Descripción local de una escena (T11). Sin VLM ni conexión a internet.
+describe:
+  # Prioridad (recortar de 4 hacia 1, sin acelerar la voz):
+  # 1. Metros del afirmado más cercano de la escena; de cada zona mientras alcance.
+  # 2. Nombres afirmados por relevancia (cercanía, persona/área, índice estable).
+  # 3. Metros del resto de afirmados. 4. Los «parece haber».
+  # Los representantes de zona se retiran después de los otros nombres; el global nunca.
+  # Si se recortan nombres (también por max_objects), cerrar con «y N cosas más».
+  # Un override menor al hecho global mínimo con conteo conserva metros aunque se exceda.
+  max_objects: 8
+  # R3: desarrollo, 39 frames / 247 candidatos revisados (197 con respaldo, 50 sin él).
+  # Curva y etiquetas: outputs/t11/ronda3/. No probabilidades ni test independiente.
+  min_score: 0.6            # afirmación: score actual Y previo >= este corte (y el de su clase)
+  cautious_score: 0.27     # reserva: "parece haber"; nunca metros; no cambia detection/buscar
+  cautious_min_scores:     # pisos por clase, tanto en frame actual como en confirmaciones
+    bed: 0.35             # ropa confundida con cama: score persistente <= 0.320
+    bench: 0.35           # estructura/mesa de jardín: persistente <= 0.287
+    banana: 0.4           # peluche: persistente <= 0.372
+    potted plant: 0.4     # almohadón: persistente <= 0.395
+    laptop: 0.5           # estructura de jardín: persistente <= 0.452, aislado hasta 0.770
+    dining table: 0.5     # banquito: persistente <= 0.463
+    oven: 0.65            # lavarropas: hasta 0.642 en contexto; no relajar por ser grande/fijo
+  # Pileta/heladera usan 0.27: no hay falsos revisados; no eximirlas de persistencia.
+  # No hay evidencia para bajar más cama/sillón/inodoro. Dos frames a 0.60: 99 reales/0 falsos;
+  # corte global 0.40: 139/8. Con pisos + 0.27: 163/8 (4.68 %); 0.26: 164/10 (5.75 %).
+  # Se elige 0.27 por máximo de reales en la grilla con <=5 % sin respaldo, antes del presupuesto.
+  persist_hits: 2          # frames distintos en CADA nivel; una instancia no confirma otra
+  persist_s: 3.0           # ventana de presencia antes del frame descrito (segundos)
+  max_speech_s: 8.0        # presupuesto estimado con modes.speech_s_per_char; reduce el listado
+  wait_measure_s: 4.0       # s; permite segunda observación en ir_lavadero (~3.3 s con estas latencias)
+  large_area_fraction: 0.1  # fracción de imagen ocupada por la caja; desempata relevancia sin inferir tamaño real
+
+camera_status:
+  # Estado global de la cámara que manda el estimador (T12 CREStereo adaptable, acordado con Bauty
+  # el 18/11): DepthResult UNMEASURABLE con reason "<código>" o "<código>: detalle". La app dice la
+  # frase una vez si el estado dura hold_s, la recuerda cada repeat_s (0 = nunca) y avisa al volver.
+  frases:
+    alineando: Estoy ajustando la cámara. Esperá un momento para pedirme distancias.
+    camara-desconocida: No reconozco esta cámara. Puedo decirte dónde están las cosas, pero no a cuántos metros.
+    no-medible: Ahora no puedo medir distancias con esta cámara.
+  lista: Listo, ya puedo medir distancias.
+  hold_s: 1.0
+  repeat_s: 60.0
 
 calibration:
   board: charuco
@@ -217,13 +312,18 @@ audio:
   max_record_s: 8           # tope de una orden con el botón, s
   deadlines_s:              # vigencia de cada orden, s; vencida, su respuesta ya no se dice (candidatos, sin medir)
     search: 30
-    distance: 5
+    distance: 10            # respuesta con dos instancias ~5 s de habla + medir (arranque en frío ~2 s) + margen
     read: 30
     describe: 20
     choose: 10
     control: 2
   tts:
-    voice: es_AR-daniela-high   # voz de Piper (v1.0.0); otras: es_MX-claude-high, es_ES-davefx-medium
+    engine: edge              # edge (voz neuronal, NECESITA INTERNET; sin red sigue con Piper) | piper (local)
+    edge_voice: es-UY-MateoNeural  # elegida por Tomás el 18/11 (muestras en outputs/voz/voces-naturales)
+    edge_timeout_s: 4.0       # sin audio completo en este tiempo, esa frase la dice Piper
+    edge_retry_s: 30.0        # tras una falla de Edge, todo por Piper durante este lapso
+    cache_dir: data/cache/voz # frases ya dichas por Edge (sirven sin red); null = sin caché en disco
+    voice: es_ES-davefx-medium  # voz de Piper (v1.0.0): única con engine piper, respaldo con edge
     voices_dir: weights/piper
     preload: ["No entendí.", "Cancelado.", "Leo.", "Describo.", "Mido la distancia."]
   stt:
@@ -233,3 +333,45 @@ audio:
     compute_type: int8      # int8 en CPU; float16 en CUDA
     beam_size: 1            # 1 = greedy, lo más rápido; subir solo si mejora las frases medidas
     initial_prompt: "Buscá la taza. ¿A qué distancia está? Leé. Describí. Cancelar."  # orienta vocabulario y puntuación
+
+assistant:
+  # Claude con imagen para leer, describir y preguntas libres (T10/T11, decidido el 18/11 tras
+  # comparar Opus/Sonnet/Haiku en 20 casos: outputs/vlm/comparativa.html). Necesita internet,
+  # el extra `ia` y la key propia en ~/.visionx/anthropic_api_key (nunca ANTHROPIC_API_KEY: la
+  # usarían también Claude Code y otros programas); sin eso cada modo usa su versión local.
+  enabled: true
+  model: claude-sonnet-5-5   # primera palabra ~0,9 s (mediana) con effort low en la comparación
+  effort: low
+  max_tokens: 1024
+  image_width: 1280          # se reduce el ojo izquierdo a este ancho (~1.200 tokens por imagen)
+  jpeg_quality: 85
+  timeout_s: 15.0
+  memory_s: 120.0            # preguntas de seguimiento: recuerda lo hablado durante esto
+  max_turns: 6
+  fallbacks: true            # fallback del servidor si el modelo rechaza una consulta
+  ledger: outputs/vlm/gasto.jsonl  # costo de cada consulta
+  budget_usd: 5.0            # con lo anotado en ledger >= esto, no consulta más (0 = sin tope)
+
+proximity:
+  # Alerta de cercanía (T20, app/proximity.py): obstáculo en la zona central a menos de near_m,
+  # sin contar el piso (altura estimada con la cámara nivelada a camera_height_m), sostenido
+  # hold_s con profundidad fresca. Callada en leer/buscar/distancia. No es navegación validada.
+  # Apagada por defecto (19/11): con B0 en los clips dio ~1,7 avisos/min en la recorrida por la
+  # casa, varios falsos (pared lisa, contraluz, techo) y avisos justo después de «Llegaste».
+  # Probarla en vivo con CREStereo: `proximity: {enabled: true}` en configs/local.yaml.
+  enabled: false
+  near_m: 0.8
+  zone_x: [0.3, 0.7]        # columnas centrales (fracción del ancho)
+  zone_y: [0.15, 0.75]      # filas; las de abajo suelen ser piso
+  camera_height_m: 1.3      # cámara a la altura del pecho
+  floor_margin_m: 0.3       # lo que está a menos de esto del piso no es obstáculo
+  min_fraction: 0.25        # de la zona válida
+  min_px: 200
+  min_coverage: 0.3         # zona casi sin píxeles válidos (pared lisa): SGBM inventa cercanía
+  ceiling_m: 0.5            # más de esto por encima del eje óptico es techo
+  quiet_after_s: 5.0        # callada después de que termina una orden
+  hold_s: 0.4
+  max_age_s: 0.8            # profundidad más vieja: alerta suspendida
+  cooldown_s: 6.0
+  silent_modes: [read, search, distance]
+  phrase: Cuidado, algo muy cerca adelante.

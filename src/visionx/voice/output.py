@@ -4,7 +4,7 @@ Un hilo propio sintetiza y reproduce los AudioEvent de a uno:
 - El de mayor prioridad sale primero; a igual prioridad, el más viejo.
 - Un evento más prioritario que el que está sonando lo corta si el actual es cancelable
   (una alerta interrumpe una descripción). Lo cortado no se retoma: sería información vieja.
-- Antes de sonar se revisa el deadline con el reloj elegido: lo vencido no se reproduce.
+- Antes de sonar se revisan orden y hecho con el reloj elegido: lo vencido no se reproduce.
 - cancel(request_id) saca lo pendiente de ese pedido y corta lo que suena. El corte se revisa
   entre bloques de `block_ms`: esa es la demora lógica máxima, más el búfer del dispositivo.
 
@@ -27,7 +27,7 @@ from typing import Protocol
 import numpy as np
 
 from visionx.shared.clock import Clock, MonotonicClock
-from visionx.shared.contracts import AudioEvent, check_schema
+from visionx.shared.contracts import AudioEvent, FrameKey, check_schema
 from visionx.shared.errors import InvalidInput
 
 SOUND_PREFIX = "sonido:"
@@ -92,31 +92,73 @@ def render_sound(name: str, sample_rate: int) -> np.ndarray:
 
 class CachedSynth:
     """Guarda las últimas frases sintetizadas: las frecuentes ("Busco la taza.") no se vuelven a
-    calcular. preload() las prepara al arrancar, cuando nadie está esperando."""
+    calcular. preload() las prepara al arrancar, cuando nadie está esperando.
 
-    def __init__(self, synth: Synth, max_items: int = 64) -> None:
+    Con `prefetch=True` (voz por red, Edge), AudioOutput pide sintetizar cada frase apenas entra
+    a la cola: la siguiente frase se calcula mientras suena la actual y no queda un silencio de
+    ~1 s entre frases de una misma respuesta. Una frase en cálculo no se pide dos veces.
+    """
+
+    def __init__(self, synth: Synth, max_items: int = 64, *, prefetch: bool = False) -> None:
         self.synth = synth
         self.sample_rate = synth.sample_rate
+        self.voice_id = getattr(synth, "voice_id", None)
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
         self._max = max_items
         self._lock = threading.Lock()
+        self._pending: dict[str, threading.Event] = {}
+        self._pool = None
+        self._prefetch = prefetch
         self.hits = 0
         self.misses = 0
 
     def synthesize(self, text: str) -> np.ndarray:
+        while True:
+            with self._lock:
+                if text in self._cache:
+                    self._cache.move_to_end(text)
+                    self.hits += 1
+                    return self._cache[text]
+                waiting = self._pending.get(text)
+                if waiting is None:
+                    done = self._pending[text] = threading.Event()
+                    break
+            waiting.wait()  # otro hilo la está calculando; si falló, se reintenta acá
+            with self._lock:
+                if text not in self._cache and self._pending.get(text) is waiting:
+                    break
+        try:
+            samples = self.synth.synthesize(text)  # fuera del lock: puede tardar cientos de ms
+            samples.setflags(write=False)  # compartido entre reproducciones: nadie lo modifica
+            with self._lock:
+                self.misses += 1
+                self._cache[text] = samples
+                while len(self._cache) > self._max:
+                    self._cache.popitem(last=False)
+            return samples
+        finally:
+            with self._lock:
+                self._pending.pop(text, None)
+            done.set()
+
+    def prefetch(self, text: str) -> None:
+        """Calcular en segundo plano (si está habilitado); los errores se ven al reproducir."""
+        if not self._prefetch:
+            return
         with self._lock:
-            if text in self._cache:
-                self._cache.move_to_end(text)
-                self.hits += 1
-                return self._cache[text]
-        samples = self.synth.synthesize(text)  # fuera del lock: puede tardar cientos de ms
-        samples.setflags(write=False)  # compartido entre reproducciones: nadie lo modifica
-        with self._lock:
-            self.misses += 1
-            self._cache[text] = samples
-            while len(self._cache) > self._max:
-                self._cache.popitem(last=False)
-        return samples
+            if text in self._cache or text in self._pending:
+                return
+            if self._pool is None:
+                from concurrent.futures import ThreadPoolExecutor
+
+                self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tts-previo")
+        self._pool.submit(self._quiet, text)
+
+    def _quiet(self, text: str) -> None:
+        try:
+            self.synthesize(text)
+        except Exception:  # noqa: S110 - el hilo de audio reintenta y registra el error
+            pass
 
     def preload(self, phrases: Iterable[str]) -> None:
         for phrase in phrases:
@@ -131,6 +173,7 @@ class Outcome(StrEnum):
     CANCELLED = "cancelado"  # cancel() del pedido o cancel_all()
     PREEMPTED = "desplazado"  # lo cortó o lo sacó de la cola algo más prioritario
     EXPIRED = "vencido"  # pasó su deadline antes de sonar
+    FACT_EXPIRED = "vencido-hecho"  # envejeció la observación que respalda el audio
     DROPPED = "descartado"  # la cola estaba llena
     FAILED = "error"  # falló la síntesis o el dispositivo
 
@@ -145,6 +188,10 @@ class PlaybackRecord:
     started_ns: int | None = None  # empezó a sonar (después de sintetizar)
     ended_ns: int | None = None
     error: str | None = None
+    deadline_ns: int | None = None
+    valid_until_ns: int | None = None
+    fact_received_ns: int | None = None
+    frame: FrameKey | None = None
 
     @property
     def wait_ms(self) -> float | None:
@@ -152,6 +199,31 @@ class PlaybackRecord:
         if self.started_ns is None:
             return None
         return (self.started_ns - self.submitted_ns) / 1e6
+
+    def trace_data(self) -> dict:
+        """Tiempos de Player; con dispositivo real son límites software del audio audible.
+
+        Un descarte anterior a play no tiene inicio ni fin audible. ended_ns conserva
+        aparte el instante de resolución del evento, incluso si nunca llegó a sonar.
+        """
+        return {
+            "request_id": self.request_id,
+            "texto": self.text_or_sound,
+            "resultado": self.outcome,
+            "espera_ms": self.wait_ms,
+            "started_ns": self.started_ns,
+            "finished_ns": self.ended_ns if self.started_ns is not None else None,
+            "ended_ns": self.ended_ns,
+            "deadline_ns": self.deadline_ns,
+            "valid_until_ns": self.valid_until_ns,
+            "fact_received_ns": self.fact_received_ns,
+            "fact_age_ms": (self.started_ns - self.fact_received_ns) / 1e6
+            if self.started_ns is not None and self.fact_received_ns is not None
+            else None,
+            "frame": {"session_id": self.frame.session_id, "frame_id": self.frame.frame_id}
+            if self.frame is not None
+            else None,
+        }
 
 
 @dataclass(order=True)
@@ -195,14 +267,28 @@ class AudioOutput:
         check_schema(event)
         now = self.clock.now_ns()
         record = PlaybackRecord(
-            event.request_id, int(event.priority), event.text_or_sound, submitted_ns=now
+            event.request_id,
+            int(event.priority),
+            event.text_or_sound,
+            submitted_ns=now,
+            deadline_ns=event.deadline_ns,
+            valid_until_ns=event.valid_until_ns,
+            fact_received_ns=event.fact_received_ns,
+            frame=event.frame,
         )
         with self._cond:
             if self._closed:
                 raise RuntimeError("AudioOutput cerrado")
             self.records.append(record)
+            text = event.text_or_sound
+            prefetch = getattr(self.synth, "prefetch", None)
+            if prefetch is not None and not text.startswith(SOUND_PREFIX):
+                prefetch(text)
             if event.deadline_ns is not None and now > event.deadline_ns:
                 self._finish(record, Outcome.EXPIRED, now)
+                return
+            if event.valid_until_ns is not None and now > event.valid_until_ns:
+                self._finish(record, Outcome.FACT_EXPIRED, now)
                 return
             heapq.heappush(
                 self._queue, _Queued((-event.priority, next(self._order)), event, record)
@@ -307,12 +393,14 @@ class AudioOutput:
         except Exception as exc:  # una frase que no se puede sintetizar no tumba la salida
             return Outcome.FAILED, f"síntesis: {exc}"
         with self._cond:
-            # La síntesis tarda: mientras tanto pudo llegar un cancel o vencer el pedido.
+            # La síntesis tarda: pudo llegar un cancel o vencer la orden o el hecho.
             if self._current_outcome is not None:
                 return self._current_outcome, None
             now = self.clock.now_ns()
             if event.deadline_ns is not None and now > event.deadline_ns:
                 return Outcome.EXPIRED, None
+            if event.valid_until_ns is not None and now > event.valid_until_ns:
+                return Outcome.FACT_EXPIRED, None
             record.started_ns = now
         try:
             completed = self.player.play(samples, rate, self._stop_current)

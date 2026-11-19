@@ -16,8 +16,8 @@ Reglas (TECNICO T09):
   `max_measure_age_s` no se dice. Si el sistema se atrasa, la guía calla; "Perdí" exige
   `lost_s` de video fresco sin el objetivo (un pico del detector no es una pérdida).
 - Metros solo con la política SPEAK_METERS de quien ubica el objeto y dentro del rango.
-- Con varios iguales se pregunta cuál; perdido el elegido, se suspende la guía y no se le
-  asigna su identidad al primero parecido.
+- Se conserva la selección tras una pérdida. Solo se reasocia con continuidad suficiente;
+  ante ambigüedad se suspende la guía y se pregunta con un intervalo configurable.
 
 Todo lo que se dice sale con prioridad SHORT: el bip y la dirección deben sonar DESPUÉS del
 "Busco taza." de confirmación, no cortarlo (una prioridad mayor lo interrumpiría).
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from visionx.app.controller import Say
@@ -38,6 +39,8 @@ from visionx.modes.common import (
     View,
     age_s,
     candidates,
+    closing_due,
+    closing_text,
     horizontal,
     measure,
     measure_phrase,
@@ -72,6 +75,8 @@ class SearchHandler:
         self.request_id = command.request_id if command else None
         self.state = SEARCHING
         self.target: Target | None = None
+        self._selected: Target | None = None  # se conserva aun cuando no se puede guiar
+        self._last_choice_ns: int | None = None
         self.found_once = False
         self._hits: deque[tuple[int, int]] = deque()  # (received_ns, cuántos) con candidatos
         self._single_since: int | None = None  # eligiendo: desde cuándo se ve uno solo
@@ -82,15 +87,24 @@ class SearchHandler:
         self._last_phrase: str | None = None
         self._last_say_ns: int | None = None
         self._finished = False  # ya dijo su frase de cierre (puede pasar dentro de start())
+        self._closing_ns: int | None = None
         self._stall_reported = False
         self._h_word: str | None = None  # últimas zonas dichas, para la histéresis
         self._v_word: str | None = None
+        # Lo último dicho en la guía: dónde y qué Z (para no repetir lo mismo con otras palabras).
+        self._said_where: str | None = None
+        self._said_z: float | None = None
+        # Lo que trae la frase que se está por decir (lo arma `_guide_fact`).
+        self._fact_where: str | None = None
+        self._fact_measure: Measure | None = None
 
     # -- interfaz ModeHandler --------------------------------------------------------------
 
     def start(self, command: Command, view: View, now_ns: int) -> list[Say]:
         self._reset(command)
         self.memory.remember(None)  # una búsqueda nueva reemplaza al objetivo anterior
+        if command.target:
+            self.memory.request(command.target, now_ns)
         says, _ = self.tick(command, view, now_ns)
         return says
 
@@ -101,13 +115,28 @@ class SearchHandler:
             return [], True
         label = command.target or ""
         name = self.spoken(label)
-        if command.deadline_ns is not None and now_ns >= command.deadline_ns - int(
-            self.s.end_margin_s * 1e9
-        ):
+        closing = closing_text(
+            command,
+            command.issued_ns,
+            [
+                f"Terminé de buscar {name}." if self.found_once else f"No encontré {name}.",
+                "Terminé de buscar." if self.found_once else "No lo encontré.",
+                "Fin de búsqueda.",
+            ],
+            self.s,
+        )
+        self._closing_ns = (
+            command.deadline_ns - int((speech_s(closing, self.s) + self.s.end_margin_s) * 1e9)
+            if command.deadline_ns is not None
+            else None
+        )
+        if closing_due(command, now_ns, closing, self.s):
             self._event("fin", {"motivo": "vencimiento", "encontrado": self.found_once})
             self._finished = True
-            return [Say(f"Terminé de buscar {name}." if self.found_once
-                        else f"No encontré {name}.")], True  # fmt: skip
+            closing = closing_text(
+                command, now_ns, [closing, "Fin de búsqueda."], self.s, reserve=False
+            )
+            return ([Say(closing)] if closing else []), True
 
         self._update_measure(view, label, now_ns)
         says: list[Say] = []
@@ -117,14 +146,15 @@ class SearchHandler:
             self._last_seen_key = seen.frame.key  # type: ignore[union-attr]
             cands = candidates(seen, label, self.geometry)  # type: ignore[arg-type]
             says += self._on_frame(cands, name, now_ns)
-        if self.state == CHOOSING and self._last_say_ns is not None:
-            # Sin respuesta, se vuelve a preguntar de vez en cuando (no se elige por el usuario).
-            if (now_ns - self._last_say_ns) / 1e9 >= 2 * self.s.repeat_s and self._choices:
-                says.append(
-                    self._phrase(
-                        f"¿Cuál {name}? Decí izquierda, derecha, centro o la más cercana.", now_ns
-                    )
+        if not fresh:
+            self._choices = []
+            self._single_since = None
+        if self.state == CHOOSING and self._choices and self._can_ask(now_ns):
+            says.append(
+                self._ask(
+                    f"¿Cuál {name}? Decí izquierda, derecha, centro o la más cercana.", now_ns
                 )
+            )
         if self.state == GUIDING and self.target is not None:
             # "Perdí" necesita evidencia de ausencia: frames frescos que cubran lost_s de video
             # sin el objetivo, medido en tiempo de FRAME. Si el sistema se atrasa (no llegan
@@ -145,7 +175,7 @@ class SearchHandler:
                 self._event("perdido", {"angulo_h": round(last, 1)})
                 self.state, self.target = SEARCHING, None
                 self._hits.clear()
-                self.memory.remember(None)
+                self._measure = None
                 # Si salió por un costado, decir hacia dónde quedó ayuda a volver a girar.
                 where = horizontal(last, self.s)
                 lost = (
@@ -171,6 +201,11 @@ class SearchHandler:
             return [Say(f"Ya te estoy guiando hacia {name}.")]
         if self.state != CHOOSING or not self._choices:
             return [Say("No hay nada para elegir ahora.")]
+        if view.seen is None or age_s(view.seen, now_ns) > self.s.max_age_s:
+            return [Say(f"No veo {name} ahora. Sigo buscando.")]
+        self._choices = candidates(view.seen, command.target, self.geometry)
+        if not self._choices:
+            return [Say(f"No veo {name} ahora. Sigo buscando.")]
         chosen: Candidate | None
         if choice == "izquierda":
             chosen = self._choices[0]
@@ -197,11 +232,20 @@ class SearchHandler:
                 self.memory.remember(self.target)
             return []
         if not cands:
+            self._choices = []
+            self._single_since = None
             return []
         received = cands[0].received_ns
         self._hits.append((received, len(cands)))
         while self._hits and (received - self._hits[0][0]) / 1e9 > self.s.confirm_s:
             self._hits.popleft()
+        if self._selected is not None and len(self._hits) >= self.s.confirm_hits:
+            match = self._selected.match(cands, self.s)
+            if match is not None:
+                return self._acquire(match, name, now_ns, continued=True)
+            # Con selección previa, ni un único candidato dudoso autoriza cambiar de objeto.
+            self.state, self._choices = CHOOSING, cands
+            return []
         if self.state == CHOOSING:
             self._choices = cands  # la elección se aplica a lo último que se vio
             # Si queda uno solo de forma estable, ya no hay entre qué elegir: se guía a ese.
@@ -227,63 +271,177 @@ class SearchHandler:
             self._event("varios", {"cantidad": len(cands)})
             listed = min(len(cands), self.s.max_listed)
             more = "o más " if len(cands) > listed else ""
-            return [
-                Say(BIP),
-                self._phrase(
-                    f"Veo {listed} {more}{plural(name)}. ¿Cuál? Decí izquierda, derecha, centro "
-                    "o la más cercana.",
-                    now_ns,
-                ),
-            ]
+            return (
+                [
+                    Say(
+                        BIP,
+                        valid_until_ns=received + int(self.s.max_age_s * 1e9),
+                        fact_received_ns=received,
+                    ),
+                    self._ask(
+                        f"Veo {listed} {more}{plural(name)}. ¿Cuál? "
+                        "Decí izquierda, derecha, centro o la más cercana.",
+                        now_ns,
+                        valid_until_ns=received + int(self.s.max_age_s * 1e9),
+                        fact_received_ns=received,
+                    ),
+                ]
+                if self._can_ask(now_ns)
+                else []
+            )
         return self._acquire(cands[0], name, now_ns)
 
-    def _acquire(self, c: Candidate, name: str, now_ns: int) -> list[Say]:
+    def _acquire(
+        self, c: Candidate, name: str, now_ns: int, *, continued: bool = False
+    ) -> list[Say]:
         reacquired = self.found_once
         self.state, self.found_once = GUIDING, True
-        self.target = Target(c.label, c.angle_h_deg, c.track_id, c.received_ns, c.angle_v_deg)
+        if continued and self._selected is not None:
+            self.target = self._selected
+            self.target.update(c)
+        else:
+            self.target = Target(c.label, c.angle_h_deg, c.track_id, c.received_ns, c.angle_v_deg)
+        self.target.remember_measure(c)
+        self._selected = self.target
+        self._choices = []
         self._h_word = self._v_word = None
+        self._said_where = self._said_z = None
         self.memory.remember(self.target)
         self._measure = None
         self._event("adquirido", {"angulo_h": round(c.angle_h_deg, 1), "track_id": c.track_id,
                                   "reaparicion": reacquired})  # fmt: skip
-        return [Say(BIP), self._phrase(self._guide_text(name, now_ns), now_ns)]
+        text, valid_until, received = self._guide_fact(name, now_ns)
+        return [
+            Say(
+                BIP,
+                valid_until_ns=c.received_ns + int(self.s.max_age_s * 1e9),
+                fact_received_ns=c.received_ns,
+            ),
+            self._said(self._phrase(text, now_ns, valid_until_ns=valid_until,
+                                    fact_received_ns=received)),
+        ]  # fmt: skip
 
     def _guide(self, name: str, now_ns: int) -> list[Say]:
-        text = self._guide_text(name, now_ns)
+        text, valid_until, received = self._guide_fact(name, now_ns)
         if text == "" or text.startswith("Llegaste"):
-            return [self._phrase(text, now_ns)] if text else []
+            return (
+                [self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received)]
+                if text
+                else []
+            )
         since = None if self._last_say_ns is None else (now_ns - self._last_say_ns) / 1e9
-        changed = text != self._last_phrase
         # Ni antes del mínimo ni mientras la frase anterior todavía suena (no encolar guía vieja).
         speaking = speech_s(self._last_phrase or "", self.s) + 0.2
         if since is not None and since < max(self.s.min_interval_s, speaking):
-            return []
-        if changed or since is None or since >= self.s.repeat_s:
-            return [self._phrase(text, now_ns)]
+            # Salvo que la dirección cambió: lo que suena ya es falso. Se corta y se dice la
+            # nueva (las zonas tienen histéresis; preempt_min_s evita alternar en un límite).
+            changed = self._said_where is not None and self._fact_where != self._said_where
+            if not changed or since < self.s.preempt_min_s:
+                return []
+            say = self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received)
+            if not say.text_or_sound:
+                return []
+            self._event("guia-reemplazada", {"antes": self._said_where, "ahora": self._fact_where})
+            return [self._said(replace(say, replace=True))]
+        m = self._fact_measure
+        if since is None or since >= self.s.repeat_s or self._fact_where != self._said_where:
+            say = self._phrase(text, now_ns, valid_until_ns=valid_until, fact_received_ns=received)
+            return [self._said(say)]
+        if m is not None and self._distance_news(m):
+            # Misma dirección y metros nuevos: solo los metros, no la frase entera otra vez.
+            short = measure_phrase(m, self.s)
+            say = self._phrase(short[0].upper() + short[1:] + ".", now_ns,
+                               valid_until_ns=valid_until, fact_received_ns=received)  # fmt: skip
+            return [self._said(say)]
         return []
 
-    def _guide_text(self, name: str, now_ns: int) -> str:
+    def _distance_news(self, m: Measure) -> bool:
+        """¿Vale la pena decir esta medida? Sí si no se dijo ninguna o si cambió lo suficiente;
+        un cambio chico (redondeo, borde del rango) no es noticia."""
+        if m.z_m is None:
+            return False
+        if self._said_z is None:
+            return True
+        delta = abs(m.z_m - self._said_z)
+        return delta >= max(self.s.distance_change_m, self.s.distance_change_frac * self._said_z)
+
+    def _said(self, say: Say) -> Say:
+        """Registra qué quedó dicho de la guía (dirección y Z) si la frase sale."""
+        if say.text_or_sound:
+            self._said_where = self._fact_where
+            if self._fact_measure is not None and self._fact_measure.z_m is not None:
+                self._said_z = self._fact_measure.z_m
+        return say
+
+    def _guide_fact(self, name: str, now_ns: int) -> tuple[str, int, int]:
         assert self.target is not None
+        valid_until = self.target.last_seen_ns + int(self.s.max_age_s * 1e9)
         # Zonas con histéresis respecto de lo último dicho (no alternar en un límite).
         h_word = horizontal(self.target.angle_h_deg, self.s, self._h_word)
         v_word = vertical(self.target.angle_v_deg, self.s, self._v_word)
         self._h_word, self._v_word = h_word, v_word
         where = h_word + v_word
+        self._fact_where, self._fact_measure = where, None
         # Metros y llegada con el objeto al frente o "un poco" a un lado (|h| <= side_deg): en
         # la demo de la silla, caminando hacia ella quedaba a 9–20° y nunca "llegaba".
         ahead = abs(self.target.angle_h_deg) <= self.s.side_deg
         m = self._fresh_measure(now_ns)
         if ahead and m is not None:
+            assert self._measure is not None
+            # Una frase compuesta vence cuando vence cualquiera de sus hechos.
+            measured_until = self._measure[1] + int(self.s.max_measure_age_s * 1e9)
+            received = min(self.target.last_seen_ns, self._measure[1])
             close = m.ok and m.z_m is not None and m.z_m <= self.s.arrive_m
             if close or m.reason == "muy-cerca":  # más cerca que el rango validado también llega
-                return f"Llegaste: {name} {where}, {measure_phrase(m, self.s)}."
+                return (f"Llegaste: {name} {where}, {measure_phrase(m, self.s)}.",
+                        min(valid_until, measured_until), received)  # fmt: skip
             if m.ok or m.reason in ("muy-cerca", "muy-lejos"):
-                return f"{name.capitalize()} {where}, {measure_phrase(m, self.s)}."
-        return f"{name.capitalize()} {where}."
+                self._fact_measure = m
+                return (f"{self._lead(name, where)}, {measure_phrase(m, self.s)}.",
+                        min(valid_until, measured_until), received)  # fmt: skip
+        return self._lead(name, where) + ".", valid_until, self.target.last_seen_ns
 
-    def _phrase(self, text: str, now_ns: int) -> Say:
+    def _lead(self, name: str, where: str) -> str:
+        """«Taza a la izquierda» la primera vez; después solo «A la izquierda» (short_guide)."""
+        if self.s.short_guide and self._said_where is not None:
+            return where[0].upper() + where[1:]
+        return f"{name.capitalize()} {where}"
+
+    def _phrase(
+        self,
+        text: str,
+        now_ns: int,
+        *,
+        valid_until_ns: int | None = None,
+        fact_received_ns: int | None = None,
+    ) -> Say:
+        if (
+            self._closing_ns is not None
+            and now_ns + int((speech_s(text, self.s) + self.s.end_margin_s) * 1e9)
+            > self._closing_ns
+        ):
+            return Say("")  # dejar que drene la voz anterior antes de emitir el cierre
         self._last_phrase, self._last_say_ns = text, now_ns
-        return Say(text)
+        return Say(text, valid_until_ns=valid_until_ns, fact_received_ns=fact_received_ns)
+
+    def _can_ask(self, now_ns: int) -> bool:
+        return (
+            self._last_choice_ns is None
+            or (now_ns - self._last_choice_ns) / 1e9 >= self.s.choice_repeat_s
+        )
+
+    def _ask(
+        self,
+        text: str,
+        now_ns: int,
+        *,
+        valid_until_ns: int | None = None,
+        fact_received_ns: int | None = None,
+    ) -> Say:
+        self._last_choice_ns = now_ns
+        return self._phrase(
+            text, now_ns, valid_until_ns=valid_until_ns, fact_received_ns=fact_received_ns
+        )
 
     def _update_measure(self, view: View, label: str, now_ns: int) -> None:
         """Toma el Z del objetivo de la unión medida más nueva (mismo frame que su máscara)."""
@@ -299,6 +457,9 @@ class SearchHandler:
         match = self.target.match(candidates(joint, label, self.geometry), self.s)
         if match is not None:
             self._measure = (measure(match.obj, self.s), joint.frame.received_ns)
+            self.target.remember_measure(match)
+        else:
+            self._measure = None  # la unión nueva ya no respalda el Z anterior
 
     def _fresh_measure(self, now_ns: int) -> Measure | None:
         if self._measure is None:
@@ -311,7 +472,17 @@ class SearchHandler:
         if joint is None or age_s(joint, now_ns) > self.s.max_measure_age_s:
             return None
         decible = [c for c in candidates(joint, label, self.geometry) if measure(c.obj, self.s).ok]
-        return min(decible, key=lambda c: c.obj.z_m) if decible else None  # type: ignore[union-attr]
+        # La profundidad puede ir detrás del video: elegir por Z en el par medido, pero
+        # anunciar solo una instancia que todavía se pueda asociar en la vista fresca.
+        for c in sorted(decible, key=lambda c: c.obj.z_m):  # type: ignore[union-attr]
+            previous = Target(c.label, c.angle_h_deg, c.track_id, c.received_ns, c.angle_v_deg)
+            match = previous.match(self._choices, self.s)
+            if match is not None:
+                return match
+            if any(previous.match([choice], self.s) is not None for choice in self._choices):
+                # Hay asociaciones plausibles pero ambiguas: no saltar a una más lejana.
+                return None
+        return None
 
     def _event(self, kind: str, data: dict[str, Any]) -> None:
         self._on_event(f"buscar-{kind}", {"request_id": self.request_id, **data})
