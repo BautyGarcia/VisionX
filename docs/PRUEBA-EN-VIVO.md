@@ -111,6 +111,11 @@ for c in lectura escenas buscar-a distancias; do
     --traza outputs/demos/final/demo-$c.jsonl --salida outputs/demos/final/demo-$c.mp4 \
     > outputs/demos/final/demo-$c.txt 2>&1
 done
+# Elegir entre iguales describiéndolos («la blanca»), sobre el clip de distancias:
+uv run python -m visionx.modes demo --fuente recordings/dev-1114-distancias \
+  --ordenes datasets/demos/ordenes-elegir.jsonl --profundidad crestereo \
+  --latencia-profundidad 0.13 --config configs/local.yaml \
+  --traza outputs/demos/final/demo-elegir.jsonl --salida outputs/demos/final/demo-elegir.mp4
 ```
 
 Subir `outputs/demos/final/` a Drive `VisionX-artefactos/demos/final/` y revisarlas juntos.
