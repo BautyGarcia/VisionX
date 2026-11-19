@@ -3,7 +3,8 @@
 Reglas (TECNICO T07):
 - Cada orden recibe un request_id nuevo. Una orden nueva invalida la anterior: se cancela su
   audio pendiente y su modo deja de producir resultados.
-- Cada orden vence a los `deadlines_s[modo]` segundos; vencida, no habla más.
+- Cada orden vence a los `deadlines_s[modo]` segundos: si para entonces no empezó a responder,
+  no habla más; si la respuesta ya suena, termina (con un tope, `AudioOutput.answer_grace_s`).
 - Cancelar no depende del modo: corta todo el audio cancelable y deja el controlador inactivo.
 - Una frase que necesita aclaración se responde sin cancelar lo que estaba en curso.
 
@@ -275,6 +276,9 @@ class Controller:
                 # Un sonido corto confirma que se entendió sin hacer esperar el número.
                 ack = "sonido:ok"
             if ack:
+                note_ack = getattr(self.output, "note_ack", None)
+                if note_ack is not None:
+                    note_ack(request_id, ack)
                 self._say(Say(ack), request_id, now)
             handler = self.handlers.get(command.mode, UnavailableHandler())
             for say in handler.start(command, self.latest_view(), now):
@@ -302,9 +306,11 @@ class Controller:
         """Llamar periódicamente (por ejemplo, en cada cuadro del dashboard)."""
         with self._lock:
             now = self.clock.now_ns()
-            if self._audio_deadline_ns is not None and now >= self._audio_deadline_ns:
-                # Un modo puede haber terminado de emitir antes de acabar la reproducción.
-                # La vigencia también corta su último bloque que aún esté sonando/en cola.
+            if self._audio_deadline_ns is not None and now >= self._past_deadline(
+                self._audio_request_id, self._audio_deadline_ns
+            ):
+                # Vencida sin haber empezado a responder (o pasada la gracia): se descarta lo
+                # pendiente. Si la respuesta ya suena, termina (ver AudioOutput.answer_grace_s).
                 self.output.cancel(self._audio_request_id)
                 self._cancel_repeats()
                 self._audio_deadline_ns = None
@@ -325,7 +331,9 @@ class Controller:
             command = self.active
             if command is None:
                 return
-            if command.deadline_ns is not None and now >= command.deadline_ns:
+            if command.deadline_ns is not None and now >= self._past_deadline(
+                command.request_id, command.deadline_ns
+            ):
                 self._cancel_handler()
                 self.active = None
                 self._on_event("vencido", {"request_id": command.request_id})
@@ -339,6 +347,13 @@ class Controller:
                 self._on_event("terminado", {"request_id": command.request_id})
 
     # -- interno ---------------------------------------------------------------------------
+
+    def _past_deadline(self, request_id: int | None, deadline_ns: int) -> int:
+        """Cuándo vence de verdad: el plazo, o el plazo + la gracia si ya empezó a responder."""
+        answering = getattr(self.output, "answering", None)
+        if answering is not None and answering(request_id):
+            return deadline_ns + int(getattr(self.output, "answer_grace_s", 0.0) * 1e9)
+        return deadline_ns
 
     def _cancel_handler(self) -> None:
         """Hook opcional: invalidar selección/trabajo pendiente sin esperar inferencia."""
@@ -385,6 +400,11 @@ class Controller:
             return
         if self.active is not None and self.active.request_id == request_id:
             deadline = self.active.deadline_ns
+        if deadline is not None and now > deadline:
+            # Tramo que llega vencido: solo si la respuesta ya suena (plazo + gracia).
+            deadline = self._past_deadline(request_id, deadline)
+            if now > deadline:
+                return
         if say.replace:
             self.output.cancel(request_id)
             self._on_event("reemplazo", {"request_id": request_id, "texto": say.text_or_sound})
