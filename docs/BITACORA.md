@@ -40,6 +40,78 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T07: vivo de C0 y C1; C1 gana, pero lo lento no es el detector
+
+Tarea: T07. Persona/agente: Bauty (cámara, guion de VELOCIDAD) / Claude Code (análisis). Rama:
+`a/velocidad-medicion`. Completa la entrada siguiente (la de clips).
+Hecho: sección **C** con C1 y C0, misma escena, taza a 1,5 m de cinta, arrancando con la cámara
+girada 60–90°. Trazas en `outputs/velocidad/C0|C1/vivo.jsonl`; filas de la planilla completas.
+
+| | C0 (YOLO cpu) | C1 (YOLO mps) |
+|---|---:|---:|
+| Duración, s | 100,5 | 224,4 |
+| Detector / profundidad continua, fps | 3,94 / 3,88 | **9,34** / 4,38 |
+| Errores (detector, profundidad, preciso, espaciales) | 0 | 0 |
+| Preciso, ms | 1832 (n=1) | 1945 mediana (n=3, 1832–2079) |
+| Distancia a la taza de 1,5 m de cinta | 1,452 m | 1,461 m |
+| Primera frase de «buscá», ms desde soltar | 4460 | 4251 |
+| Primera frase de «¿a qué distancia?», ms | 11427 | 12761 mediana (n=2) |
+
+Decisión: **C1** (`detection.device: mps` en `configs/local.yaml` de la Mac). Ninguna llega a
+10/5 fps; C1 es la más cercana que cumple 2–4, como dice la regla de VELOCIDAD. `default.yaml` no
+cambia. Bauty: «se sintió todo bastante igual». Coincide con los números: lo que se siente no es
+el detector.
+Dónde se va el tiempo (C0, «¿a qué distancia está la taza?», desde soltar el espacio):
+Whisper 4,19 s → preciso 1,9 s (llega a 6,1 s) → Claude 1,3 s (texto listo a 7,45 s) → la primera
+palabra suena a 11,4 s. **Whisper tarda ~4,2 s en cada orden** (4090–4457 ms en las 6 órdenes,
+para 1,7–3,0 s de audio) y la frase nueva de Claude tarda ~4 s en sintetizarse y empezar a sonar.
+Esas dos piezas suman ~8 de los 11 s; el detector y la profundidad continua no están en ese camino.
+Límites: n chico (1–2 órdenes por tipo); C1 duró más que el guion (2 «¿a qué distancia?»; la
+primera, a otra taza a 0,86 m). El fps de vivo es del pipeline, no de la red sola.
+Próximo paso (Tomás, voz): Whisper en MPS o un modelo más chico, y decir la respuesta de Claude por
+frases para que la primera salga antes. Profundidad en la app a ~4 fps: sigue pendiente.
+
+## 2026-11-19 (noche) — T07: velocidad medida sin cámara; gana C1 (YOLO en la GPU), falta el vivo
+
+Tarea: T07 (velocidad, [VELOCIDAD](VELOCIDAD.md)). Persona/agente: Bauty / Claude Code. Rama:
+`a/velocidad-medicion`, sobre `main` 0426c57.
+Objetivo: medir C0–C4 con el criterio fijado antes de medir y proponer la config ganadora.
+Hecho: secciones **A** (presencia y latencia del detector en 4 clips) y **B** (CREStereo con 3 y
+4 iteraciones: latencia y cinta) para las 5 configs. La sección **C** (vivo) no se hizo: la pidió
+Bauty sin cámara. Como referencia del ritmo con todo junto se corrió la app completa sobre el clip
+`dev-1114-buscar-a` (sin ventana ni órdenes, con `--profundidad-precisa`), una config por vez.
+Contexto: Mac M2 Max, MPS, `configs/velocidad/C*.yaml` sobre `configs/local.yaml`; YOLO
+`yolo26s-seg@3da1d83e31ca`; CREStereo `2271ab61`, 640×360, 2 pasadas. Planilla:
+`datasets/velocidad/resultados.csv`; crudos en `outputs/velocidad/` (log en `log.txt`).
+
+| | C0 | C1 | C2 | C3 | C4 |
+|---|---:|---:|---:|---:|---:|
+| YOLO / imgsz / iteraciones | cpu/960/4 | mps/960/4 | mps/768/4 | mps/960/3 | mps/768/3 |
+| Detector solo, distancias: mediana / p90 ms | 163,5 / 318,8 | 34,2 / 42,1 | 29,4 / 42,5 | 34,9 / 57,7 | 28,6 / 35,7 |
+| Presencia botella / taza / mochila (buscar-a/b/c), % | 61,3 / 41,4 / 33,4 | igual a C0 | 60,4 / 38,1 / 35,9 | igual a C0 | igual a C2 |
+| Presencia taza / botella / bolso (distancias), % | 100 / 100 / 62,0 | igual a C0 | 100 / 100 / **4,0** | igual a C0 | 100 / 100 / **4,0** |
+| CREStereo solo, en caliente: P50 / P95 ms | 128 / 182 | 128 / 182 | 128 / 182 | 97 / 149 | 97 / 149 |
+| Cinta, continuo: error a 1 / 1,5 / 2 m, mm | −1,3 / +16,1 / +109,9 | ídem | ídem | **+16,0** / +7,6 / **+152,2** | ídem C3 |
+| App sobre clip: detector / profundidad, fps | 4,0 / 4,0 | 9,0 / 4,1 | 9,7 / 4,4 | 9,8 / 5,2 | 10,7 / 5,6 |
+| Criterio 2 (detección) / 3 (cinta) | — | sí / sí | **no** / sí | sí / **no** | **no** / **no** |
+
+Resultado: **C1 es la única que cumple 2 y 3**. La GPU no cambia nada de la detección (presencia
+idéntica cuadro a cuadro) y YOLO baja de 164 a 34 ms. 768 px pierde el bolso de distancias (de
+62 % a 4 %, y `handbag` de 19,7 % a 0). 3 iteraciones empeora la cinta 14,7 mm a 1 m y 42,3 mm a
+2 m (a 1,5 m mejora 8,5 mm): falla el límite de 1 cm. Propuesta: `detection.device: mps` en
+`configs/local.yaml` de la Mac (ya está), sin tocar `configs/default.yaml` (la PC de Tomás no
+tiene MPS).
+Hallazgo: sobre el clip, ninguna config salvo C4 llega a 10/5 fps. La **profundidad queda en ~4 fps
+en la app** aunque CREStereo solo tarde 128 ms (en la app, mediana 153–182 ms): hay tiempo fuera
+de la red por cuadro (rectificar 1920×1080, preparar, unir) o espera del pipeline. Con YOLO en la
+GPU el cuello pasa a ser la profundidad, no el detector. YOLO en la app tarda 95 ms contra 34 ms
+solo: compite por la GPU con CREStereo.
+Límites: sin vivo, el criterio 1 y el 4 no están medidos (`cumple` de C1 = «pendiente vivo»). La
+cinta tiene 3 pares por distancia, cada uno en frío para las dos variantes. El ritmo sobre clip
+no es el de la cámara (el clip se reproduce a su velocidad y salta cuadros).
+Próximo paso: Bauty corre la sección C con C1 (y C0 para comparar) con el guion de VELOCIDAD;
+Tomás mira por qué la profundidad de la app no pasa de ~4 fps.
+
 ## 2026-11-19 (noche) — T13/T15: cómo llega la incertidumbre a la voz y mini dataset con ground truth
 
 **Tareas:** T13, T15. **Persona/agente:** Tomás (decisiones) / Claude Code (búsqueda y
