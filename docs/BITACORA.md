@@ -40,6 +40,37 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T07: vivo de C0 y C1; C1 gana, pero lo lento no es el detector
+
+Tarea: T07. Persona/agente: Bauty (cámara, guion de VELOCIDAD) / Claude Code (análisis). Rama:
+`a/velocidad-medicion`. Completa la entrada siguiente (la de clips).
+Hecho: sección **C** con C1 y C0, misma escena, taza a 1,5 m de cinta, arrancando con la cámara
+girada 60–90°. Trazas en `outputs/velocidad/C0|C1/vivo.jsonl`; filas de la planilla completas.
+
+| | C0 (YOLO cpu) | C1 (YOLO mps) |
+|---|---:|---:|
+| Duración, s | 100,5 | 224,4 |
+| Detector / profundidad continua, fps | 3,94 / 3,88 | **9,34** / 4,38 |
+| Errores (detector, profundidad, preciso, espaciales) | 0 | 0 |
+| Preciso, ms | 1832 (n=1) | 1945 mediana (n=3, 1832–2079) |
+| Distancia a la taza de 1,5 m de cinta | 1,452 m | 1,461 m |
+| Primera frase de «buscá», ms desde soltar | 4460 | 4251 |
+| Primera frase de «¿a qué distancia?», ms | 11427 | 12761 mediana (n=2) |
+
+Decisión: **C1** (`detection.device: mps` en `configs/local.yaml` de la Mac). Ninguna llega a
+10/5 fps; C1 es la más cercana que cumple 2–4, como dice la regla de VELOCIDAD. `default.yaml` no
+cambia. Bauty: «se sintió todo bastante igual». Coincide con los números: lo que se siente no es
+el detector.
+Dónde se va el tiempo (C0, «¿a qué distancia está la taza?», desde soltar el espacio):
+Whisper 4,19 s → preciso 1,9 s (llega a 6,1 s) → Claude 1,3 s (texto listo a 7,45 s) → la primera
+palabra suena a 11,4 s. **Whisper tarda ~4,2 s en cada orden** (4090–4457 ms en las 6 órdenes,
+para 1,7–3,0 s de audio) y la frase nueva de Claude tarda ~4 s en sintetizarse y empezar a sonar.
+Esas dos piezas suman ~8 de los 11 s; el detector y la profundidad continua no están en ese camino.
+Límites: n chico (1–2 órdenes por tipo); C1 duró más que el guion (2 «¿a qué distancia?»; la
+primera, a otra taza a 0,86 m). El fps de vivo es del pipeline, no de la red sola.
+Próximo paso (Tomás, voz): Whisper en MPS o un modelo más chico, y decir la respuesta de Claude por
+frases para que la primera salga antes. Profundidad en la app a ~4 fps: sigue pendiente.
+
 ## 2026-11-19 (noche) — T07: velocidad medida sin cámara; gana C1 (YOLO en la GPU), falta el vivo
 
 Tarea: T07 (velocidad, [VELOCIDAD](VELOCIDAD.md)). Persona/agente: Bauty / Claude Code. Rama:
