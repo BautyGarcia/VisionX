@@ -40,6 +40,53 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T13: la incertidumbre llega a la voz (tres niveles) y se verifica
+
+**Tareas:** T13, T11, T15. **Persona/agente:** Tomás (pedido; devolución de la cátedra) / Claude
+Code. **Rama:** `b/incertidumbre-voz`. Diseño en
+[INCERTIDUMBRE-Y-GT](INCERTIDUMBRE-Y-GT.md#1-conexión-de-la-salida-de-la-red-con-sonnet).
+
+**Hecho.**
+- `shared/uncertainty.py`: `laplace_interval` (b de Laplace -> intervalo del 90 % en metros, con
+  factor k) y `relative_width`. Una sola definición para el ubicador, el GT y la app.
+- Contrato: `SpatialObject.z_bajo_m` / `z_alto_m` (opcionales; `z_alto_m` None = sin cota
+  superior), validados (z_m dentro del intervalo).
+- `measure()`: niveles **precisa** (medio ancho ≤ 10 %), **aproximada** (≤ 25 %, «a unos 2,5
+  metros») y **no segura** (sin número: «no puedo medir bien a qué distancia está»); umbrales
+  `modes.precise_rel` / `approx_rel`. Sin intervalo, como antes.
+- Lo que recibe Claude (`distance_fact`, modos distancia y describir/preguntas): cada distancia
+  con su nivel explícito y, si el estimador avisa, «Estado de la cámara: …». Prompt de sistema con
+  las reglas de cada nivel; en distancia, los metros primero.
+- Verificación (`verify_distances`): un tramo con una distancia que no está en lo medido (inventada
+  o afinada) no se dice; si se descarta todo, el modo usa su respaldo local.
+- Arreglos de frases que aparecieron al armar el banco: «unos 1 metros» -> «más o menos 1 metro»
+  y «unos 100 centímetros» -> «1 metro».
+- Banco: `python -m visionx.assistant banco-incertidumbre` (60 casos, 6 grupos × 10, sobre un
+  cuadro real de `dev-1114-distancias`). Tests: `tests/test_incertidumbre_voz.py` (11).
+
+**Evidencia (Sonnet 5.5, 19/11, 0,35 USD; `datasets/incertidumbre/banco-incertidumbre.csv|json`).**
+
+| Métrica | Resultado |
+|---|---|
+| Fidelidad numérica en el texto crudo de Claude (sin números fuera de lo medido) | **60/60** |
+| Fidelidad de lo que se dice (después de verificar) | 60/60 (0 tramos descartados) |
+| Nivel respetado (exacto / «unos» / ningún número) | **60/60** (10/10 en cada grupo) |
+| Estado de la cámara dicho primero | 10/10 |
+| Metros en el primer tramo (una distancia) | precisa 7/10, aproximada 8/10 |
+| Primer texto / respuesta completa (mediana) | 0,64 s / 1,49 s |
+
+Metros en el primer tramo: con varios objetos (0/10) es a propósito (primero «Hay tres cosas.»,
+tramo corto); los 3 de «precisa» son casos donde Claude vio en la imagen otro objeto parecido y
+aplicó la regla de varios.
+
+**Límites.** Los intervalos del banco son armados (no salen todavía de la red): mide si Claude
+respeta los niveles, no si los niveles están bien calibrados (eso es el GT sintético + el banco
+ELP). En 7 casos dijo «a unos 1 metro»; después del banco la etiqueta de ese caso pasa a pedir
+«más o menos» (sin volver a medir). Un cuadro, una semilla.
+
+**Próximo paso.** Bauty: llenar `z_bajo_m` / `z_alto_m` en el ubicador con `laplace_interval` y el
+factor de b de `gtsynth evaluar` (val). Tomás / Claude Code: GT sintético completo.
+
 ## 2026-11-19 (noche) — T08/T09: la frase de distancia ya no se corta al vencer; «maus»
 
 **Tareas:** T08, T09. **Persona/agente:** Bauty (vivo, traza `outputs/beta/voz-cortes.jsonl`,

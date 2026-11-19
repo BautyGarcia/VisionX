@@ -40,7 +40,11 @@ sin listas, sin markdown, sin emojis. Máximo 3 frases, salvo que te pidan leer 
 - Hablale a la persona: «Adelante tenés…», «A tu izquierda hay…». No menciones la cámara, el \
 OCR ni el sistema: hablá como si vos vieras.
 - Distancias: si te paso objetos medidos con metros, usá esos metros tal cual («a 1,4 metros»). \
-Nunca estimes otros números de distancia; podés decir «cerca» o «más lejos». Esa lista es una \
+Cada distancia trae su nivel: «medida precisa», decila tal cual; «medida aproximada», decila con \
+«unos» («a unos 2,5 metros»); «no se pudo medir bien», no digas ningún número para ese objeto \
+(decí dónde está y que no podés medir bien la distancia). Si hay «Estado de la cámara», decilo \
+primero. Nunca estimes otros números de distancia ni los afines; podés decir «cerca» o «más \
+lejos». Esa lista es una \
 ayuda: si un objeto no se ve en la imagen, ignoralo; si su nombre está mal (un lavarropas \
 anotado como horno), usá el nombre correcto con sus metros. Nunca menciones la lista, la \
 detección ni la cámara.
@@ -260,6 +264,39 @@ def _inside_quote(text: str, pos: int) -> bool:
     return before.count("«") > before.count("»") or before.count('"') % 2 == 1
 
 
+# Números con unidad de distancia en lo que dice Claude: «1,4 metros», «unos 20 cm»,
+# «dos metros y medio», «un metro». Se comparan con los de la lista que le pasamos.
+_WORD_NUMBERS = {"un": 1, "uno": 1, "una": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5,
+                 "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10, "veinte": 20,
+                 "treinta": 30, "cuarenta": 40, "cincuenta": 50, "medio": 0.5}  # fmt: skip
+_DIST = re.compile(
+    r"\b(\d+(?:[.,]\d+)?|" + "|".join(_WORD_NUMBERS) + r")\s*"
+    r"(metros?|m\b|cent[ií]metros?|cm\b)(\s+y\s+medio)?",
+    re.IGNORECASE,
+)
+
+
+def distances_in(text: str) -> set[tuple[str, float]]:
+    """{("m", 1.4), ("cm", 20.0)}: las distancias con unidad que aparecen en un texto."""
+    out = set()
+    for m in _DIST.finditer(text):
+        raw = m.group(1).lower()
+        value = float(_WORD_NUMBERS[raw]) if raw in _WORD_NUMBERS else float(raw.replace(",", "."))
+        if m.group(3):
+            value += 0.5
+        unit = "cm" if m.group(2).lower().startswith(("c", "cm")) else "m"
+        out.add((unit, round(value, 2)))
+    return out
+
+
+def verify_distances(sentence: str, allowed: set[tuple[str, float]]) -> bool:
+    """¿Toda distancia que dice la frase está en la lista medida? (sección 1.5)
+
+    Una distancia inventada o afinada («a 1,43 metros» cuando se pasó «a unos 1,5») no pasa.
+    """
+    return distances_in(sentence) <= allowed
+
+
 def split_sentences(
     buffer: str, *, final: bool = False, min_chars: int = 12, clause_chars: int = 0
 ) -> tuple[list[str], str]:
@@ -381,6 +418,8 @@ class AssistantJob:
     request_id: int
     kind: str
     sentences: list[tuple[float, str]] = field(default_factory=list)  # (s desde el pedido, frase)
+    allowed_distances: set[tuple[str, float]] | None = None  # None = no se verifica
+    dropped: list[str] = field(default_factory=list)  # tramos descartados por números inventados
     done: threading.Event = field(default_factory=threading.Event)
     cancelled: threading.Event = field(default_factory=threading.Event)
     error: str | None = None
@@ -479,6 +518,10 @@ class Assistant:
             if job.ocr is None and read_text and self._ocr is not None:
                 job.ocr = self._ocr(image)
             text = user_text(job.kind, request, job.ocr, objects)
+            if objects:
+                job.allowed_distances = distances_in(" ".join(objects)) | distances_in(
+                    request or ""
+                )
             content = [
                 {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                  "data": jpeg_b64(image, self.s.image_width, self.s.jpeg_quality)}},
@@ -509,6 +552,11 @@ class Assistant:
             job.done.set()
 
     def _emit(self, job: AssistantJob, sentence: str, t0: float, full: list[str]) -> None:
+        if job.allowed_distances is not None and not verify_distances(
+            sentence, job.allowed_distances
+        ):
+            job.dropped.append(sentence)  # no se dice: un número que no medimos
+            return
         checked, bad = verify_quotes(sentence, job.ocr or [])
         job.unconfirmed_quotes += bad
         full.append(checked)
@@ -561,8 +609,11 @@ class Delivery:
 
     @property
     def failed(self) -> bool:
-        """Falló sin decir nada: el modo puede usar su respaldo local."""
-        return self.job.done.is_set() and self.job.error is not None and self._next == 0
+        """Falló sin decir nada (error, o todo descartado por números inventados): el modo
+        puede usar su respaldo local."""
+        if not self.job.done.is_set() or self._next != 0 or self.job.sentences:
+            return False
+        return self.job.error is not None or bool(self.job.dropped)
 
 
 def build_assistant(cfg: dict[str, Any]) -> Assistant | None:

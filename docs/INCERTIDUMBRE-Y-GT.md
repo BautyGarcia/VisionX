@@ -12,6 +12,11 @@ la [sección 2](#2-mini-dataset-con-ground-truth).
 
 ## 1. Conexión de la salida de la red con Sonnet
 
+**Estado (19/11, noche): implementada del lado de la app y medida** (BITACORA, «T13: la
+incertidumbre llega a la voz»). Falta que el ubicador llene `z_bajo_m` / `z_alto_m` con
+`visionx.shared.uncertainty.laplace_interval` y el factor de b ajustado en val: hasta entonces
+todo se dice como «medida precisa», igual que antes.
+
 ### 1.1 Principio
 
 **El código decide qué tan segura es una distancia; Sonnet solo la dice con palabras.** Sonnet

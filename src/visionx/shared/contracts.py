@@ -15,6 +15,7 @@ Convenciones:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from typing import TYPE_CHECKING
@@ -356,6 +357,11 @@ class SpatialObject:
     detector_score: float  # en [0, 1]
     policy: DistancePolicy
     schema: int = SCHEMA_VERSION
+    # Intervalo del 90 % de z_m (docs/INCERTIDUMBRE-Y-GT.md, 1.2): lo llena quien ubica si la
+    # profundidad trae b calibrada (shared.uncertainty.laplace_interval). Sin intervalo, None en
+    # los dos. z_alto_m None con z_bajo_m = sin cota superior (la b cruza disparidad 0).
+    z_bajo_m: float | None = None
+    z_alto_m: float | None = None
 
     def __post_init__(self) -> None:
         _check_schema_field(self)
@@ -378,6 +384,15 @@ class SpatialObject:
             raise InvalidInput(f"policy inválida: {self.policy!r}")
         if self.policy is DistancePolicy.SPEAK_METERS and self.z_m is None:
             raise InvalidInput("no se pueden decir metros sin z_m")
+        if self.z_alto_m is not None and self.z_bajo_m is None:
+            raise InvalidInput("z_alto_m sin z_bajo_m")
+        if self.z_bajo_m is not None:
+            if self.z_m is None or v.finite("z_bajo_m", self.z_bajo_m) <= 0:
+                raise InvalidInput("el intervalo necesita z_m y z_bajo_m > 0")
+            alto = math.inf if self.z_alto_m is None else v.finite("z_alto_m", self.z_alto_m)
+            tol = 1e-6 * self.z_m
+            if not self.z_bajo_m - tol <= self.z_m <= alto + tol:
+                raise InvalidInput(f"z_m {self.z_m} fuera de [{self.z_bajo_m}, {alto}]")
 
     @property
     def key(self) -> FrameKey:

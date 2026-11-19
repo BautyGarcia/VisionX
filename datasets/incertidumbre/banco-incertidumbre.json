@@ -1,0 +1,45 @@
+{
+ "casos": 60,
+ "errores": 0,
+ "fidelidad_cruda": 1.0,
+ "fidelidad_dicha": 1.0,
+ "nivel_respetado": 1.0,
+ "camara_dicha": 1.0,
+ "metros_en_el_primer_tramo": 0.5,
+ "tramos_descartados": 0,
+ "primer_texto_s_mediana": 0.64,
+ "total_s_mediana": 1.49,
+ "usd": 0.3498,
+ "por_grupo": {
+  "precisa": {
+   "n": 10,
+   "fidelidad_cruda": 1.0,
+   "nivel_respetado": 1.0
+  },
+  "aproximada": {
+   "n": 10,
+   "fidelidad_cruda": 1.0,
+   "nivel_respetado": 1.0
+  },
+  "no-segura": {
+   "n": 10,
+   "fidelidad_cruda": 1.0,
+   "nivel_respetado": 1.0
+  },
+  "varios": {
+   "n": 10,
+   "fidelidad_cruda": 1.0,
+   "nivel_respetado": 1.0
+  },
+  "camara": {
+   "n": 10,
+   "fidelidad_cruda": 1.0,
+   "nivel_respetado": 1.0
+  },
+  "pregunta": {
+   "n": 10,
+   "fidelidad_cruda": 1.0,
+   "nivel_respetado": 1.0
+  }
+ }
+}
