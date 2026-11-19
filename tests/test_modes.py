@@ -1711,3 +1711,62 @@ def test_no_replacement_before_preempt_min_or_without_a_change():
     run(h2, c2, [joint(0.1, 1, [("cup", -30, 7)]), joint(0.2, 2, [("cup", -30, 7)])])
     # misma dirección mientras suena: nada
     assert texts(h2.tick(c2, View(joint(0.9, 9, [("cup", -31, 7)])), int(0.9 * SEC))[0]) == []
+
+
+class FakeAssistant:
+    """Asistente sin red: guarda los pedidos y responde con frases ya listas."""
+
+    def __init__(self, sentences=("Adelante tenés una silla.",), error=None, available=True):
+        from visionx.assistant import AssistantJob
+
+        self.calls, self.available = [], available
+        self._job_cls, self._sentences, self._error = AssistantJob, sentences, error
+
+    def submit(self, request_id, kind, image, **kw):
+        job = self._job_cls(request_id, kind)
+        job.sentences = [(0.5 * (i + 1), s) for i, s in enumerate(self._sentences)]
+        job.text, job.error = " ".join(self._sentences), self._error
+        if self._error:
+            job.sentences = []
+        job.done.set()
+        self.calls.append((kind, kw))
+        return job
+
+
+def test_describe_with_assistant_uses_measured_meters_and_the_mode_clock():
+    a = FakeAssistant(("Adelante tenés una silla a 1,6 metros.", "A tu derecha, una persona."))
+    h, c = describe(assistant=a), cmd(Mode.DESCRIBE, None, t_s=1)
+    m = joint(1.1, 11, [("chair", 0, 3, 1.63, SPEAK), ("person", 30, 4, None,
+                                                       DistancePolicy.DIRECTION_ONLY)],
+              measured=True)  # fmt: skip
+    assert texts(h.start(c, View(None, m), int(1.2 * SEC))) == []  # consultando
+    kind, kw = a.calls[0]
+    assert kind == "describir" and "silla al frente, a 1,6 metros" in kw["objects"]
+    assert texts(h.tick(c, View(None, m), int(1.6 * SEC))[0]) == []  # todavía no pasó 0,5 s
+    says, done = h.tick(c, View(None, m), int(2.3 * SEC))
+    assert texts(says) == ["Adelante tenés una silla a 1,6 metros.", "A tu derecha, una persona."]
+    assert done
+
+
+def test_describe_falls_back_to_template_when_the_assistant_fails():
+    a = FakeAssistant(error="ConnectionError: sin red")
+    h, c = describe(assistant=a), cmd(Mode.DESCRIBE, None, t_s=1)
+    m = joint(1.1, 11, [("chair", 0, 3, 1.63, SPEAK)], measured=True)
+    h.start(c, View(None, m), int(1.2 * SEC))
+    says, done = h.tick(c, View(None, m), int(1.3 * SEC))
+    assert texts(says) == ["Al frente, una silla a 1,6 metros."] and done
+
+
+def test_free_question_goes_to_the_assistant_with_the_question():
+    a = FakeAssistant(("Sí, la silla de adelante está libre.",))
+    h = describe(assistant=a)
+    c = cmd(Mode.DESCRIBE, "¿Hay algún lugar para sentarme?", t_s=1)
+    seen = joint(1.05, 10, [("chair", 0, 3)])
+    assert texts(h.start(c, View(seen, None), int(1.1 * SEC))) == []
+    kind, kw = a.calls[0]
+    assert kind == "pregunta" and kw["request"] == "¿Hay algún lugar para sentarme?"
+    says, done = h.tick(c, View(seen, None), int(1.7 * SEC))
+    assert texts(says) == ["Sí, la silla de adelante está libre."] and done
+    off = describe(assistant=FakeAssistant(available=False))
+    said = texts(off.start(cmd(Mode.DESCRIBE, "¿Qué es?", t_s=1), View(seen, None), int(1.1 * SEC)))
+    assert said == ["Ahora no puedo responder preguntas: no tengo conexión."]

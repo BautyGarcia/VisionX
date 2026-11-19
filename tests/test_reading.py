@@ -1067,3 +1067,53 @@ def test_heading_is_read_before_columns_even_when_it_leaves_a_narrow_vertical_gu
         "GRASAS",
         "TOTALES",
     ]
+
+
+class _Assistant:
+    """Asistente sin red para leer: responde enseguida o falla."""
+
+    def __init__(self, error=None):
+        from visionx.assistant import AssistantJob
+
+        self.calls, self.available, self._cls, self._error = [], True, AssistantJob, error
+
+    def submit(self, request_id, kind, image, **kw):
+        job = self._cls(request_id, kind)
+        if self._error:
+            job.error = self._error
+        else:
+            job.sentences = [(0.0, "Adelante tenés una caja que dice «TITA».")]
+            job.text = job.sentences[0][1]
+        job.done.set()
+        self.calls.append((kind, image.shape, kw))
+        return job
+
+
+def test_read_with_assistant_sends_the_selected_image_and_ocr(handlers):
+    handler, cmd = handlers(), command()
+    handler.assistant = _Assistant()
+    handler.start(cmd, View(captured=frame()), SEC // 10)
+    says, done = finish_selection(handler, cmd)
+    assert says == [] and not done  # consultando
+    kind, shape, kw = handler.assistant.calls[0]
+    assert kind == "leer" and len(shape) == 3 and kw["ocr"]
+    says, done = handler.tick(cmd, View(), 2 * SEC)
+    assert [s.text_or_sound for s in says] == ["Adelante tenés una caja que dice «TITA»."] and done
+
+
+def test_read_all_and_assistant_failure_use_the_block_reading(handlers):
+    from visionx.voice.commands import READ_ALL
+
+    handler = handlers()
+    handler.assistant = _Assistant(error="ConnectionError: sin red")
+    cmd = command()
+    handler.start(cmd, View(captured=frame()), SEC // 10)
+    finish_selection(handler, cmd)
+    says, _ = handler.tick(cmd, View(), 3 * SEC)
+    assert says and not says[0].text_or_sound.startswith("Adelante")  # bloques del OCR
+    whole = handlers()
+    whole.assistant = _Assistant()
+    cmd_all = Command(2, Mode.READ, "leé todo", 0, target=READ_ALL, deadline_ns=30 * SEC)
+    whole.start(cmd_all, View(captured=frame()), SEC // 10)
+    says, _ = finish_selection(whole, cmd_all)
+    assert whole.assistant.calls == [] and says  # «leé todo» no pasa por el asistente

@@ -423,7 +423,10 @@ class DescribeHandler:
             and joint.depth is not None
         ):
             # Si todavía falta confirmación, aprovechar la espera ya acotada por el pedido.
-            if self._confirmed(joint) or not joint.detection.classes or now_ns >= limit:
+            # Con asistente no hace falta confirmar en varios cuadros: Claude ve la imagen y los
+            # metros salen de esta unión medida (ahorra hasta wait_measure_s).
+            ready = self._assistant_ready() or self._confirmed(joint)
+            if ready or not joint.detection.classes or now_ns >= limit:
                 return self._finish(joint, measured=True, command=command, now_ns=now_ns)
 
         if now_ns < limit:
@@ -596,7 +599,7 @@ class DescribeHandler:
             )
             phrases = [brief] if brief else []
         if self._assistant_ready():
-            objects = self._scene_objects(self.facts)
+            objects = self._measured_objects(joint) if measured else self._scene_objects(self.facts)
             job = self.assistant.submit(
                 command.request_id, "describir", joint.frame.left, objects=objects
             )

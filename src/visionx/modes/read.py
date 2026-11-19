@@ -200,7 +200,11 @@ class ReadHandler:
             self._chunks.extend(self._fallback)
             if not self._chunks:
                 return self._finish("No pude leer. Probá de nuevo.", command, now_ns)
-            return [], False
+            text = self._chunks.popleft()  # sin esperar otro tick: ya se perdió tiempo
+            self._next_say_ns = now_ns + int(
+                (self.s.speech_base_s + len(text) * self.s.speech_s_per_char) * 1e9
+            )
+            return [Say(text, Priority.LONG)], not self._chunks
         says = [Say(s, Priority.LONG) for s in d.ready(now_ns)]
         if d.finished:
             self._delivery = None
