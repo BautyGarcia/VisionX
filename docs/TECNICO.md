@@ -1103,16 +1103,22 @@ latencia y lo previsto del lado de la app.
 
 ### Decisiones abiertas
 
-- **Fecha de entrega:** ROADMAP dice 10/12, confirmada por Tomás. La nota dice congelar 4/12,
-  entrega 7/12 y expo 12/12. **Sin resolver:** no se cambia la fecha oficial; la diferencia
-  queda anotada como pendiente de confirmar.
+- **Fecha de entrega — resuelta (Tomás, 19/11):** entrega el **7/12** y presentación final el
+  **12/12**.
+- **Papel de la red de entrada — resuelta (Tomás, 19/11, opción a):** estima el campo de
+  corrección completo del ojo derecho (giros + centro + distorsión) hacia la geometría de la ELP,
+  con confianza; cámaras parecidas se autocalibran y, si la confianza o la incertidumbre no
+  alcanzan, la app pide un objeto a distancia conocida. Detalle en BITACORA 2026-11-19 (noche),
+  «Decisión T12».
 - **T14 (cuatro comparadores preentrenados):** con CREStereo como base cambia su papel. Queda en
   el alcance; qué correr y cuándo lo decide Bauty y está pendiente.
 - **T17 (Lite) y T18 (Fusion-FFS):** se redefinen sobre la base nueva (maestro CREStereo; FFS
   como estéreo de base alternativo). Pendiente de decisión; no se eliminan.
-- **Qué quiso decir el profesor con «la calibración en la memoria de la red»:** capa geométrica
-  calculada + condicionamiento, que es lo adoptado, o una deformación aprendida desde la
-  calibración, que queda como comparación si sobra tiempo. A confirmar con él.
+- **«La calibración en la memoria de la red»:** con la decisión (a), la red lleva adentro la
+  calibración de la ELP como referencia y aprende a llevar otras cámaras hacia ella.
+- **Devolución de la cátedra (19/11):** conectar la salida de la red (metros con incertidumbre)
+  con la LLM antes de seguir con la performance, y sumar un mini dataset con verdad de
+  distancias y etiquetas para evaluar con más casos que la cinta (BITACORA 2026-11-19).
 - **Cámara del TP2** (`docs/i308-calib-tp2-antiguo/`): si era otra unidad, ya es un banco de
   prueba «mismo modelo, otra unidad». Falta saberlo.
 - **Segunda unidad ELP:** pedirla antes de la expo.
