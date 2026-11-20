@@ -305,7 +305,9 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
     if alta.estado.paso is Paso.LISTO and not alta.estado.conocida and args.guardar:
         from visionx.camera.perfiles import guardar_local
 
-        print("perfil guardado en", guardar_local(alta.estado.perfil))
+        perfil = alta.estado.perfil
+        print("perfil guardado en", guardar_local(perfil))
+        print(f"para usarla: python -m visionx.app ejecutar --fuente usb --camara {perfil.id}")
     return 0
 
 
