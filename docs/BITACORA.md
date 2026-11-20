@@ -105,6 +105,9 @@ Claude, primera palabra), FPS y el cuerpo. Textos con Pillow (tildes y ñ). Dos 
 `dev-1114-distancias` corrigieron rótulos encimados, el modelo mal nombrado, la guía repetida, la
 confirmación contada como primera palabra y la captura tomada después de cerrar.
 
+**Visor del GT** (`gtsynth visor`): láminas para la pantalla del stand y el póster (vista con
+los objetos pintados y su distancia exacta, profundidad, el conjunto y la robustez); exporta JPG.
+
 **Evidencia.** Suite 1244 OK (tests nuevos: `test_altura.py`, `test_stand.py`).
 
 **Límites.** Sin probar en la Mac ni con CREStereo en vivo; el mapa de incertidumbre solo aparece

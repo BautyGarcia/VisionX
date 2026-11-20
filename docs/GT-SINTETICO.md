@@ -117,7 +117,18 @@ uv run python -m visionx.gtsynth objetos   data/gt-sintetico-elp --csv outputs/g
 moverlo y contra ±10 %: si falla, la convención de profundidad o de píxel del render está mal y
 nada de lo que sigue vale.
 
-## 5. Evaluar la distancia por objeto
+## 5. Mostrarlo (stand y póster)
+
+```bash
+uv run python -m visionx.gtsynth visor data/gt-sintetico-elp            # pantalla: pasa sola
+uv run python -m visionx.gtsynth visor data/gt-sintetico-elp --exportar outputs/gtsynth/laminas --n 12
+```
+
+Cada lámina: la vista con cada objeto pintado y su distancia exacta, la profundidad del render,
+qué es el conjunto y el error de CREStereo por cámara (de `datasets/gtsynth/val-*.json`). Elige
+vistas sin huecos de escaneo; n / p avanzan, f pantalla completa, q sale.
+
+## 6. Evaluar la distancia por objeto
 
 Cada objeto se mide con su **máscara exacta** (no con el detector), así el error es el de la
 profundidad y el ubicador. El sistema siempre cree tener la geometría de la ELP.

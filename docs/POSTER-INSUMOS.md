@@ -173,7 +173,7 @@ ELP estéreo USB (2×1920×1080, 60 fps)
 | Captura de la pantalla del stand (cámara rotulada, radar, subtítulos, tiempos) | `docs/stand-ejemplo.jpg`; nueva con `python -m visionx.app ejecutar … --captura` |
 | AUSE / riesgo-cobertura: U-Net vs izquierda-derecha | 11-19 (U-Net) |
 | Barras de latencia: antes / después (Whisper, Claude, voz) | 11-19 (T07) + traza nueva |
-| GT sintético: render, profundidad exacta, objetos | `data/gt-sintetico-elp/` (muestras) |
+| GT sintético: render, profundidad exacta, objetos | `python -m visionx.gtsynth visor … --exportar` (láminas listas) |
 | Tabla «sabe cuándo no sabe»: 3 niveles con ejemplos y el 60/60 | 11-19 (noche, T13) |
 | Error contra cinta: CREStereo vs SGBM | 11-18 |
 | Línea de tiempo (sección 2) | Este documento |

@@ -128,6 +128,13 @@ def cmd_evaluar(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m visionx.gtsynth", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    vis = sub.add_parser("visor", help="láminas del GT para el stand o el póster")
+    vis.add_argument("raiz")
+    vis.add_argument("--particion", choices=["train", "val", "test"], default=None)
+    vis.add_argument("--cada", type=float, default=5.0, help="segundos por lámina")
+    vis.add_argument("--exportar", help="carpeta: guardar JPG en vez de mostrar")
+    vis.add_argument("--n", type=int, default=12, help="láminas a exportar")
+    vis.add_argument("--semilla", type=int, default=0)
     ev = sub.add_parser("evaluar")
     ev.add_argument("raiz")
     ev.add_argument("--variante", default="elp")
@@ -149,6 +156,11 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     cmds = {"resumen": cmd_resumen, "objetos": cmd_objetos, "verificar": cmd_verificar,
             "evaluar": cmd_evaluar}  # fmt: skip
+    if args.cmd == "visor":
+        from visionx.gtsynth.visor import run
+
+        run(args.raiz, args.particion, args.cada, args.exportar, args.n, args.semilla)
+        return 0
     if args.cmd == "evaluar" and args.particion == "test":
         print("test está congelado hasta la evaluación final (docs/INCERTIDUMBRE-Y-GT.md)",
               file=sys.stderr)  # fmt: skip

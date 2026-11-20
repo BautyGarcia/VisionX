@@ -140,3 +140,11 @@ def test_evaluar_con_disparidad_exacta_da_error_cero_y_cobertura(tmp_path):
     r = resumen(filas)
     assert r["cobertura_90_k1"] == 1.0 and r["por_rango"]["1–2"]["n"] == 1
     assert factor_b(filas) < 0.1  # error ~0: alcanza con achicar mucho la b
+
+
+def test_visor_arma_la_lamina(tmp_path):
+    from visionx.gtsynth.visor import lamina
+
+    v = _vista(tmp_path)
+    img = lamina(v, ["ELP calibrada: 1–2 %"], {"vistas": 2, "escenas": 1, "objetos": 1})
+    assert img.shape == (1080, 1920, 3) and img.dtype == np.uint8
