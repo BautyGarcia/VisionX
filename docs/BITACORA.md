@@ -40,6 +40,38 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T12/T15: `gtsynth evaluar` con alineación y distancia conocida; factor de b en val; pedido de renders
+
+Tarea: T12, T13, T15. Persona/agente: Bauty / Claude Code. Rama: `a/T12-gt-alineacion`.
+Objetivo: la fila «hermana corregida» que pidió la entrada «robustez de CREStereo con el GT
+sintético», con la U-Net de incertidumbre, y dejar pedido lo que falta para probar otras cámaras.
+Hecho (código): `crestereo_adapt/align_apply.py` (`Alineador`: `ninguna`, `clasico`, `red`,
+`clasico+red`, siempre con todos los pares de una cámara juntos). `gtsynth evaluar` suma
+`--alinear`, `--red`, `--vistas-por-camara N` (N vistas seguidas comparten una hermana y se
+alinean juntas) y `--distancia-conocida` (el objeto apuntado de la primera vista de cada cámara
+da el corrimiento de disparidad que se resta en todo el grupo; esa vista se marca `calibra` y no
+entra en el resumen). Sin esas opciones mide exactamente como antes.
+Evidencia: `tests/test_gtsynth.py` 10 aprobados (2 nuevos); prueba corta con datos reales en los
+cuatro modos. Copia local de val (160 vistas `elp` + 160 `distinta`, 2,5 GB) desde Drive.
+Resultado, primera corrida (Mac, MPS, CREStereo preciso + U-Net `crestereo_inc/v2-s0`, val
+`elp`, 3376 objetos): el error por objeto repite el de la PC de Tomás (0,67 / 0,88 / 1,22 /
+1,58 % de 0,5 a 4 m). **Cobertura del intervalo del 90 % con la b tal cual: 98,3 %**; la U-Net
+duda de más y el **factor de b para 90 % es 0,281** (val; no usar test para ajustarlo).
+Pendiente: la tanda de hermanas (×0,5 y ×1, 8 vistas por cámara; sin corregir, clásico, red y
+clásico + red, con y sin distancia conocida) y de `distinta`; arrancó y se pausó para liberar la
+GPU. Crudos en `outputs/gtsynth/t12-val/` (fuera de Git). Sin resultados de hermanas todavía.
+Cambio de objetivo (Bauty, 19/11): la red de entrada tiene que servir para **adaptar cualquier
+cámara estéreo**, no solo otra unidad de la ELP. Las hermanas actuales son el caso que mejor le
+queda al clásico (mismos parámetros que él corrige) y la `distinta` es escala pura: ninguna
+prueba otro lente. Pedido de renders a Tomás en el issue #53 (margen para simular lentes,
+perfiles de otras cámaras, cámara sorteada para train, ojo derecho desplazado, poses difíciles).
+El ojo de pez sigue fuera del alcance de TECNICO: quedó anotado en el issue como decisión
+pendiente, no como pedido.
+Límites: una semilla de la U-Net; hermanas con rangos supuestos; la distancia conocida usa la
+distancia exacta del render (optimista).
+Próximo paso: Bauty / Claude Code, retomar la tanda y armar la tabla; adaptar el lector de
+`gtsynth` al lienzo con margen cuando lleguen los renders. Tomás: issue #53.
+
 ## 2026-11-19 (noche) — T12: red de alineación promediada y encima del clásico; ninguna le gana al clásico
 
 Tarea: T12. Persona/agente: Bauty / Claude Code. Rama: `a/T12-red-alineacion` (PR #37).
