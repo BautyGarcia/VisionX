@@ -39,6 +39,25 @@ preciso ~0,6 s). En la PC de Tomás (sin CUDA) corre en CPU a ~1,5 s por cuadro.
 3. `unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN` antes de correr nada (la key de VisionX es
    solo para el modo de habla).
 
+### 0.1 Bajar el Drive a tu disco (importante)
+
+El Drive de Tomás tiene un límite de 200 GB y ya está casi lleno. **Bajá a tu disco todo lo que
+puedas** de `VisionX-Personal/`; cuánto, lo decidís vos según el espacio que tengas. Cuando
+termines, **avisale a Tomás qué carpetas bajaste completas**: él las borra del Drive para seguir
+subiendo datos nuevos. Las copias originales quedan en el disco de 2 TB de su PC, así que no se
+pierde nada.
+
+Orden sugerido (tamaños aproximados):
+
+| Prioridad | Carpetas | GB | Para qué |
+|---|---|---:|---|
+| 1 | `gt-sintetico-elp/elp`, `camara-sorteada`, `hssd-camara-sorteada` | 39 | E1 y E2 |
+| 2 | `gt-video` (6 cámaras de la expo + 3 genéricas) | 15 | Evaluar E2 en cámaras no vistas |
+| 2 | `gt-sintetico-elp/hssd-recorridos-sorteada` (sube la noche del 20/11) | 17 | E2 con varios cuadros, reentrenar la U-Net |
+| 3 | `camara-sorteada-ojo`, `elp-margen`, `elp-margen-ojo`, `distinta` | 39 | Ojo corrido, lentes con margen, escala |
+| 4 | `secuencias`, perfiles fijos (`media-90`, `gran-angular-130`, `cuatro-tercios-90`, `base-larga-20`, `base-corta-3`, `angosta-60`), poses (`elp-arriba-*`, `elp-adelante-2`, `pose-*`), `ojo-de-pez` | 26 | Casos difíciles y otras evaluaciones |
+| — | `pesos/`, `stand-camaras/`, `stand-video/` | < 1 | Pesos de YOLOE y demos del stand |
+
 ## 1. Revisar el diseño (antes de entrenar)
 
 Leer las secciones 4, 5 y 6 de [PLUG-AND-PLAY](PLUG-AND-PLAY.md) y anotar en el PR #63 si algo
