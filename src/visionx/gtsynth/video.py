@@ -37,6 +37,17 @@ CAMARAS_VIDEO: tuple[tuple[str, str], ...] = (
     # La ELP a resolución completa, como corre la app: a media resolución la regla del clásico
     # (ajustada a 1920×1080) dejaba pasar términos de lente que la unidad no tenía (20/11).
     ("video-elp-full", "ELP de VisionX"),
+    # Geometría publicada de cámaras estéreo conocidas (PLUG-AND-PLAY.md, sección 9): se simula
+    # el ángulo, la separación y la resolución, no el sensor.
+    ("video-realsense-d435", "Geometría de Intel RealSense D435"),
+    ("video-realsense-d455", "Geometría de Intel RealSense D455"),
+    ("video-zed-2", "Geometría de Stereolabs ZED 2"),
+    ("video-zed-mini", "Geometría de Stereolabs ZED Mini"),
+    ("video-oak-d", "Geometría de Luxonis OAK-D"),
+)
+# Las cámaras genéricas del primer video (60°, 130°, base de 20 cm) quedan para evaluar
+# (`gtsynth video --solo video-angosta-60` sigue funcionando con estas mismas variantes).
+CAMARAS_GENERICAS: tuple[tuple[str, str], ...] = (
     ("video-angosta-60", "Angular normal"),
     ("video-gran-angular-130", "Gran angular"),
     ("video-base-larga-20", "Ojos muy separados"),
@@ -293,9 +304,10 @@ def preparar(
     previo = salida / "resumen.json"
     resumen = json.loads(previo.read_text(encoding="utf-8")) if solo and previo.is_file() else []
     resumen = [f for f in resumen if f["variante"] not in (solo or ())]
-    escenas = sorted({v.escena for var, _ in CAMARAS_VIDEO for v in vistas(raiz, var)})
+    todas = CAMARAS_VIDEO + CAMARAS_GENERICAS
+    escenas = sorted({v.escena for var, _ in todas for v in vistas(raiz, var)})
     for escena in escenas:
-        for var, nombre in CAMARAS_VIDEO:
+        for var, nombre in CAMARAS_VIDEO + CAMARAS_GENERICAS:
             if solo and var not in solo:
                 continue
             vs = sorted((v for v in vistas(raiz, var) if v.escena == escena),

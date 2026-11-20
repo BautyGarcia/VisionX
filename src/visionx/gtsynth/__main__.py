@@ -236,6 +236,11 @@ def main(argv: list[str] | None = None) -> int:
     vi.add_argument("--salida", default=str(ROOT / "data" / "stand-video"))
     vi.add_argument("--red", default=None, help="checkpoint de la red de alineación (v3)")
     vi.add_argument("--solo", nargs="+", default=None, help="rehacer solo estas variantes")
+    sc = sub.add_parser("sin-calibrar", help="E0: cámaras distintas suponiendo que son la ELP")
+    sc.add_argument("raiz", help="carpeta con las variantes video-*")
+    sc.add_argument("--salida", default=str(ROOT / "outputs" / "gtsynth" / "e0.json"))
+    sc.add_argument("--variantes", nargs="+", default=None)
+    sc.add_argument("--cada", type=int, default=6, help="un cuadro de cada N")
     de = sub.add_parser("deteccion", help="recall y precisión de detectores contra el GT")
     de.add_argument("raiz")
     de.add_argument("--modelos", nargs="+", required=True, help="nombres en weights/ o rutas .pt")
@@ -270,6 +275,11 @@ def main(argv: list[str] | None = None) -> int:
 
         solo = tuple(args.solo) if args.solo else None
         preparar_video(args.raiz, args.salida, args.red, solo=solo)
+        return 0
+    if args.cmd == "sin-calibrar":
+        from visionx.gtsynth.sin_calibrar import correr_todo
+
+        correr_todo(args.raiz, args.salida, args.variantes, cada=args.cada)
         return 0
     if args.cmd == "visor":
         from visionx.gtsynth.visor import run
