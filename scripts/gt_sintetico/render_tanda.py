@@ -138,8 +138,23 @@ def secuencias(sim, rng, n, rec, d_min, d_max, min_px, ids, largo: int = 8) -> l
     return out
 
 
+def ver(sim, *nombres: str) -> dict:
+    """Dibuja solo esos sensores (sortear con `inst` y `z` cuesta la mitad que con los cuatro)."""
+    out = {}
+    for nombre in nombres:
+        s = sim._sensors[nombre]
+        s.draw_observation()
+        out[nombre] = s.get_observation()
+    return out
+
+
 def sortear_poses(sim, rng, n, tipo, rec, d_min, d_max, min_px, ids_estructura) -> list[dict]:
-    """Poses nuevas. `rec` = (x0, y0, w, h) del recorte nominal: lo visible se mide ahí."""
+    """Poses nuevas. `rec` = (x0, y0, w, h) del recorte nominal: lo visible se mide ahí.
+
+    `min_px` está pensado para 1920×1080: se escala con el área del recorte nominal (a media
+    resolución, el mismo objeto ocupa la cuarta parte de los píxeles).
+    """
+    min_px = max(60, round(min_px * rec[2] * rec[3] / (1920 * 1080)))
     if tipo == "secuencia":
         return secuencias(sim, rng, n, rec, d_min, d_max, min_px, ids_estructura)
     objs = objetos(sim)
@@ -155,7 +170,7 @@ def sortear_poses(sim, rng, n, tipo, rec, d_min, d_max, min_px, ids_estructura) 
             pitch = math.radians(float(rng.choice([-55.0, 0.0, 50.0])) + rng.uniform(-8, 8))
             ojo = p + np.array([0.0, altura, 0.0])
             fijar_pose(sim, ojo, yaw, pitch)
-            inst = _recorte(np.asarray(sim.get_sensor_observations()["inst"]), *rec)
+            inst = _recorte(np.asarray(ver(sim, "inst")["inst"]), *rec)
             if np.isin(inst, ids_estructura).mean() < 0.75:  # que domine pared, piso o techo
                 continue
             out.append({"ojo": ojo, "yaw": yaw, "pitch": pitch, "altura": altura,
@@ -185,7 +200,7 @@ def sortear_poses(sim, rng, n, tipo, rec, d_min, d_max, min_px, ids_estructura) 
             pitch = math.atan2(delta[1], max(horiz, 0.05)) + math.radians(rng.uniform(-8, 8))
             pitch = float(np.clip(pitch, math.radians(-35), math.radians(10)))
         fijar_pose(sim, ojo, yaw, pitch)
-        obs = sim.get_sensor_observations()
+        obs = ver(sim, "inst", "z")
         inst = _recorte(np.asarray(obs["inst"]), *rec)
         z = _recorte(np.asarray(obs["z"]), *rec)
         vis = inst == idx
