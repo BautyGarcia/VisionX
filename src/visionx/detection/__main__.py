@@ -30,7 +30,7 @@ import cv2
 import numpy as np
 import yaml
 
-from visionx.detection.catalog import COCO_CLASSES, COCO_ES, ClassCatalog
+from visionx.detection.catalog import COCO_CLASSES, VISIONX_CLASSES, VISIONX_ES, ClassCatalog
 from visionx.detection.draw import draw_detection
 from visionx.detection.yolo import DetectorSettings, YoloDetector, download_weights, sha256_file
 from visionx.shared.config import ROOT, load_config
@@ -171,12 +171,24 @@ def cmd_descargar(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_vocabulario(args: argparse.Namespace) -> int:
+    from visionx.detection.yolo import build_vocabulary_weights
+
+    settings = DetectorSettings.from_config(load_config(args.config))
+    folder = settings.weights_path.parent
+    path = build_vocabulary_weights(args.base, args.salida or f"{args.base}-visionx", folder)
+    print(f"{path}: {len(VISIONX_CLASSES)} clases  sha256 {sha256_file(path)}")
+    print("Registrar el sha256 en BITACORA; la config elige el modelo con detection.model.")
+    return 0
+
+
 def cmd_clases(args: argparse.Namespace) -> int:
-    catalog = ClassCatalog(COCO_CLASSES)
+    catalog = ClassCatalog(VISIONX_CLASSES)
     if not args.texto:
-        for cls in COCO_CLASSES:
-            print(f"{cls:16} {', '.join(COCO_ES[cls])}")
-        print(f"{len(COCO_CLASSES)} clases COCO. Estar en la lista no prueba que se detecte bien.")
+        for cls in VISIONX_CLASSES:
+            print(f"{cls:22} {', '.join(VISIONX_ES[cls])}")
+        print(f"{len(VISIONX_CLASSES)} clases de VisionX ({len(COCO_CLASSES)} COCO con los pesos "
+              "oficiales). Estar en la lista no prueba que se detecte bien.")  # fmt: skip
         return 0
     status = 0
     for text in args.texto:
@@ -396,6 +408,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--modelo", nargs="+", help="por defecto, detection.model de la config")
     p.add_argument("--config")
     p.set_defaults(fn=cmd_descargar)
+
+    p = sub.add_parser("vocabulario", help="armar los pesos YOLOE con el vocabulario de VisionX")
+    p.add_argument("--base", default="yoloe-26s-seg", help="pesos YOLOE oficiales de partida")
+    p.add_argument("--salida", help="nombre del modelo armado (por defecto <base>-visionx)")
+    p.add_argument("--config")
+    p.set_defaults(fn=cmd_vocabulario)
 
     p = sub.add_parser("clases", help="catálogo en español, o qué clase corresponde a un texto")
     p.add_argument("texto", nargs="*")

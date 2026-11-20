@@ -40,6 +40,58 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-20 (madrugada) — T06/T09: vocabulario de 215 objetos con YOLOE, solo cuando hace falta
+
+Autor: Tomás (pedido) / Claude. Pedido: que el detector reconozca 200–300 tipos de objeto (lo
+que se lleva encima, casa —cuarto, baño, cocina— y facultad); en el vivo no detectaba el
+pizarrón.
+
+**Vocabulario.** `detection/catalog.py`: 55 clases COCO que tienen sentido adentro (se sacan
+25 como jirafa o tabla de surf) + 160 nuevas (`EXTRA_ES`), todas con nombre en castellano. YOLOE
+(Ultralytics 8.4, `yoloe-26s-seg`) es de vocabulario abierto: `python -m visionx.detection
+vocabulario` calcula una vez los embeddings de texto y los deja en
+`weights/yoloe-26s-seg-visionx.pt` (sha256 `a446f0baeb7b…`). Ese archivo se carga sin internet
+con el YOLO de siempre. Las clases nuevas pueden promediar sinónimos (`PROMPTS`: pizarrón =
+whiteboard + blackboard + chalkboard).
+
+**Medición contra el GT de Replica** (`gtsynth deteccion`, 240 vistas train + val, mismas
+vistas para los dos, conf 0,25):
+
+| | Recall clases COCO | Precisión (cota) | ms/cuadro (CPU con renders) |
+|---|---:|---:|---:|
+| yolo26s-seg (hoy) | 0,381 | 0,695 | 228 |
+| YOLOE, primera lista | 0,278 | 0,553 | 221 |
+| YOLOE, sin clases vecinas | 0,290 | 0,567 | 228 |
+| YOLOE, COCO sin sinónimos (final) | 0,374 | 0,571 | 233 |
+
+- La primera lista **bajaba las sillas de 55 % a 7 %** y las mesas de 19 % a 1 %: se repartían
+  con «stool», «desk» y «cushion». Se unieron (banqueta, taburete → silla; escritorio → mesa;
+  almohadón → almohada; los nombres en castellano siguen).
+- Promediar sinónimos en clases COCO también las empeora (silla «chair, office chair, stool»:
+  8 %). Quedan con su nombre solo.
+- Con umbral 0,30 o 0,35, YOLOE sube la precisión pero baja el recall (0,355 / 0,606 y
+  0,334 / 0,634): en ningún punto alcanza a yolo26s-seg en lo de siempre.
+- Clases nuevas con buen recall: mesa de luz 96 %, almohada 79 %, alfombra 73 %, lámpara 26 %
+  (precisión 0,74).
+
+**Decisión: YOLOE no reemplaza al detector; se usa cuando hace falta** (`detection/switch.py`).
+Sin búsqueda, o buscando algo COCO, corre yolo26s-seg como siempre. Buscando o midiendo algo
+que solo conoce YOLOE (pizarrón, puerta, llaves…), esos cuadros pasan por YOLOE. Siempre corre
+un solo modelo por cuadro, así que la latencia no cambia. El parser entiende las 240 clases de
+los dos (`ClassCatalog(detector.class_names)`). Si falta el `.pt`, la app avisa y sigue solo con
+COCO. Config: `detection.extra_model`.
+
+**Pizarrón en fotos reales** (16 fotos de aulas de Wikimedia Commons, con el selector como en
+la app):
+- Lo encuentra en **9 de las 13 fotos que tienen pizarrón**, con puntaje 0,8–0,9 a distancia
+  de aula.
+- Las 4 que falla son primerísimos planos donde el pizarrón llena la foto: ahí lo confunde con
+  espejo o casillero. En la guía puede perderlo al final, cuando la persona ya llegó.
+- YOLOE por cuadro: 280–640 ms en la CPU cargada.
+
+Pendiente: clip real con la ELP en la facultad; medir en HSSD (más clases etiquetadas); Mac
+(MPS).
+
 ## 2026-11-20 — T12/T15: renders del issue #53 y guía de la red de alineación v3
 
 Autor: Tomás (B), con Claude.
@@ -63,6 +115,7 @@ Guía completa, con datos, pérdida, pasos y criterios de adopción, en
 el clásico con lente y distancia conocida. Datasets extra (HSSD sin espera; HM3D con
 formulario) quedan como opción si val muestra que faltan escenas. Las capturas reales con la ELP
 (GT C) van en unos días.
+
 ## 2026-11-19 (noche) — T08: respuestas cortas con «¿Querés más detalle?» y órdenes que no van a Claude
 
 Autor: Tomás (B), con Claude. Devolución del vivo de hoy: las respuestas de Claude eran muy

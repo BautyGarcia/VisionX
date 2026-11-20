@@ -96,9 +96,10 @@ def build_source(args: argparse.Namespace, cfg: dict[str, Any]):
 
 def build_detector(args: argparse.Namespace, cfg: dict[str, Any], synthetic):
     if args.detector == "yolo":
-        from visionx.detection import DetectorSettings, YoloDetector
+        from visionx.detection import DetectorSettings
+        from visionx.detection.yolo import build_detector as build_yolo
 
-        return YoloDetector(DetectorSettings.from_config(cfg))
+        return build_yolo(DetectorSettings.from_config(cfg))
     if synthetic is None:
         raise InvalidInput("--detector fake solo sirve con --fuente sintetica")
     return ScriptedDetector(synthetic, delay_ms=args.retraso_detector)
@@ -219,7 +220,9 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
 
     output, voice = build_output(args, cfg, on_record)
     pipeline = Pipeline(source, detector, depth, spatial, on_event=on_event, precise=precise)
-    catalog = ClassCatalog(COCO_CLASSES)
+    # Las clases del detector cargado (COCO o el vocabulario de YOLOE): «buscá el pizarrón»
+    # solo se entiende si el modelo lo puede ver.
+    catalog = ClassCatalog(getattr(detector, "class_names", None) or COCO_CLASSES)
     from visionx.assistant import build_assistant
 
     assistant = build_assistant(cfg)
@@ -251,6 +254,8 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
         watchers=[
             CameraStatus(CameraStatusSettings.from_config(cfg)),
             ProximityAlert(ProximitySettings.from_config(cfg), geometry=geometry),
+            # El selector de vocabulario necesita saber qué se busca (detection/switch.py).
+            *([detector] if hasattr(detector, "uses_extra") else []),
         ],
         calibrate=build_calibrator(depth, geometry, catalog.spoken, ModeSettings.from_config(cfg)),
         intro=lambda: intro_phrases(body.current(), body.preferences()),
