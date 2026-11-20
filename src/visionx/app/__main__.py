@@ -192,7 +192,15 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     voice_cfg = cfg.get("audio") or {}
     trace = TraceWriter(args.traza) if args.traza else None
-    on_event = trace if trace is not None else (lambda kind, data: None)
+    from visionx.app.stand import LiveLog
+
+    live = LiveLog()  # conversación y tiempos para la pantalla del stand
+
+    def on_event(kind: str, data: dict) -> None:
+        live.feed(kind, data)
+        if trace is not None:
+            trace(kind, data)
+
     source, geometry, synthetic = build_source(args, cfg)
     detector = build_detector(args, cfg, synthetic)
     depth, spatial, depth_geometry = build_depth(args, cfg, geometry, synthetic)
@@ -240,6 +248,18 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     )
     script = load_script(args.ordenes)
     range_m = tuple((cfg.get("depth") or {}).get("range_m", [0.5, 3.0]))
+    # El cuerpo de la persona: su altura guardada y la cámara estimada del piso (app/floor.py).
+    from visionx.app.floor import FloorTracker
+    from visionx.modes import body
+
+    person = body.load()
+    floor = FloorTracker()
+    floor_key: list = [None]
+    if args.voz and not person.height_known and not args.ordenes:
+        controller.announce(
+            "Hola, soy VisionX. Para decirte bien a qué altura están las cosas, decime cuánto "
+            "medís. Por ejemplo: mido 1,75."
+        )
     sonar = None
     if args.voz and ModeSettings.from_config(cfg).guide_style == "sonar":
         # Bips de la guía de buscar en su propio stream estéreo, al lado de la voz.
@@ -290,9 +310,40 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
             return None
         return target.angle_h_deg, target.angle_v_deg or 0.0
 
+    from visionx.app.stand import StandState, mode_label, render_stand
+
+    mode_settings = ModeSettings.from_config(cfg)
+    view_mode = [args.vista]
+
+    def stand_state() -> StandState:
+        turns, timing = live.snapshot()
+        chip, target = mode_label(controller, catalog.spoken, recording)
+        return StandState(
+            joint=pipeline.latest_joint(),
+            statuses=(pipeline.capture_status, pipeline.detector_status, pipeline.depth_status),
+            geometry=depth_geometry,
+            frame_geometry=geometry,
+            range_m=range_m,  # type: ignore[arg-type]
+            settings=mode_settings,
+            mode=chip,
+            recording=recording,
+            turns=turns,
+            timing=timing,
+            body=body.current(),
+            target_angle=guided_angle(),
+            target_label=target,
+            spoken=catalog.spoken,
+        )
+
+    def frame_image():
+        return render_stand(stand_state()) if view_mode[0] == "stand" else render(dashboard_state())
+
     window = not args.sin_ventana
     if window:
         import cv2
+
+        cv2.namedWindow("VisionX", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("VisionX", 1600, 900)
     pipeline.start()
     t0 = time.monotonic()
     try:
@@ -311,11 +362,28 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
                 controller.tick()
             for name, size in pipeline.queue_sizes().items():
                 max_queues[name] = max(max_queues.get(name, 0), size)
+            joint = pipeline.latest_joint()
+            if (
+                joint is not None
+                and joint.depth is not None
+                and joint.depth.depth_m is not None
+                and joint.frame.key != floor_key[0]
+                and depth_geometry.size == joint.depth.size
+            ):
+                floor_key[0] = joint.frame.key
+                floor.update(joint.depth.depth_m, joint.depth.valid_mask, depth_geometry, elapsed)
             if window:
-                cv2.imshow("VisionX - diagnostico", render(dashboard_state()))
+                cv2.imshow("VisionX", frame_image())
                 key = cv2.waitKey(30) & 0xFF
                 if key == ord("q"):
                     break
+                if key == ord("v"):  # stand <-> diagnóstico
+                    view_mode[0] = "diagnostico" if view_mode[0] == "stand" else "stand"
+                if key == ord("f"):  # pantalla completa
+                    full = cv2.getWindowProperty("VisionX", cv2.WND_PROP_FULLSCREEN)
+                    cv2.setWindowProperty("VisionX", cv2.WND_PROP_FULLSCREEN,
+                                          cv2.WINDOW_NORMAL if full == cv2.WINDOW_FULLSCREEN
+                                          else cv2.WINDOW_FULLSCREEN)  # fmt: skip
                 if key == ord("c"):
                     controller.cancel()
                 if key == ord(" ") and voice is not None:
@@ -340,16 +408,17 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print("interrumpido")
     finally:
-        if sonar is not None:
-            sonar.close()
-        controller.close()
         if args.captura:
             # Lo último que se unió, dibujado igual que en la ventana: evidencia sin pantalla.
+            # Antes de cerrar el controlador, para que se vea la orden activa.
             import cv2
 
             Path(args.captura).parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(args.captura), render(dashboard_state()))
+            cv2.imwrite(str(args.captura), frame_image())
             print(f"captura del dashboard: {args.captura}")
+        if sonar is not None:
+            sonar.close()
+        controller.close()
         pipeline.stop()
         output.wait_idle(timeout_s=5)
         output.close()
@@ -446,6 +515,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ordenes", help="JSONL con {t_s, texto}")
     p.add_argument("--traza", help="JSONL de eventos (frames, resultados, órdenes, audio)")
     p.add_argument("--captura", help="PNG del dashboard al terminar (sirve con --sin-ventana)")
+    p.add_argument(
+        "--vista",
+        choices=["stand", "diagnostico"],
+        default="stand",
+        help="pantalla del stand (por defecto) o el dashboard de diagnóstico; v alterna",
+    )
     p.set_defaults(fn=cmd_ejecutar)
 
     p = sub.add_parser("latencias", help="tabla de latencias por orden de una traza en vivo")

@@ -1782,7 +1782,7 @@ def test_lateral_and_body_height_phrases():
     assert lateral_phrase(1.1, 3, S) == "al frente"  # menos de side_min_m: no se dice
     assert lateral_phrase(2.0, -35, S) == "1,4 metros a tu izquierda"
     assert body_height_phrase(1.1, 0) == "a la altura de tu pecho"
-    assert body_height_phrase(1.1, -25) == "a la altura de tu cintura"
+    assert body_height_phrase(1.1, -25) == "a la altura de tu cadera"  # 0,71 m, persona de 1,70
     assert body_height_phrase(3.0, -25) == "cerca del piso"
 
 

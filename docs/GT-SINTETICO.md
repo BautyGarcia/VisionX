@@ -16,6 +16,11 @@ probar la decisión (a) con cámaras hermanas y una distinta.
 | Objetos `elp` | 15 088 visibles (≥ 400 px, ≤ 6 m); con clase del detector y a 0,5–4 m: train 2413, val 1115, test 1990 |
 | Por rango | 0,5–1 m 1442; 1–2 m 5167; 2–3 m 4090; 3–4 m 2635; > 4 m 1754 |
 
+**Ojo con `pose.altura_m` de `vista.json`:** es la altura sobre el punto de la navmesh de
+Habitat, que queda ~18 cm por encima del piso real (en las vistas con piso etiquetado, el plano
+del piso da 1,44–1,47 m donde la navmesh dice 1,26–1,29 m). La inclinación (`pitch_rad`) sí es
+exacta. No afecta las distancias de los objetos (salen de la Z del render).
+
 Límites: Replica es escaneo real pero estático y sin gente; algunos departamentos FRL tienen
 ventanas abiertas o huecos del escaneo (sin geometría, Z = 0: mediana 0,1 % de la vista, hasta
 ~20 % en pocas vistas) que la tabla de objetos ignora. Las texturas son color por vértice de

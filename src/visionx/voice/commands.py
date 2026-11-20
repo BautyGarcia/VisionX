@@ -23,6 +23,7 @@ REPEAT = "repetir"
 # La búsqueda no termina sola (Tomás, 19/11): termina cuando la persona dice que lo encontró o
 # que quiere terminar. «dejá de buscar», «pará» y demás siguen siendo cancelar.
 FOUND = "encontrado"
+HEIGHT = "altura"  # «mido 1,80» -> objetivo "altura:1.8"
 END_SEARCH = "terminar-busqueda"
 READ_ALL = "todo"  # «leé todo»: lectura completa por bloques, sin resumir
 CALIBRATE = "calibrar"  # «calibrá, está a 2 metros» -> objetivo "calibrar:2"
@@ -202,6 +203,14 @@ class CommandParser:
             return Interpretation(utterance, Mode.CONTROL, FOUND, "encontrado")
         if _END_SEARCH.search(text):
             return Interpretation(utterance, Mode.CONTROL, END_SEARCH, "terminar-busqueda")
+        from visionx.modes import body
+
+        if body.is_height_statement(utterance):
+            h = body.parse_height(utterance)
+            if h is None:
+                reply = "No te entendí la altura. Decime, por ejemplo: mido 1,75."
+                return Interpretation(utterance, Mode.CONTROL, None, "altura-sin-numero", reply)
+            return Interpretation(utterance, Mode.CONTROL, f"{HEIGHT}:{h:g}", "altura")
         if _CALIBRATE.search(text):
             from visionx.app.calibrate import parse_meters
 

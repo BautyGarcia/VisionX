@@ -105,7 +105,11 @@ ELP estéreo USB (2×1920×1080, 60 fps)
 | Cobertura del intervalo del 90 % | 0,95–0,96 limpio, 0,82–0,85 desalineado | 11-19 |
 | U-Net: costo | +25 ms sobre una pasada (izquierda-derecha cuesta el doble) | 11-19 |
 | Fusion (resultado negativo) | val: EPE 1,735 contra 1,801 de B5 (−3,7 %); Middlebury: empata con B5 | 11-16, 11-17 |
-| GT sintético: CREStereo por rango (val, 4 cámaras) | **Pendiente** (corriendo 19/11) | — |
+| **GT sintético, ELP calibrada** (val, 3376 objetos, máscara exacta) | error medio **0,7 / 0,9 / 1,2 / 1,6 %** a 0,5–1 / 1–2 / 2–3 / 3–4 m | 11-19 (noche, robustez) |
+| GT sintético, **otra unidad sin corregir** (hermana ×0,5 / ×1) | 24–50 % / 44–63 % de error medio | 11-19 (noche, robustez) |
+| GT sintético, **cámara distinta** (90°, 12 cm) supuesta ELP | −68,8 % en todos los rangos (error de escala puro) | 11-19 (noche, robustez) |
+| Cámara distinta + **un objeto a distancia conocida** | 68,8 % → **1,2–3,7 %** | 11-19 (noche, robustez) |
+| Inclinación de la cámara estimada del piso (GT) | ~1° de error cuando se ve el piso | 11-19 (noche, altura) |
 | Red de entrada (a) en hermanas / distinta | **Pendiente** (Bauty entrenando) | — |
 | Banco ELP s1 (cinta, por objeto) | **Pendiente** (Bauty) | — |
 
@@ -165,7 +169,8 @@ ELP estéreo USB (2×1920×1080, 60 fps)
 | Diagrama del sistema (sección 3) | Este documento |
 | Persona con el arnés + qué escucha (globos de diálogo reales) | Demo en vivo; frases de las trazas |
 | Par ELP → profundidad CREStereo → mapa de incertidumbre | `outputs/profundidad/` (Bauty) |
-| Curva de robustez: error vs desalineación, con y sin corrección | 11-18 y GT sintético (pendiente) |
+| **Curva de robustez**: ELP 1 % / hermanas 25–65 % / distinta 69 % → con distancia conocida 1–4 % (falta la fila «con la red de entrada») | 11-19 (noche, robustez); `datasets/gtsynth/val-*.json` |
+| Captura de la pantalla del stand (cámara rotulada, radar, subtítulos, tiempos) | `docs/stand-ejemplo.jpg`; nueva con `python -m visionx.app ejecutar … --captura` |
 | AUSE / riesgo-cobertura: U-Net vs izquierda-derecha | 11-19 (U-Net) |
 | Barras de latencia: antes / después (Whisper, Claude, voz) | 11-19 (T07) + traza nueva |
 | GT sintético: render, profundidad exacta, objetos | `data/gt-sintetico-elp/` (muestras) |

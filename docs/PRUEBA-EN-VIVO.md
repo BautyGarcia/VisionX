@@ -107,7 +107,18 @@ ya es preciso a corta distancia, así que en vivo va solo. Para comparar, agrega
 `--profundidad-precisa crestereo-preciso` y subir `depth.precisa.espera_s` a 2,5.
 
 Con la ventana en foco: **espacio** = empezar / terminar de hablar, **c** = cancelar, **q** =
-salir. Auriculares puestos. Para verlo por Discord: compartir la ventana de la app **con audio**
+salir, **f** = pantalla completa, **v** = alternar la pantalla del stand y el dashboard de
+diagnóstico.
+
+**Pantalla del stand** (la vista por defecto, `--vista stand`): la cámara con cada objeto
+rotulado con su distancia y el color de su certeza (verde precisa, ámbar aproximada, rojo no
+segura) y la flecha al objetivo; profundidad e incertidumbre; el radar desde arriba con los
+objetos y su margen; los subtítulos de la conversación; los tiempos de la última orden (Whisper,
+Claude, primera palabra), los FPS y el cuerpo (estatura, altura e inclinación de la cámara).
+
+**Altura de la persona:** la primera vez (con `--voz`) VisionX pide «decime cuánto medís»;
+responder «mido 1,75». Queda guardada en `~/.visionx/persona.json` y se cambia diciéndolo de
+nuevo. Con el piso a la vista, la altura y la inclinación de la cámara se estiman solas. Auriculares puestos. Para verlo por Discord: compartir la ventana de la app **con audio**
 (la voz y el sonar salen por los auriculares de la Mac).
 
 Si CREStereo no carga, va lento o se queda sin memoria: repetir con `--profundidad B0
