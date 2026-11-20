@@ -93,6 +93,12 @@ una sola vez, cuando la red esté cerrada en val.
   - `--ojo-sorteado M`: ±M metros por vista, en y y z.
   - `--proporciones`: con `sorteada`, cada proporción vuelve a cargar la escena.
 
+## Demo «Cámaras» del stand
+
+Con las variantes de val de la tanda #53 se arma la pestaña «Cámaras» del stand: la misma vista
+con siete cámaras y CREStereo ya corrido (`gtsynth camaras`, tecla `k` en la app o
+`gtsynth camaras-ver`). Detalle en la BITÁCORA del 20/11.
+
 ## Qué hay en cada vista
 
 `data/gt-sintetico-elp/<variante>/<escena>/<nnnn>/` (no se sube al repo; copia en Drive

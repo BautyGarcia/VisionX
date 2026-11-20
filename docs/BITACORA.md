@@ -92,6 +92,24 @@ Cuatro problemas resueltos en el camino:
 - **YOLOE-m:** mejora poco, es 2,5 veces más lento y encuentra el pizarrón en 8 de 13 fotos
   (el chico, en 9). Queda la combinación de la entrada de YOLOE.
 
+## 2026-11-20 (madrugada) — T15/T20: pestaña «Cámaras» del stand
+
+Autor: Tomás (pedido) / Claude. La misma escena vista por las siete cámaras del issue #53 (ELP,
+60°, 3 cm, 12 cm, 4:3, 20 cm, 130°), con CREStereo preciso ya corrido para cada una. Muestra
+el ojo izquierdo, la distancia real, la calculada y el error por píxel.
+
+- **Precálculo:** `python -m visionx.gtsynth camaras data/gt-sintetico-elp`. Toma 4 vistas de
+  val (una por escena, sin huecos y con ≥ 10 objetos) y deja `data/stand-camaras/` (≈ 9 s por
+  cámara en la CPU; 28 en total). Copia en el Drive `VisionX-Personal/stand-camaras/`.
+- **Ver:** tecla `k` en la app (`--vista camaras` para arrancar ahí); o sola, en un segundo
+  monitor: `python -m visionx.gtsynth camaras-ver`. Pasa de cámara cada 6 s. No corre ningún
+  modelo.
+- **Resultados:** error mediano por píxel entre 0,1 % y 0,3 % en todas las cámaras. Error del
+  objeto apuntado: −0,6 % a 3 % en tres escenas; en `room_1` una lámpara fina da 8–15 % con
+  algunas cámaras (bordes).
+- **Límite, dicho en la pantalla:** es render con la calibración exacta. Con una cámara real el
+  error es mayor y depende de calibrarla bien, que es lo que corrige la red de alineación.
+
 ## 2026-11-20 (madrugada) — T06/T09: vocabulario de 215 objetos con YOLOE, solo cuando hace falta
 
 Autor: Tomás (pedido) / Claude. Pedido: que el detector reconozca 200–300 tipos de objeto (lo
