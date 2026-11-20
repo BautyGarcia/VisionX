@@ -960,7 +960,7 @@ def _siblings(args: argparse.Namespace) -> int:
     from visionx.calibration import StereoCalibration
     from visionx.depth.crestereo_adapt import robustness
     from visionx.depth.crestereo_adapt.align_data import ELP_SIZE
-    from visionx.depth.crestereo_adapt.align_train import correct_right
+    from visionx.depth.crestereo_adapt.align_train import apply_field, pooled_field, right_field
     from visionx.depth.crestereo_adapt.classic import ClassicParams, fit_significant, match_points
     from visionx.depth.crestereo_adapt.correction import homography, warp_image
     from visionx.depth.crestereo_adapt.lens import fit_lens, pull_maps
@@ -1089,23 +1089,65 @@ def _siblings(args: argparse.Namespace) -> int:
                     perturbed, u + field[:, :, 0], v + field[:, :, 1], cv2.INTER_LINEAR
                 )
                 outputs["oraculo_denso"].append(run(frame, dense))
-                if network is not None:
-                    fixed = correct_right(
+
+            if network is not None:
+                # La red de dos formas: cada par con su propio campo, y un solo campo para la
+                # cámara (mediana de los campos de los 6 pares), como el clásico junta puntos.
+                # «lente+red»: la red mira el par ya corregido por el clásico con lente y su
+                # campo se compone con el de él (encima del clásico, sin reentrenar).
+                def network_field(frame: StereoFrame, right: np.ndarray) -> np.ndarray:
+                    return right_field(
                         network[0],
                         network[1],
                         frame.left,
-                        perturbed,
+                        right,
                         capture,
                         cal.right.D,
                         ELP_SIZE,
                     )
-                    outputs.setdefault("red", []).append(run(frame, fixed))
+
+                own = [network_field(f, p) for f, p in zip(frames, perturbed_all, strict=True)]
+                pooled = pooled_field(own)
+                for frame, perturbed, field_k in zip(frames, perturbed_all, own, strict=True):
+                    outputs.setdefault("red", []).append(
+                        run(frame, apply_field(perturbed, field_k))
+                    )
+                    outputs.setdefault("red_promedio", []).append(
+                        run(frame, apply_field(perturbed, pooled))
+                    )
+                if lens_maps is None:
+                    # El clásico no corrigió nada: «encima del clásico» es la red sola.
+                    outputs["lente+red"] = list(outputs["red"])
+                    outputs["lente+red_promedio"] = list(outputs["red_promedio"])
+                else:
+                    on_lens = [
+                        network_field(f, cv2.remap(p, lens_maps[0], lens_maps[1], cv2.INTER_LINEAR))
+                        for f, p in zip(frames, perturbed_all, strict=True)
+                    ]
+                    pooled_lens = pooled_field(on_lens)
+                    for frame, perturbed, field_k in zip(
+                        frames, perturbed_all, on_lens, strict=True
+                    ):
+                        outputs.setdefault("lente+red", []).append(
+                            run(frame, apply_field(perturbed, field_k, lens_maps))
+                        )
+                        outputs.setdefault("lente+red_promedio", []).append(
+                            run(frame, apply_field(perturbed, pooled_lens, lens_maps))
+                        )
 
             # Distancia conocida: una medición sobre el primer par da el corrimiento constante de
             # disparidad que quedó (centro óptico y yaw no se ven en las filas). Se emula con la
             # referencia de ese par y se aplica a los demás, que son los que se evalúan.
             offsets: dict[str, float] = {}
-            for name in ("sin_corregir", "clasico_regla", "clasico_lente", "red"):
+            for name in (
+                "sin_corregir",
+                "clasico_regla",
+                "clasico_lente",
+                "red",
+                "red_promedio",
+                "lente+red",
+                "lente+red_promedio",
+            ):
                 if name not in outputs:
                     continue
                 outputs[f"{name}+distancia"], offsets[name] = _with_known_distance(

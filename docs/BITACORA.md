@@ -40,6 +40,53 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T12: red de alineación promediada y encima del clásico; ninguna le gana al clásico
+
+Tarea: T12. Persona/agente: Bauty / Claude Code. Rama: `a/T12-red-alineacion` (PR #37).
+Objetivo: probar los dos próximos pasos de la entrada de la v2 sin reentrenar: (a) un solo campo
+por cámara (los 6 pares juntos, como el clásico junta puntos) y (b) la red encima del clásico con
+lente.
+Hecho (código, local): `align_train.py` separa `right_field` (campo a resolución de captura) de
+`apply_field` (remuestreo; con `base_maps` compone con una corrección anterior y lee la imagen
+una sola vez) y agrega `pooled_field` (mediana por píxel de los campos de varios pares).
+`correct_right` queda como la composición de las dos. `hermanas --red` suma cuatro sistemas:
+`red` (cada par con su campo), `red_promedio` (la mediana de los 6 campos aplicada a todos),
+`lente+red` (la red mira el par ya corregido por el clásico con lente y su campo se compone con
+el de él) y `lente+red_promedio`. La red es la v2 tal cual: no se entrenó para corregir encima del
+clásico.
+Evidencia: `tests/test_crestereo_alignnet.py` 12 aprobados (2 nuevos: mediana de campos y
+composición de mapas igual a corregir en dos pasos); ruff sin errores.
+`hermanas recordings/dev-1114-escenas --red outputs/crestereo_alin/v2-45ep/mejor.pt` en la Mac
+(MPS, modo preciso), mismos 6 pares y 3 cámaras por nivel que la entrada de la v2. Los sistemas
+viejos dan exactamente los mismos números que en esa entrada. Cambio de profundidad con distancia
+conocida, en %, promedio de las 3 cámaras (mediana por par):
+
+| Rangos | Sin corregir | Clásico con lente | Red | Red promedio | Lente + red | Lente + red promedio | Oráculo denso |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ×0,1 | 3,53 | **1,98** | 2,93 | 2,24 | 2,76 | **1,98** | 0,48 |
+| ×0,25 | 8,06 | **2,63** | 3,97 | 2,73 | 5,09 | 4,52 | 0,56 |
+| ×0,5 | 16,54 | **3,66** | 5,47 | 4,16 | 8,01 | 7,49 | 0,58 |
+| ×1 | 24,99 | **5,57** | 8,83 | 6,66 | 13,11 | 12,01 | 0,75 |
+
+P90 del cambio (%): clásico con lente 6,3 / 7,9 / 11,3 / 16,9; red promedio 7,8 / 8,9 / 12,1 / 26,1.
+Resultado: (a) **juntar los pares ayuda mucho** (la red baja de 2,9–8,8 % a 2,2–6,7 %), así que
+parte de la desventaja era ruido de la red par a par; aun así **queda detrás del clásico** en los
+cuatro niveles (cerca en ×0,1 y ×0,25). (b) **La red v2 encima del clásico empeora**, sobre todo
+cuando el clásico ya corrigió yaw y focal (cámara ×0,25 semilla 0: clásico 2,85 %, lente+red
+8,88 %); en esos casos el corrimiento que mide la distancia conocida cambia de signo (de +0,14 a
+−0,83 px), o sea que la red mete un error de columnas que el clásico ya había sacado. Es lo
+esperable de una red entrenada sobre pares sin corregir: no aprendió a mirar el resto que deja
+el clásico. Por la regla de la entrada de la v2, el sistema sigue con el clásico con lente.
+Límites: una semilla de entrenamiento; 6 pares de un clip que también está en la validación de
+la red; 3 cámaras por nivel; la referencia es la misma CREStereo sin perturbar (no es GT);
+`lente+red` es una prueba sin reentrenar, no la variante prevista.
+Crudos en `outputs/crestereo_alin/v2-45ep/hermanas-promedio-y-lente/` y su `.log` (fuera de Git).
+Próximo paso, a decidir: (1) la variante prevista de verdad, entrenar la red con el par ya
+corregido por el clásico y el resto como objetivo (≈1 h en MPS más el caché del clásico), y
+evaluarla con `red_promedio`; o (2) cerrar la red como resultado negativo documentado y seguir con
+lo que falta de T12 (banco ELP con stickers para calibrar b, confianza de la alineación,
+integración).
+
 ## 2026-11-19 (noche) — T08/T09: la frase de distancia ya no se corta al vencer; «maus»
 
 **Tareas:** T08, T09. **Persona/agente:** Bauty (vivo, traza `outputs/beta/voz-cortes.jsonl`,

@@ -256,3 +256,34 @@ def test_sin_corrimiento_constante_de_columnas() -> None:
     assert np.allclose(out[0], ramp)
     assert np.allclose(out[1], -2.0)
     assert np.allclose(field[0], ramp + 3.0)  # no toca la entrada
+
+
+def test_campo_de_varios_pares_es_la_mediana_por_pixel() -> None:
+    """Un par malo no arrastra el campo de la cámara (mediana, no promedio)."""
+    from visionx.depth.crestereo_adapt.align_train import pooled_field
+
+    good = np.full((2, 3, 4), 0.5, dtype=np.float32)
+    bad = np.full((2, 3, 4), 40.0, dtype=np.float32)
+    out = pooled_field([good, good * 1.2, bad])
+    assert np.allclose(out, 0.6)
+
+
+def test_campo_encima_de_otra_correccion_lee_la_imagen_una_vez() -> None:
+    """Componer los mapas da lo mismo que corregir en dos pasos (con enteros, exacto)."""
+    from visionx.depth.crestereo_adapt.align_train import apply_field
+
+    right = texture(3, (160, 96))
+    height, width = right.shape[:2]
+    u, v = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
+    base = (u + 3.0, v - 2.0)  # primera corrección: corre 3 px en x y −2 en y
+    field = np.stack([np.full_like(u, -1.0), np.full_like(v, 5.0)])
+    two_steps = cv2.remap(
+        cv2.remap(right, *base, cv2.INTER_LINEAR, borderValue=0),
+        u + field[0],
+        v + field[1],
+        cv2.INTER_LINEAR,
+        borderValue=0,
+    )
+    once = apply_field(right, field, base)
+    assert np.array_equal(once[10:80, 10:150], two_steps[10:80, 10:150])
+    assert np.array_equal(once[10:80, 10:150], right[13:83, 12:152])

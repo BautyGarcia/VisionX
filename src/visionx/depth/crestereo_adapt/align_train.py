@@ -327,7 +327,7 @@ def without_column_shift(field: np.ndarray) -> np.ndarray:
     return out
 
 
-def correct_right(
+def right_field(
     model: Any,
     device: str,
     left: np.ndarray,
@@ -337,10 +337,11 @@ def correct_right(
     size: tuple[int, int],
     calibration_known: bool = True,
 ) -> np.ndarray:
-    """Corrige el ojo derecho de un par a resolución de captura con la red.
+    """Campo de la red para un par, llevado a la resolución de captura: (2, H, W) en px.
 
-    La red trabaja a `size` (más chico): se reduce el par, se predice el campo, se lo lleva a la
-    resolución de captura (escalando también los px) y se remuestrea el derecho una sola vez.
+    La red trabaja a `size` (más chico): se reduce el par, se predice el campo, se le saca el
+    corrimiento constante de columnas y se lo agranda escalando también los px. Separado de
+    `apply_field` para poder combinar campos de varios pares antes de aplicarlos.
     """
     import cv2
 
@@ -372,5 +373,57 @@ def correct_right(
     scale_x, scale_y = width / size[0], height / size[1]
     fx = cv2.resize(field[0], (width, height), interpolation=cv2.INTER_LINEAR) * scale_x
     fy = cv2.resize(field[1], (width, height), interpolation=cv2.INTER_LINEAR) * scale_y
+    return np.stack([fx, fy]).astype(np.float32)
+
+
+def pooled_field(fields: Sequence[np.ndarray]) -> np.ndarray:
+    """Un solo campo para varios pares de la misma cámara: la mediana por píxel.
+
+    La desalineación de una cámara es la misma en todos sus pares; lo que cambia de par en par
+    es el ruido de la red. La mediana (y no el promedio) aguanta un par malo, como la regla del
+    clásico aguanta puntos malos.
+    """
+    if not fields:
+        raise InvalidInput("hace falta al menos un campo")
+    return np.median(np.stack(fields), axis=0).astype(np.float32)
+
+
+def apply_field(
+    right: np.ndarray,
+    field: np.ndarray,
+    base_maps: tuple[np.ndarray, np.ndarray] | None = None,
+) -> np.ndarray:
+    """Remuestrea el derecho con el campo (2, H, W): el píxel (u, v) toma (u+fx, v+fy).
+
+    Con `base_maps` (mapas absolutos de una corrección anterior, como los del clásico con
+    lente) el campo se aplica sobre la imagen ya corregida sin remuestrear dos veces: se
+    componen los mapas y la imagen original se lee una sola vez.
+    """
+    import cv2
+
+    height, width = right.shape[:2]
     u, v = np.meshgrid(np.arange(width, dtype=np.float32), np.arange(height, dtype=np.float32))
-    return cv2.remap(right, u + fx, v + fy, cv2.INTER_LINEAR, borderValue=0)
+    map_x, map_y = u + field[0], v + field[1]
+    if base_maps is not None:
+        # corregida(p) = original(base(p)); la red pide corregida(p + f) = original(base(p + f)).
+        edge = cv2.BORDER_REPLICATE
+        map_x, map_y = (
+            cv2.remap(base_maps[0], map_x, map_y, cv2.INTER_LINEAR, borderMode=edge),
+            cv2.remap(base_maps[1], map_x, map_y, cv2.INTER_LINEAR, borderMode=edge),
+        )
+    return cv2.remap(right, map_x, map_y, cv2.INTER_LINEAR, borderValue=0)
+
+
+def correct_right(
+    model: Any,
+    device: str,
+    left: np.ndarray,
+    right: np.ndarray,
+    geometry: Any,
+    distortion: np.ndarray | None,
+    size: tuple[int, int],
+    calibration_known: bool = True,
+) -> np.ndarray:
+    """Corrige el ojo derecho de un par a resolución de captura con la red (un solo remuestreo)."""
+    field = right_field(model, device, left, right, geometry, distortion, size, calibration_known)
+    return apply_field(right, field)
