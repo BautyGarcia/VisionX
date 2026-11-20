@@ -223,7 +223,18 @@ def main(argv: list[str] | None = None) -> int:
     ca.add_argument("--escenas", type=int, default=4, help="cuántas vistas de val (una por escena)")
     ca.add_argument("--profundidad", default="crestereo-preciso")
     cv_ = sub.add_parser("camaras-ver", help="mostrar la demo de cámaras en una ventana")
-    cv_.add_argument("carpeta", nargs="?", default=str(ROOT / "data" / "stand-camaras"))
+    cv_.add_argument(
+        "carpeta",
+        nargs="?",
+        default=None,
+        help="por defecto data/stand-video si tiene videos, si no data/stand-camaras",
+    )
+    vi = sub.add_parser("video", help="videos de la demo de cámaras (recorridos, 4 versiones)")
+    vi.add_argument(
+        "raiz", help="carpeta con las variantes video-* (render_tanda --tipo-pose recorrido)"
+    )
+    vi.add_argument("--salida", default=str(ROOT / "data" / "stand-video"))
+    vi.add_argument("--red", default=None, help="checkpoint de la red de alineación (v3)")
     de = sub.add_parser("deteccion", help="recall y precisión de detectores contra el GT")
     de.add_argument("raiz")
     de.add_argument("--modelos", nargs="+", required=True, help="nombres en weights/ o rutas .pt")
@@ -249,9 +260,14 @@ def main(argv: list[str] | None = None) -> int:
     cmds = {"resumen": cmd_resumen, "objetos": cmd_objetos, "verificar": cmd_verificar,
             "evaluar": cmd_evaluar, "camaras": cmd_camaras, "deteccion": cmd_deteccion}  # fmt: skip
     if args.cmd == "camaras-ver":
-        from visionx.app.stand_camaras import mostrar
+        from visionx.app.stand_camaras import carpeta_por_defecto, mostrar
 
-        mostrar(args.carpeta)
+        mostrar(args.carpeta or carpeta_por_defecto())
+        return 0
+    if args.cmd == "video":
+        from visionx.gtsynth.video import preparar as preparar_video
+
+        preparar_video(args.raiz, args.salida, args.red)
         return 0
     if args.cmd == "visor":
         from visionx.gtsynth.visor import run

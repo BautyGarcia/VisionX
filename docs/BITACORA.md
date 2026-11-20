@@ -40,6 +40,46 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-20 (mediodía) — T15: videos de la pestaña «Cámaras» con CREStereo continuo
+
+Autor: Claude, a pedido de Tomás. Rama `b/video-camaras`.
+
+**Qué es:** la pestaña «Cámaras» del stand (tecla `k`, o `gtsynth camaras-ver`) ahora reproduce
+videos en lugar de fotos sueltas. Un recorrido de 90 cuadros por una casa (`render_tanda.py
+--tipo-pose recorrido`: pasos de 5 cm, gira antes de chocar a 0,8 m) con cuatro cámaras bien
+distintas: la ELP a resolución completa, una angosta de 60°, un gran angular de 130° y una base
+larga de 20 cm. Dos escenas, `hotel_0` y `office_2`. Cada cuadro pasa por **CREStereo continuo**
+(640×360, como la app en vivo) en cuatro versiones: ideal, sin corregir (el ojo derecho de «otra
+unidad», del generador de hermanas), clásico (alineación clásica + distancia conocida) y **red**,
+que queda como lugar reservado hasta que exista el checkpoint de la v3 (`gtsynth video --red`).
+Se reproduce a 10 cuadros por segundo. Los MP4 y `resumen.json` van en `data/stand-video/`
+(`python -m visionx.gtsynth video data/gt-video --salida data/stand-video`).
+
+**Problemas que aparecieron, en orden:**
+- El clásico empeoraba en vez de mejorar. Tres causas: la ELP renderizada a media resolución (la
+  regla del clásico dejaba pasar parámetros de más; ahora se usa la resolución completa), ajustar
+  con los 90 cuadros seguidos (casi la misma vista repetida; ahora una muestra de 8, como la app)
+  y la distancia conocida con percentiles (p80 de disparidad contra p20 de Z daba ~1 px de más;
+  ahora es la mediana por píxel de la diferencia).
+- Después, en `hotel_0` con la ELP, el clásico seguía dando 14,8 % (sin corregir: 22,8 %). El
+  diagnóstico cuadro por cuadro mostró que el clásico **sí** corrige (0,3–0,6 niveles de gris
+  contra el par ideal, y 1,1–3,3 % de error de distancia sin corrimiento), pero la distancia
+  conocida se calculaba con el **primer cuadro**, que es el arranque en frío del modo continuo y
+  sale mal: el corrimiento daba −0,14, +0,91 o +1,55 px según la muestra, y con +1,55 px el error
+  subía a 17–33 % en todos los cuadros. Ahora el corrimiento es la mediana sobre los cuadros donde
+  se ve el objeto apuntado, salteando los tres primeros.
+- La ventana de `camaras-ver` no se cerraba con la X: ahora cierra con `q`, Esc o la X (también
+  el visor del GT).
+
+**Límites:** en esta PC (sin CUDA) el continuo tarda ~1,5 s por cuadro en CPU; los videos se
+precalculan y el stand solo los reproduce. Los números finales por cámara quedan en
+`data/stand-video/resumen.json` cuando termina el cálculo; esta entrada no los incluye porque
+el PR se integró antes de que terminara. El yaw y el centro de la hermana los corrige solo la
+distancia conocida (decisión (a)), que en el video se toma del GT: en la app sale de una medición.
+
+**Próximo paso:** revisar `resumen.json` y un cuadro de cada video, copiar `data/stand-video` al
+Drive para la Mac, y pasar la v3 por `--red` cuando Bauty la entrene.
+
 ## 2026-11-20 (mañana) — T12/T06: cierre de la noche: HSSD terminado y detectores medidos en HSSD
 
 Autor: Claude (noche autorizada por Tomás).
