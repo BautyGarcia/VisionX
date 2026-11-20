@@ -302,10 +302,16 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
                 decir(f)
     if ventana:
         cv2.destroyAllWindows()
+    salida = getattr(decir, "salida", None)
+    if salida is not None:  # que termine de hablar antes de salir
+        salida.wait_idle(60.0)
+        salida.close()
     if alta.estado.paso is Paso.LISTO and not alta.estado.conocida and args.guardar:
         from visionx.camera.perfiles import guardar_local
 
-        print("perfil guardado en", guardar_local(alta.estado.perfil))
+        perfil = alta.estado.perfil
+        print("perfil guardado en", guardar_local(perfil))
+        print(f"para usarla: python -m visionx.app ejecutar --fuente usb --camara {perfil.id}")
     return 0
 
 
@@ -316,8 +322,15 @@ def _voz(cfg: dict):
     from visionx.voice.output import AudioOutput, SoundDevicePlayer
 
     s = VoiceSettings.from_config(cfg)
-    out = AudioOutput(build_synth(s), SoundDevicePlayer(s.output_device, s.block_ms,
-                                                        s.output_latency_s))  # fmt: skip
+
+    def anotar(r) -> None:  # cómo salió cada frase (para probar sin escuchar)
+        if r.outcome is not None and r.ended_ns:
+            dur = (r.ended_ns - (r.started_ns or r.ended_ns)) / 1e9
+            extra = (f" ({r.error})" if r.error else "") + (" con cortes" if r.cortes else "")
+            print(f"  [voz] {r.outcome.name.lower()} {dur:.1f} s{extra}")
+
+    player = SoundDevicePlayer(s.output_device, s.block_ms, s.output_latency_s)
+    out = AudioOutput(build_synth(s), player, on_record=anotar)
     n = iter(range(1, 10**9))
 
     def decir(texto: str) -> None:
@@ -325,6 +338,7 @@ def _voz(cfg: dict):
         out.submit(AudioEvent(next(n), Priority.SHORT, texto, created_ns=out.clock.now_ns(),
                               cancelable=False))  # fmt: skip
 
+    decir.salida = out  # type: ignore[attr-defined]
     return decir
 
 

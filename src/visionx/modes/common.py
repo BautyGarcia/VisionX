@@ -104,6 +104,9 @@ class ModeSettings:
     # más -> sin número. Sin intervalo (estimador sin b) se dice como antes.
     precise_rel: float = 0.10
     approx_rel: float = 0.25
+    # Nivel de la calibración de la cámara (perfil, `--camara`; PLUG-AND-PLAY sección 6):
+    # «aproximada» nunca deja decir «precisa»; «sin-estimar» (sin escala) no deja decir metros.
+    camara_nivel: str = "precisa"
     arrive_m: float = 0.6  # al frente y a esta distancia o menos: "llegaste"
     # La búsqueda termina cuando la persona lo dice («la encontré», «terminá»), no sola: al
     # llegar avisa y se queda callada; si se aleja más de arrive_m + leave_margin_m, vuelve a
@@ -115,6 +118,10 @@ class ModeSettings:
     accept_before_s: float = 0.5
     # Elección entre iguales: a lo sumo cuántos se enumeran.
     max_listed: int = 3
+
+    def __post_init__(self) -> None:
+        if self.camara_nivel not in ("precisa", "aproximada", "sin-estimar"):
+            raise ValueError(f"modes.camara_nivel inválido: {self.camara_nivel!r}")
 
     @classmethod
     def from_config(cls, cfg: dict[str, Any]) -> ModeSettings:
@@ -334,6 +341,8 @@ def distance_fact(m: Measure, s: ModeSettings) -> str:
         return f"a {meters(m.z_m, s)} (medida precisa)"
     if m.reason == "no-segura":
         return "la distancia no se pudo medir bien (no digas ningún número)"
+    if m.reason == "sin-escala":
+        return "la cámara no tiene escala: no hay distancias (no digas ningún número)"
     if m.reason in ("muy-cerca", "muy-lejos"):
         return measure_phrase(m, s)
     return ""
@@ -414,6 +423,8 @@ def measure(obj: SpatialObject | None, s: ModeSettings) -> Measure:
         return Measure(None, "reencuadrar")
     if obj.policy is not DistancePolicy.SPEAK_METERS or obj.z_m is None:
         return Measure(None, "sin-medida")
+    if s.camara_nivel == "sin-estimar":  # cámara sin escala: ningún número
+        return Measure(None, "sin-escala")
     if obj.z_bajo_m is not None:
         from visionx.shared.uncertainty import relative_width
 
@@ -428,6 +439,8 @@ def measure(obj: SpatialObject | None, s: ModeSettings) -> Measure:
         return Measure(obj.z_m, "muy-cerca")
     if obj.z_m > far:
         return Measure(obj.z_m, "muy-lejos")
+    if s.camara_nivel == "aproximada":  # la calibración no da para más
+        certainty = "aproximada"
     return Measure(obj.z_m, None, certainty)
 
 
@@ -443,4 +456,5 @@ def measure_phrase(m: Measure, s: ModeSettings) -> str:
         "reencuadrar": "pero está cortado en el borde: girá un poco hacia ese lado",
         "sin-medida": "pero no puedo medir su distancia",
         "sin-profundidad": "pero todavía no pude medir su distancia",
+        "sin-escala": "pero sin la escala de esta cámara no puedo dar metros",
     }[m.reason or ""]

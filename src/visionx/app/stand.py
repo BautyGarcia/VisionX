@@ -227,6 +227,7 @@ class StandState:
     target_angle: tuple[float, float] | None = None
     target_label: str | None = None
     spoken: Any = None  # nombre en castellano de una clase
+    camara: tuple[str, str] | None = None  # (texto, nivel) del perfil de `--camara`
 
 
 def short_m(z: float, s: ModeSettings, approx: bool = False) -> str:
@@ -627,6 +628,11 @@ def render_stand(st: StandState) -> np.ndarray:
         15,
         MUTED,
     )
+    if st.camara is not None:
+        texto, nivel = st.camara
+        color = LEVEL_COLOR.get(nivel, LEVEL_COLOR["no-segura"])
+        cv2.circle(canvas, (38, 66), 5, color, -1, cv2.LINE_AA)
+        texts.add(texto, (50, 57), 14, MUTED)
     chip = st.mode
     cw = text_width(chip, 16, True) + 44
     color = LEVEL_COLOR["no-segura"] if st.recording else ACCENT

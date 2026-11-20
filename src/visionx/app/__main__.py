@@ -67,8 +67,31 @@ class PrintSynth:
         return np.zeros(80, np.float32)
 
 
+NIVEL_DICHO = {"precisa": "precisas", "aproximada": "aproximadas", "sin-estimar": "sin escala"}
+
+
+def perfil_de_camara(args: argparse.Namespace, cfg: dict[str, Any]):
+    """El perfil de `--camara` (configs/camaras o locales), o None. Fija el nivel de la voz."""
+    nombre = getattr(args, "camara", None)
+    if not nombre:
+        return None
+    from visionx.camera.perfiles import cargar_perfiles
+
+    perfiles = {p.id: p for p in cargar_perfiles()}
+    if nombre not in perfiles:
+        raise InvalidInput(f"--camara {nombre!r}: no hay perfil; hay {sorted(perfiles)}")
+    perfil = perfiles[nombre]
+    cfg.setdefault("modes", {})["camara_nivel"] = perfil.nivel
+    args.perfil_camara = perfil  # para el encabezado del stand
+    print(f"cámara: {perfil.nombre} (perfil {perfil.id}, distancias {NIVEL_DICHO[perfil.nivel]})")
+    return perfil
+
+
 def build_source(args: argparse.Namespace, cfg: dict[str, Any]):
     """(fuente, geometría de la profundidad, fuente sintética o None)."""
+    perfil = perfil_de_camara(args, cfg)
+    if perfil is not None and perfil.formato == "realsense" and args.fuente == "usb":
+        args.fuente = "realsense"
     if args.fuente == "sintetica":
         source = SyntheticStereoSource(fps=args.fps, n_frames=args.frames or None)
         return source, source.geometry, source
@@ -92,14 +115,25 @@ def build_source(args: argparse.Namespace, cfg: dict[str, Any]):
         UsbStereoSource,
     )
 
-    calib_path = Path((cfg.get("camera") or {}).get("calibration") or "")
-    if not str(calib_path):
-        raise InvalidInput("camera.calibration hace falta para rectificar")
-    calibration = StereoCalibration.load(
-        calib_path if calib_path.is_absolute() else ROOT / calib_path
-    )
+    if perfil is not None:
+        from visionx.camera.perfiles import calibracion_de
+
+        calibration = calibracion_de(perfil)
+    else:
+        calib_path = Path((cfg.get("camera") or {}).get("calibration") or "")
+        if not str(calib_path):
+            raise InvalidInput("camera.calibration hace falta para rectificar")
+        calibration = StereoCalibration.load(
+            calib_path if calib_path.is_absolute() else ROOT / calib_path
+        )
     if args.fuente == "usb":
-        raw = UsbStereoSource(CameraSettings.from_config(cfg))
+        settings = CameraSettings.from_config(cfg)
+        if perfil is not None:  # side by side: dos ojos del tamaño de la calibración
+            import dataclasses
+
+            w, h = calibration.image_size
+            settings = dataclasses.replace(settings, capture_size=(2 * w, h), source_id=perfil.id)
+        raw = UsbStereoSource(settings)
     else:
         raw = ReplaySource(args.fuente)
     source = RectifiedSource(raw, calibration)
@@ -365,7 +399,15 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
             target_angle=guided_angle(),
             target_label=target,
             spoken=catalog.spoken,
+            camara=camara_label,
         )
+
+    perfil = getattr(args, "perfil_camara", None)
+    camara_label = (
+        (f"Cámara: {perfil.nombre} · distancias {NIVEL_DICHO[perfil.nivel]}", perfil.nivel)
+        if perfil is not None
+        else None
+    )
 
     def frame_image():
         if view_mode[0] == "camaras":
@@ -658,6 +700,11 @@ def main(argv: list[str] | None = None) -> int:
         help="B0–B5, fusion, crestereo-preciso, depth.estimadores o ninguna (default config)",
     )
     p.add_argument("--segundos", type=float, default=0.0, help="0 = hasta q o fin de la fuente")
+    p.add_argument(
+        "--camara",
+        default=None,
+        help="perfil de configs/camaras (o locales, de «camara-nueva»): calibración y nivel",
+    )
     p.add_argument("--sin-ventana", action="store_true")
     p.add_argument("--voz", action="store_true", help="Piper + micrófono con espacio")
     p.add_argument("--consola", action="store_true", help="escribir órdenes en la terminal")
