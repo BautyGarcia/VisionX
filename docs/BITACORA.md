@@ -40,6 +40,85 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T15/T12: robustez de CREStereo con el GT sintético (4 cámaras)
+
+**Tareas:** T15, T12. **Persona/agente:** Tomás / Claude Code (PC de escritorio, CPU).
+**Rama:** `b/altura-dashboard`. Resúmenes en `datasets/gtsynth/val-*.json` (los CSV por objeto,
+en `outputs/gtsynth/`).
+
+**Hecho.** `gtsynth evaluar` en val (4 escenas, 160 vistas, 3376 objetos medidos con la máscara
+exacta) con CREStereo preciso (1280×720, 4 iteraciones, 2 pasadas), sin U-Net (el checkpoint
+está en la Mac), suponiendo siempre la geometría de la ELP. ~8 s por vista en CPU, 21 min por
+cámara.
+
+| Cámara | 0,5–1 m | 1–2 m | 2–3 m | 3–4 m |
+|---|---|---|---|---|
+| ELP calibrada | **0,7 %** (P95 2) | **0,9 %** (3) | **1,2 %** (4) | **1,6 %** (4) |
+| Hermana ×0,5 (otra unidad, rangos chicos) | 23,8 % | 49,8 % | 39,2 % | 35,8 % |
+| Hermana ×1 (otra unidad, rangos completos) | 43,6 % | 54,0 % | 63,1 % | 59,1 % |
+| Distinta (90°, 12 cm), supuesta ELP | −68,8 % | −68,8 % | −68,8 % | −68,8 % |
+| Distinta + un objeto a distancia conocida (por vista) | 3,7 % | 1,5 % | 1,2 % | 1,5 % |
+
+(Error medio relativo; el de la distinta es sesgo.)
+
+**Qué dice.** Con la cámara calibrada, CREStereo + el ubicador miden objetos con 1–2 % hasta
+4 m. Otra unidad del mismo modelo sin corregir rompe los metros (25–65 %): es lo que tiene que
+arreglar la red de entrada (decisión (a)); el sesgo es chico y el error va para los dos lados
+(cada hermana es distinta). La cámara distinta es un error de escala puro (fx·B supuesto 36
+contra 115 real): un solo objeto a distancia conocida lo lleva a 1–4 %, que es el paso que la app
+ya pide («calibrá, está a 2 metros»).
+
+**Límites.** Sin U-Net: falta la cobertura del intervalo y el factor de b (Bauty, en la Mac).
+La distancia conocida es exacta y la cámara distinta no tiene otra distorsión: optimista. Una
+semilla de hermanas por vista. Val, no test.
+
+**Próximo paso.** Bauty: la misma tabla con la red de entrada (fila «hermana corregida») y con la
+U-Net (cobertura y factor de b).
+
+## 2026-11-19 (noche) — T09/T07: la altura de la persona, el piso y la pantalla del stand
+
+**Tareas:** T09, T07, T16. **Persona/agente:** Tomás (pedido) / Claude Code. **Rama:**
+`b/altura-dashboard`.
+
+**Altura.**
+- `modes/body.py`: la estatura de la persona («mido 1,80», «mi altura es 1,62», «mido un metro
+  ochenta y cinco»; guardada en `~/.visionx/persona.json`) y la cámara (altura e inclinación).
+  Bandas por proporción del cuerpo: cabeza ≥ 0,87, pecho 0,66–0,87, cintura 0,54–0,66, **cadera**
+  0,38–0,54 (nueva), rodillas 0,14–0,38 de la estatura. Sin datos: 1,70 m y la cámara al 72 %.
+  La app pide la altura al arrancar si nunca se dijo.
+- `app/floor.py`: el piso por RANSAC en la mitad de abajo de la profundidad; la orientación la da
+  el plano con más apoyo y, entre los paralelos, el más bajo; `FloorTracker` aplica la mediana
+  de los últimos 7 solo si es estable (< 12 cm, < 8°).
+- **Probado.** Piso sintético exacto: altura ±1 cm e inclinación ±0,5°. GT sintético (val): con
+  piso a la vista la inclinación queda a ~1° de la verdadera y la altura coincide con el piso
+  etiquetado (1,46 contra 1,44 m); la altura de `vista.json` resultó ~18 cm corrida (navmesh,
+  anotado en GT-SINTETICO). Clips reales con SGBM: el piso brillante de `distancias` da ajustes
+  que oscilan ±15 cm (reflejos), por eso la compuerta de estabilidad. Elegir siempre el plano más
+  bajo empeoró ese clip (reflejos debajo del piso): se probó y se descartó.
+
+**Pantalla del stand** (`app/stand.py`, vista por defecto de `ejecutar`; `v` alterna, `f`
+pantalla completa): cámara con objetos rotulados por nivel de certeza y la flecha; profundidad
+(con el nombre del modelo real) e incertidumbre (medio ancho del 90 %, verde ≤ 10 %, rojo
+≥ 25 %); radar desde arriba con objetos y margen; subtítulos de la conversación (tramos agrupados
+por orden, sin repetir la guía, sin la confirmación); tiempos de la última orden (Whisper,
+Claude, primera palabra), FPS y el cuerpo. Textos con Pillow (tildes y ñ). Dos rondas sobre
+`dev-1114-distancias` corrigieron rótulos encimados, el modelo mal nombrado, la guía repetida, la
+confirmación contada como primera palabra y la captura tomada después de cerrar.
+
+**Rediseño (pedido de Tomás tras ver la primera versión):** paleta azul noche con un solo acento,
+paneles redondeados; los objetos con su **máscara** de YOLO-seg en tonos suaves (como en vivo) en
+vez de cajas verdes; rótulos chicos (nombre + distancia en el color de su certeza, máximo 6, sin
+encimarse); conversación en burbujas; el tiempo como barra voz a texto → Claude → voz con el
+total. `persona.usar_piso` (por defecto sí) apaga el piso y deja solo las proporciones.
+
+**Visor del GT** (`gtsynth visor`): láminas para la pantalla del stand y el póster (vista con
+los objetos pintados y su distancia exacta, profundidad, el conjunto y la robustez); exporta JPG.
+
+**Evidencia.** Suite 1244 OK (tests nuevos: `test_altura.py`, `test_stand.py`).
+
+**Límites.** Sin probar en la Mac ni con CREStereo en vivo; el mapa de incertidumbre solo aparece
+con la U-Net cargada. La altura de la cámara del piso no está validada contra una medición real.
+
 ## 2026-11-19 (noche) — Plan de cierre y de la exposición; insumos para el póster
 
 **Tareas:** T07, T09, T15, T16. **Persona/agente:** Tomás (decisiones) / Claude Code.

@@ -16,6 +16,11 @@ probar la decisión (a) con cámaras hermanas y una distinta.
 | Objetos `elp` | 15 088 visibles (≥ 400 px, ≤ 6 m); con clase del detector y a 0,5–4 m: train 2413, val 1115, test 1990 |
 | Por rango | 0,5–1 m 1442; 1–2 m 5167; 2–3 m 4090; 3–4 m 2635; > 4 m 1754 |
 
+**Ojo con `pose.altura_m` de `vista.json`:** es la altura sobre el punto de la navmesh de
+Habitat, que queda ~18 cm por encima del piso real (en las vistas con piso etiquetado, el plano
+del piso da 1,44–1,47 m donde la navmesh dice 1,26–1,29 m). La inclinación (`pitch_rad`) sí es
+exacta. No afecta las distancias de los objetos (salen de la Z del render).
+
 Límites: Replica es escaneo real pero estático y sin gente; algunos departamentos FRL tienen
 ventanas abiertas o huecos del escaneo (sin geometría, Z = 0: mediana 0,1 % de la vista, hasta
 ~20 % en pocas vistas) que la tabla de objetos ignora. Las texturas son color por vértice de
@@ -112,7 +117,18 @@ uv run python -m visionx.gtsynth objetos   data/gt-sintetico-elp --csv outputs/g
 moverlo y contra ±10 %: si falla, la convención de profundidad o de píxel del render está mal y
 nada de lo que sigue vale.
 
-## 5. Evaluar la distancia por objeto
+## 5. Mostrarlo (stand y póster)
+
+```bash
+uv run python -m visionx.gtsynth visor data/gt-sintetico-elp            # pantalla: pasa sola
+uv run python -m visionx.gtsynth visor data/gt-sintetico-elp --exportar outputs/gtsynth/laminas --n 12
+```
+
+Cada lámina: la vista con cada objeto pintado y su distancia exacta, la profundidad del render,
+qué es el conjunto y el error de CREStereo por cámara (de `datasets/gtsynth/val-*.json`). Elige
+vistas sin huecos de escaneo; n / p avanzan, f pantalla completa, q sale.
+
+## 6. Evaluar la distancia por objeto
 
 Cada objeto se mide con su **máscara exacta** (no con el detector), así el error es el de la
 profundidad y el ubicador. El sistema siempre cree tener la geometría de la ELP.

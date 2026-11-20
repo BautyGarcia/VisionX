@@ -198,6 +198,20 @@ class Controller:
                     self._say(Say(EXPIRED_REPEAT), repeat_id, now, remember=False)
                 self.history.append((None, interp))
                 return None
+            if interp.mode is Mode.CONTROL and (interp.target or "").startswith("altura:"):
+                from visionx.modes import body
+
+                rid = self._new_id()
+                order["request_id"] = rid
+                self._on_event("orden", order)
+                h = float(interp.target.split(":", 1)[1])
+                body.set_height(h)
+                said = f"{h:.2f}".rstrip("0").rstrip(".").replace(".", ",")
+                self._on_event("altura", {"request_id": rid, "altura_m": h})
+                self._say(Say(f"Listo, medís {said} metros. Lo uso para decirte a qué altura "
+                              "están las cosas."), rid, now)  # fmt: skip
+                self.history.append((None, interp))
+                return None
             if interp.mode is Mode.CONTROL and (interp.target or "").startswith("calibrar:"):
                 calib_id = self._new_id()
                 order["request_id"] = calib_id
@@ -284,6 +298,11 @@ class Controller:
             for say in handler.start(command, self.latest_view(), now):
                 self._say(say, request_id, now)
             return command
+
+    def announce(self, text: str) -> None:
+        """Algo que dice la app por su cuenta (p. ej. pedir la altura al arrancar)."""
+        with self._lock:
+            self._say(Say(text), self._new_id(), self.clock.now_ns(), remember=False)
 
     def cancel(self) -> None:
         """El botón de cancelar (o la orden "cancelar")."""

@@ -1,0 +1,45 @@
+{
+ "objetos": 3376,
+ "politicas": {
+  "speak_meters": 2877,
+  "ask_reframe": 455,
+  "direction_only": 44
+ },
+ "por_rango": {
+  "0,5–1": {
+   "n": 344,
+   "mae_m": 0.193,
+   "sesgo_pct": -0.43,
+   "mae_pct": 23.83,
+   "p95_pct": 85.07
+  },
+  "1–2": {
+   "n": 1287,
+   "mae_m": 0.744,
+   "sesgo_pct": 0.83,
+   "mae_pct": 49.77,
+   "p95_pct": 172.83
+  },
+  "2–3": {
+   "n": 890,
+   "mae_m": 0.941,
+   "sesgo_pct": -3.85,
+   "mae_pct": 39.24,
+   "p95_pct": 127.39
+  },
+  "3–4": {
+   "n": 555,
+   "mae_m": 1.226,
+   "sesgo_pct": -4.11,
+   "mae_pct": 35.78,
+   "p95_pct": 88.05
+  },
+  "4+": {
+   "n": 298,
+   "mae_m": 2.186,
+   "sesgo_pct": 2.54,
+   "mae_pct": 47.62,
+   "p95_pct": 99.12
+  }
+ }
+}

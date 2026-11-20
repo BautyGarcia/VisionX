@@ -360,24 +360,15 @@ def lateral_phrase(z_m: float, angle_h_deg: float, s: ModeSettings) -> str:
     return f"{meters(abs(x), s, approx=False)} a tu {side}"
 
 
-# Altura respecto de la cámara (al pecho, nivelada): y = Z·tan(ángulo vertical), + = arriba.
-# Bandas para una persona de ~1,70 m con la cámara a ~1,3 m del piso.
-BODY_BANDS = (
-    (0.45, "más arriba de tu cabeza"),
-    (0.2, "a la altura de tu cabeza"),
-    (-0.2, "a la altura de tu pecho"),
-    (-0.55, "a la altura de tu cintura"),
-    (-0.95, "a la altura de tus rodillas"),
-)
-
-
 def body_height_phrase(z_m: float, angle_v_deg: float) -> str:
-    """«a la altura de tu cintura»: dónde queda el objeto respecto del cuerpo."""
-    y = z_m * math.tan(math.radians(angle_v_deg))
-    for limit, phrase in BODY_BANDS:
-        if y >= limit:
-            return phrase
-    return "cerca del piso"
+    """«a la altura de tu cintura»: dónde queda el objeto respecto del cuerpo de la persona.
+
+    Usa su estatura (la dijo con «mido 1,80») y la altura e inclinación reales de la cámara si
+    se ve el piso (`modes.body`, `app.floor`); si no, 1,70 m y la cámara nivelada en el pecho.
+    """
+    from visionx.modes import body
+
+    return body.current().band(z_m, angle_v_deg)
 
 
 def meters(z_m: float, s: ModeSettings, *, approx: bool = True, force: bool = False) -> str:
