@@ -28,6 +28,52 @@ ventanas abiertas o huecos del escaneo (sin geometría, Z = 0: mediana 0,1 % de 
 distancia de uso, algo más suaves de cerca. El render es pinhole ideal: no tiene ruido, desenfoque
 ni el borde inválido de la rectificación real.
 
+## Tanda del issue #53 (19–20/11): otras cámaras, margen y casos difíciles
+
+Pedido de Bauty para que la red de alineación sirva con cualquier cámara estéreo
+([RED-ALINEACION-V3](RED-ALINEACION-V3.md)). Se generó de noche con
+`scripts/gt_sintetico/tanda53.sh`, que por cada tanda renderiza (`render_tanda.py`), verifica
+20 vistas con `gtsynth verificar` y copia al Drive `VisionX-Personal/gt-sintetico-elp/`
+(log: `outputs/gtsynth/tanda53.log`).
+
+| Tanda | Variante | Escenas | Vistas | Cómo |
+|---|---|---|---:|---|
+| E1 | `elp-margen` | val | 160 | ELP con margen, poses de `elp` (el recorte nominal es idéntico a `elp`) |
+| E1 | `elp-margen` | train | 2400 | ELP con margen a media resolución (960×540 nominal), 300 por escena |
+| E2 | `angosta-60`, `base-corta-3`, `media-90`, `cuatro-tercios-90`, `base-larga-20`, `gran-angular-130` | val | 6 × 160 | Otras cámaras (campo en grados, base en cm), poses de `elp` |
+| E3 | `camara-sorteada` | train | 2400 | Por vista: campo 55–130°, base 3–20 cm, 16:9 o 4:3 |
+| E4 | `elp-arriba-1`, `elp-arriba-2`, `elp-adelante-2`, `elp-arriba-1-adelante-2` | val | 4 × 160 | Ojo derecho corrido 1–2 mm hacia arriba o adelante, poses de `elp` |
+| E5 | `pose-altura`, `pose-poca-textura`, `pose-cerca` | val | 3 × 80 | 1,0 y 1,6 m con pitch −30..10°; ≥ 75 % de estructura; objeto a 0,3–0,5 m |
+| E6 | `secuencias` | val | 320 | 10 recorridos de 8 cuadros por escena (pasos de 10 cm, ±3° de giro) |
+| E7 | `ojo-de-pez` | val | 160 | Doble esfera de ~180°, sin margen: **solo para evaluar** (no es rectificado; no pasa por `verificar`) |
+
+**Lienzo con margen.** Todas las variantes nuevas pinhole se renderizan en un lienzo 25 % más
+grande (12,5 % por lado), con la misma focal y el centro en el medio, para poder desalinear el
+ojo derecho sin bordes negros. `vista.json` guarda la cámara del lienzo en `camara`, y en
+`nominal` el recorte de la cámara simulada (`ancho`, `alto`, `x0`, `y0`, `cx`, `cy`,
+`hfov_deg`). En código: `v.nominal`, `v.geometria_nominal`, `v.recortar(img)` y `v.modelo`.
+También guarda `perfil`, `ojo_derecho_m` (+y arriba, −z adelante), `tipo_pose` y `secuencia`.
+
+Verificación previa (prueba en `room_1`, todas las variantes):
+- consistencia del par con la Z exacta en todos los perfiles pinhole;
+- el recorte de `elp-margen` es idéntico a `elp` (imagen con diferencia 0; Z igual salvo un
+  0,001 % de píxeles en bordes);
+- `camara-sorteada` sin vistas malas, después de corregir que el campo y la base se fijaban
+  antes de la pose (`set_state` los reiniciaba).
+
+Comando de una tanda (dentro de WSL):
+
+```bash
+~/bin/micromamba run -n habitat python /mnt/d/VisionX/scripts/gt_sintetico/render_tanda.py \
+  --replica /mnt/d/datasets/replica --escenas frl_apartment_3 office_2 room_1 hotel_0 \
+  --salida /mnt/d/VisionX/data/gt-sintetico-elp --variante media-90 --perfil media-90 \
+  --poses-desde /mnt/d/VisionX/data/gt-sintetico-elp/elp
+```
+
+`--help` lista las opciones restantes: `--ojo-derecho DX DY DZ`, `--tipo-pose`, `--margen`,
+`--ojo-de-pez`, `--vistas`. Las escenas `test` no se renderizaron para estas variantes: se hace
+una sola vez, cuando la red esté cerrada en val.
+
 ## Qué hay en cada vista
 
 `data/gt-sintetico-elp/<variante>/<escena>/<nnnn>/` (no se sube al repo; copia en Drive

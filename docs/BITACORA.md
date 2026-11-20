@@ -40,6 +40,29 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-20 — T12/T15: renders del issue #53 y guía de la red de alineación v3
+
+Autor: Tomás (B), con Claude.
+
+**Renders.** Tanda nocturna del issue #53 con `scripts/gt_sintetico/tanda53.sh` (detalle en
+[GT-SINTETICO](GT-SINTETICO.md)): ELP con margen (val y train), 6 perfiles de otras cámaras,
+cámara sorteada (train), ojo derecho corrido 1–2 mm, poses difíciles, secuencias y ojo de pez.
+Son ~7300 vistas; cada tanda se verifica y se copia al Drive `VisionX-Personal`. A las 0:00
+estaban hechas y verificadas `elp-margen` (val) y los 6 perfiles (cada 160 vistas, 5–7 min).
+Los totales finales van en la próxima entrada. `gtsynth` suma `nominal`, `geometria_nominal`,
+`recortar` y `modelo` para leer el lienzo con margen: el recorte de `elp-margen` coincide con
+`elp` (imagen idéntica, Z igual salvo un 0,001 % de píxeles de borde).
+
+**Decisión (Tomás y Bauty).** La próxima red de alineación (v3):
+- **corrige al clásico** en vez de reemplazarlo;
+- se entrena y se elige **por el error de profundidad**, no por el del campo;
+- predice **su confianza**, que decide cuánto se aplica y se suma a la incertidumbre de la voz.
+
+Guía completa, con datos, pérdida, pasos y criterios de adopción, en
+[RED-ALINEACION-V3](RED-ALINEACION-V3.md). Hasta que la v3 cumpla esos criterios en val, sigue
+el clásico con lente y distancia conocida. Datasets extra (HSSD sin espera; HM3D con
+formulario) quedan como opción si val muestra que faltan escenas. Las capturas reales con la ELP
+(GT C) van en unos días.
 ## 2026-11-19 (noche) — T08: respuestas cortas con «¿Querés más detalle?» y órdenes que no van a Claude
 
 Autor: Tomás (B), con Claude. Devolución del vivo de hoy: las respuestas de Claude eran muy
