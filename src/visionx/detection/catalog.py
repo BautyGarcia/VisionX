@@ -59,7 +59,7 @@ COCO_ES: dict[str, tuple[str, ...]] = {
     "tennis racket": ("raqueta",),
     "bottle": ("botella",),
     "wine glass": ("copa",),
-    "cup": ("taza", "vaso", "pocillo"),
+    "cup": ("taza", "vaso", "pocillo", "tasa"),  # Whisper escribe «tasa» (vivo 19/11)
     "fork": ("tenedor",),
     "knife": ("cuchillo",),
     "spoon": ("cuchara",),

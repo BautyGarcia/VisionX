@@ -223,6 +223,10 @@ class ReadHandler:
                     "error": job.error,
                 },
             )
+            from visionx.assistant.core import MORE_OFFER, offer_more
+
+            if offer_more(job):
+                says.append(Say(MORE_OFFER, Priority.SHORT))
             return says, True
         return says, False
 
