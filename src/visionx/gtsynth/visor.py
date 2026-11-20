@@ -185,7 +185,8 @@ def run(
     while True:
         cv2.imshow("VisionX - GT", lamina(lista[k % len(lista)], robustez, total))
         key = cv2.waitKey(int(cada_s * 1000)) & 0xFF
-        if key == ord("q"):
+        # q, Esc o la X de la ventana (sin esto, la X la volvía a abrir).
+        if key in (ord("q"), 27) or cv2.getWindowProperty("VisionX - GT", cv2.WND_PROP_VISIBLE) < 1:
             break
         if key == ord("p"):
             k -= 1

@@ -38,7 +38,14 @@ from visionx.app.stand import (
     wrap,
 )
 
-CADA_S = 6.0  # segundos por cámara
+CADA_S = 6.0  # segundos por cámara (fotos)
+
+
+def carpeta_por_defecto() -> Path:
+    from visionx.shared.config import ROOT
+
+    video = ROOT / "data" / "stand-video"
+    return video if video.is_dir() and any(video.glob("*.mp4")) else ROOT / "data" / "stand-camaras"
 
 
 @lru_cache(maxsize=4)
@@ -81,7 +88,64 @@ def _color_error(x: float | None) -> tuple[int, int, int]:
     return LEVEL_COLOR["precisa" if a < 3 else "aproximada" if a < 10 else "no-segura"]
 
 
+class Videos:
+    """Los MP4 de `gtsynth video` en orden (por escena, las cuatro cámaras), a 10 cuadros/s."""
+
+    def __init__(self, carpeta: Path) -> None:
+        from visionx.gtsynth.video import CAMARAS_VIDEO, FPS
+
+        orden = {var: k for k, (var, _) in enumerate(CAMARAS_VIDEO)}
+
+        def clave(p: Path):
+            escena, _, var = p.stem.partition("-video-")
+            return escena, orden.get("video-" + var, 99)
+
+        self.paths = sorted(carpeta.glob("*.mp4"), key=clave)
+        self.fps = FPS
+        self._k = -1
+        self._cap = None
+        self._t0 = 0.0
+        self._leidos = 0
+        self._ultimo = None
+
+    def _siguiente(self, t: float) -> None:
+        if self._cap is not None:
+            self._cap.release()
+        self._k = (self._k + 1) % len(self.paths)
+        self._cap = cv2.VideoCapture(str(self.paths[self._k]))
+        self._t0, self._leidos = t, 0
+
+    def cuadro(self, t: float) -> np.ndarray:
+        if self._cap is None:
+            self._siguiente(t)
+        quiero = int((t - self._t0) * self.fps) + 1
+        while self._leidos < quiero:
+            ok, img = self._cap.read()
+            if not ok:  # terminó: el próximo video
+                self._siguiente(t)
+                quiero = 1
+                continue
+            self._leidos += 1
+            self._ultimo = img
+        if self._ultimo is None or self._ultimo.shape[:2] != (H, W):
+            return np.full((H, W, 3), BG, np.uint8)
+        return self._ultimo
+
+
+_VIDEOS: dict[str, Videos] = {}
+
+
 def render_camaras(carpeta: str | Path, ahora_s: float | None = None) -> np.ndarray:
+    """Videos si la carpeta los tiene (`gtsynth video`); si no, las fotos (`gtsynth camaras`)."""
+    carpeta = Path(carpeta)
+    if carpeta.is_dir() and any(carpeta.glob("*.mp4")):
+        if str(carpeta) not in _VIDEOS:
+            _VIDEOS[str(carpeta)] = Videos(carpeta)
+        return _VIDEOS[str(carpeta)].cuadro(time.monotonic() if ahora_s is None else ahora_s)
+    return _fotos(carpeta, ahora_s)
+
+
+def _fotos(carpeta: str | Path, ahora_s: float | None = None) -> np.ndarray:
     canvas = np.full((H, W, 3), BG, np.uint8)
     texts = Texts()
     escenas = cargar(str(carpeta))
@@ -161,13 +225,15 @@ def render_camaras(carpeta: str | Path, ahora_s: float | None = None) -> np.ndar
 
 
 def mostrar(carpeta: str | Path) -> None:
-    """Ventana sola (segundo monitor del stand): q sale, f pantalla completa."""
+    """Ventana sola (segundo monitor del stand): q, Esc o la X salen; f pantalla completa."""
     cv2.namedWindow("VisionX - Cámaras", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("VisionX - Cámaras", 1600, 900)
     while True:
         cv2.imshow("VisionX - Cámaras", render_camaras(carpeta))
-        key = cv2.waitKey(100) & 0xFF
-        if key == ord("q"):
+        key = cv2.waitKey(30) & 0xFF
+        # q, Esc o la X de la ventana (sin esto, cerrarla con la X la volvía a abrir).
+        cerrada = cv2.getWindowProperty("VisionX - Cámaras", cv2.WND_PROP_VISIBLE) < 1
+        if key in (ord("q"), 27) or cerrada:
             break
         if key == ord("f"):
             full = cv2.getWindowProperty("VisionX - Cámaras", cv2.WND_PROP_FULLSCREEN)

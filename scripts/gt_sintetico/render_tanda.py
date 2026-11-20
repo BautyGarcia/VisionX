@@ -188,7 +188,8 @@ def poses_desde(carpeta: Path) -> list[dict]:
         v = json.loads(js.read_text(encoding="utf-8"))
         out.append({"ojo": np.array(v["pose"]["ojo_izq"]), "yaw": v["pose"]["yaw_rad"],
                     "pitch": v["pose"]["pitch_rad"], "altura": v["pose"]["altura_m"],
-                    "apuntado": v["apuntado"], "tipo": v.get("tipo_pose", "normal")})  # fmt: skip
+                    "apuntado": v["apuntado"], "tipo": v.get("tipo_pose", "normal"),
+                    "secuencia": v.get("secuencia")})  # fmt: skip
     return out
 
 
@@ -229,6 +230,58 @@ def secuencias(sim, rng, n, rec, d_min, d_max, min_px, ids, largo: int = 8) -> l
     return out
 
 
+def recorrido(sim, rng, n, rec, d_min, d_max, min_px, ids) -> list[dict]:
+    """Un solo recorrido largo de n cuadros (video): pasos de 5 cm y giro suave.
+
+    Arranca mirando a un objeto a 1,5–4 m. El giro cambia de a poco (velocidad angular que
+    deriva), y si adelante queda algo a menos de 0,8 m gira hacia el lado más libre. Camina
+    sobre la navmesh (`try_step`), así que nunca atraviesa paredes ni muebles.
+    """
+    for _ in range(20):  # arrancar con al menos 1,5 m libres adelante
+        inicio = sortear_poses(sim, rng, 1, "normal", rec, max(d_min, 1.5), d_max, min_px, ids)[0]
+        fijar_pose(sim, inicio["ojo"], inicio["yaw"], inicio["pitch"])
+        z0 = _recorte(np.asarray(ver(sim, "z")["z"]), *rec)
+        h0, w0 = z0.shape
+        c0 = z0[h0 // 3 : 2 * h0 // 3, w0 // 3 : 2 * w0 // 3]
+        c0 = c0[np.isfinite(c0) & (c0 > 0)]
+        if c0.size and float(np.percentile(c0, 10)) >= 1.5:
+            break
+    ojo, yaw = inicio["ojo"].copy(), inicio["yaw"]
+    trabado = 0
+    altura, pitch = float(inicio["altura"]), inicio["pitch"]
+    giro = 0.0  # grados por cuadro
+    out = []
+    for f in range(n):
+        fijar_pose(sim, ojo, yaw, pitch)
+        z = _recorte(np.asarray(ver(sim, "z")["z"]), *rec)
+        h, w = z.shape
+        franja = z[h // 3 : 2 * h // 3]
+        izq_l = franja[:, : w // 3]
+        cen = franja[:, w // 3 : 2 * w // 3]
+        der_l = franja[:, 2 * w // 3 :]
+
+        def cerca(a):
+            a = a[np.isfinite(a) & (a > 0)]
+            return float(np.percentile(a, 10)) if a.size else 0.0
+
+        if cerca(cen) < 0.8 or trabado >= 2:  # algo adelante o no avanza: girar al lado libre
+            if abs(giro) < 5.0:  # elegir el lado una vez y mantenerlo hasta salir
+                giro = 6.0 if cerca(izq_l) > cerca(der_l) else -6.0
+            giro = math.copysign(9.0 if trabado >= 4 else 6.0, giro)
+        else:
+            giro = float(np.clip(0.85 * giro + rng.normal(0, 0.4), -2.5, 2.5))
+        out.append({**inicio, "ojo": ojo.copy(), "yaw": yaw, "tipo": "recorrido",
+                    "secuencia": {"recorrido": 0, "cuadro": f}})  # fmt: skip
+        yaw += math.radians(giro)
+        if cerca(cen) >= 0.8:
+            pie = ojo - np.array([0.0, altura, 0.0])
+            destino = pie + 0.05 * np.array([-math.sin(yaw), 0.0, -math.cos(yaw)])
+            nuevo = np.asarray(sim.pathfinder.try_step(pie, destino), dtype=np.float64)
+            trabado = trabado + 1 if np.linalg.norm(nuevo - pie) < 0.02 else 0
+            ojo = nuevo + np.array([0.0, altura, 0.0])
+    return out
+
+
 def ver(sim, *nombres: str) -> dict:
     """Dibuja solo esos sensores (sortear con `inst` y `z` cuesta la mitad que con los cuatro)."""
     out = {}
@@ -248,6 +301,8 @@ def sortear_poses(sim, rng, n, tipo, rec, d_min, d_max, min_px, ids_estructura) 
     min_px = max(60, round(min_px * rec[2] * rec[3] / (1920 * 1080)))
     if tipo == "secuencia":
         return secuencias(sim, rng, n, rec, d_min, d_max, min_px, ids_estructura)
+    if tipo == "recorrido":
+        return recorrido(sim, rng, n, rec, d_min, d_max, min_px, ids_estructura)
     objs = _OBJETOS if _OBJETOS is not None else objetos(sim)
     out, intentos = [], 0
     while len(out) < n and intentos < n * 60:
@@ -353,7 +408,8 @@ def main() -> int:
     ap.add_argument("--poses-desde", help="carpeta de una variante: reusa sus poses por escena")
     ap.add_argument("--vistas", type=int, default=40)
     ap.add_argument("--tipo-pose", default="normal",
-                    choices=["normal", "altura", "poca-textura", "cerca", "secuencia"])  # fmt: skip
+                    choices=["normal", "altura", "poca-textura", "cerca", "secuencia",
+                             "recorrido"])  # fmt: skip
     ap.add_argument("--semilla", type=int, default=0)
     ap.add_argument("--ojo-derecho", type=float, nargs=3, default=(0.0, 0.0, 0.0),
                     metavar=("DX", "DY", "DZ"))  # fmt: skip

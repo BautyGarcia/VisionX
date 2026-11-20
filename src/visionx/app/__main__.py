@@ -357,9 +357,9 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
 
     def frame_image():
         if view_mode[0] == "camaras":
-            from visionx.app.stand_camaras import render_camaras
+            from visionx.app.stand_camaras import carpeta_por_defecto, render_camaras
 
-            return render_camaras(args.camaras)
+            return render_camaras(args.camaras or carpeta_por_defecto())
         return render_stand(stand_state()) if view_mode[0] == "stand" else render(dashboard_state())
 
     def open_audio_panel() -> None:
@@ -656,8 +656,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument(
         "--camaras",
-        default=str(ROOT / "data" / "stand-camaras"),
-        help="carpeta de la demo de cámaras (python -m visionx.gtsynth camaras)",
+        default=None,
+        help="carpeta de la demo de cámaras: videos (gtsynth video) o fotos (gtsynth camaras); "
+        "por defecto data/stand-video si existe, si no data/stand-camaras",
     )
     p.set_defaults(fn=cmd_ejecutar)
 
