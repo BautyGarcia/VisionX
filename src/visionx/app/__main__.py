@@ -226,6 +226,12 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
         if assistant
         else "asistente: apagado (sin ~/.visionx/anthropic_api_key, sin extra ia o tope de gasto)"
     )
+    from visionx.app.onboarding import apply_preference, intro_phrases, restore
+    from visionx.modes import body
+    from visionx.voice.engines import VoiceSettings
+
+    voice_synth = output.synth if args.voz else None
+    base_speed = VoiceSettings.from_config(cfg).speech_rate
     controller = Controller(
         CommandParser(catalog, questions=assistant is not None),
         output,
@@ -245,23 +251,25 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
             ProximityAlert(ProximitySettings.from_config(cfg), geometry=geometry),
         ],
         calibrate=build_calibrator(depth, geometry, catalog.spoken, ModeSettings.from_config(cfg)),
+        intro=lambda: intro_phrases(body.current(), body.preferences()),
+        preferences=lambda change: apply_preference(change, voice_synth, assistant, base_speed),
     )
     script = load_script(args.ordenes)
     range_m = tuple((cfg.get("depth") or {}).get("range_m", [0.5, 3.0]))
-    # El cuerpo de la persona: su altura guardada y la cámara estimada del piso (app/floor.py).
+    # El cuerpo de la persona: su altura guardada y la cámara estimada del piso (app/floor.py),
+    # y cómo quiere que hable (velocidad y largo de las respuestas, app/onboarding.py).
     from visionx.app.floor import FloorTracker
-    from visionx.modes import body
 
-    person = body.load()
+    body.load()
+    prefs = restore(voice_synth, assistant)
+    if prefs:
+        print(f"preferencias de la persona: {prefs}")
     floor = FloorTracker()
     # Sin piso: la cámara al 72 % de la estatura y nivelada (solo proporciones).
     use_floor = bool((cfg.get("persona") or {}).get("usar_piso", True))
     floor_key: list = [None]
-    if args.voz and not person.height_known and not args.ordenes:
-        controller.announce(
-            "Hola, soy VisionX. Para decirte bien a qué altura están las cosas, decime cuánto "
-            "medís. Por ejemplo: mido 1,75."
-        )
+    if args.voz and not args.ordenes:
+        controller.announce("VisionX está listo. Decí: hola VisionX, y te cuento cómo funciono.")
     sonar = None
     if args.voz and ModeSettings.from_config(cfg).guide_style == "sonar":
         # Bips de la guía de buscar en su propio stream estéreo, al lado de la voz.
@@ -322,7 +330,8 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
         chip, target = mode_label(controller, catalog.spoken, recording)
         return StandState(
             joint=pipeline.latest_joint(),
-            statuses=(pipeline.capture_status, pipeline.detector_status, pipeline.depth_status),
+            statuses=(pipeline.capture_status, pipeline.detector_status, pipeline.depth_status)
+            + ((precise.status,) if precise else ()),
             geometry=depth_geometry,
             frame_geometry=geometry,
             range_m=range_m,  # type: ignore[arg-type]

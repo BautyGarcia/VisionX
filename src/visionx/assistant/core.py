@@ -61,6 +61,19 @@ sin comillas. Si la letra no se lee, decilo y sugerí acercar el objeto.
 - El pedido viene de reconocimiento de voz y puede tener errores: si no tiene sentido, respondé \
 lo más útil según la imagen o pedí que lo repita."""
 
+DETAIL_RULE = {
+    "corto": "Respondé con UNA sola frase corta, lo esencial; la persona pidió respuestas cortas.",
+    "normal": "",
+    "largo": "La persona pidió más detalle: podés usar hasta 5 frases, siempre cortas.",
+}
+
+
+def system_prompt(detail: str = "normal") -> str:
+    """El prompt de sistema con el largo de respuesta que pidió la persona."""
+    rule = DETAIL_RULE.get(detail, "")
+    return SYSTEM_PROMPT + (f"\n- {rule}" if rule else "")
+
+
 KINDS = {
     "leer": "LEER: decí qué es el objeto que tiene adelante y lo más importante que dice.",
     "leer-todo": "LEER TODO: leé todo el texto que se pueda, en orden, sin resumir.",
@@ -457,6 +470,7 @@ class Assistant:
         self._clock = clock
         self._lock = threading.Lock()
         self._current: AssistantJob | None = None
+        self.detail = "normal"  # corto | normal | largo: lo pide la persona («más corto»)
 
     @property
     def available(self) -> bool:
@@ -567,7 +581,7 @@ class Assistant:
         kwargs: dict[str, Any] = dict(
             model=self.s.model,
             max_tokens=self.s.max_tokens,
-            system=SYSTEM_PROMPT,
+            system=system_prompt(self.detail),
             output_config={"effort": self.s.effort},
             messages=messages,
         )

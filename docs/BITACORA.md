@@ -40,6 +40,41 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T08/T09/T20: «Hola VisionX», velocidad y largo por voz, obstáculos al guiar
+
+**Tareas:** T08, T09, T11, T20, T07. **Persona/agente:** Tomás (pedido) / Claude Code.
+**Rama:** `b/hola-visionx`.
+
+**Pedido de Tomás.** Un saludo que active todo y explique cómo funciona, pida la altura y diga
+qué se puede configurar; velocidad y largo de las respuestas configurables por el usuario; avisar
+obstáculos mientras guía; volver a ver los FPS de cada flujo en la pantalla.
+
+**Hecho.**
+- **«Hola VisionX»** (también «ayuda», «¿qué podés hacer?»; con una orden en la misma frase,
+  vale la orden): presentación en frases cortas (`app/onboarding.py`) con qué hace, cómo se le
+  habla, la alerta y lo configurable; si no sabe la estatura la pregunta y acepta un número
+  suelto («1,75») durante 30 s. Al arrancar: «VisionX está listo. Decí: hola VisionX…».
+- **Velocidad de la voz** por voz («hablá más rápido / más despacio / velocidad normal»): pasos
+  0,9–1,45; cambia Edge en caliente (`engines.set_speech_rate`: la caché en disco cambia de
+  carpeta, la de memoria se vacía).
+- **Largo de las respuestas** («respuestas más cortas / más detalladas / normales»): el prompt de
+  Claude pide una frase o hasta cinco (`assistant.detail`, `system_prompt`).
+- Las preferencias y la estatura se guardan juntas en `~/.visionx/persona.json` (antes guardar
+  la altura pisaba el archivo) y se restauran al arrancar.
+- **Obstáculos mientras guía** (`proximity`): encendida solo en buscar (`only_modes`); los
+  píxeles del objetivo (su máscara, dilatada) no cuentan; dice la distancia sin bip; descarta
+  el piso con la altura real de la cámara (estatura y piso) en vez de 1,3 m fijo.
+- **Pantalla:** chips por flujo arriba (Cámara, YOLO, la profundidad con su nombre, Preciso) con
+  FPS, latencia y salud.
+- Frases nuevas en el precalentado de la voz.
+
+**Evidencia.** Tests nuevos `tests/test_hola.py` (21); suite completa OK. Probado sobre
+`dev-1114-distancias` con órdenes escritas: la presentación sale entera y en orden y pregunta la
+altura; la búsqueda siguiente la corta (como cualquier orden nueva).
+
+**Límites.** Sin probar en vivo ni con micrófono. La alerta al guiar no se midió (falsos avisos
+por minuto): ver M8 en MEDICION-MODOS.
+
 ## 2026-11-19 (noche) — T15/T12: robustez de CREStereo con el GT sintético (4 cámaras)
 
 **Tareas:** T15, T12. **Persona/agente:** Tomás / Claude Code (PC de escritorio, CPU).

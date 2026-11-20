@@ -100,4 +100,21 @@ def frequent_phrases(cfg: dict[str, Any], spoken) -> list[str]:
             for m in ("a 0,5 metros", "a 0,6 metros", "muy cerca, a menos de 0,5 metros")
         ]
     out += ["No estoy buscando nada ahora.", "Listo."]
+    # «Hola VisionX», preferencias y alerta de obstáculos (19/11).
+    from types import SimpleNamespace
+
+    from visionx.app.onboarding import intro_phrases
+
+    out += intro_phrases(SimpleNamespace(height_known=False, height_m=1.7), {})
+    out += ["VisionX está listo. Decí: hola VisionX, y te cuento cómo funciono."]
+    out += [f"Listo, hablo {w}. ¿Así está bien?" for w in ("más rápido", "más despacio",
+                                                           "a velocidad normal")]  # fmt: skip
+    out += [f"Listo, desde ahora mis respuestas son {w}." for w in ("más cortas", "normales",
+                                                                   "más detalladas")]  # fmt: skip
+    out += ["Ya estoy hablando lo más rápido que puedo.",
+            "Ya estoy hablando lo más despacio que puedo."]  # fmt: skip
+    out += [f"Cuidado: algo adelante, a {cm} centímetros." for cm in range(30, 100, 10)]
+    heights = ("1,5", "1,55", "1,6", "1,65", "1,7", "1,75", "1,8", "1,85", "1,9")
+    out += [f"Listo, medís {h} metros. Lo uso para decirte a qué altura están las cosas."
+            for h in heights]  # fmt: skip
     return list(dict.fromkeys(out))  # sin repetidas, en orden
