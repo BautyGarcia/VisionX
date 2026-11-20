@@ -72,6 +72,18 @@ def build_source(args: argparse.Namespace, cfg: dict[str, Any]):
     if args.fuente == "sintetica":
         source = SyntheticStereoSource(fps=args.fps, n_frames=args.frames or None)
         return source, source.geometry, source
+    if args.fuente == "realsense":
+        # Ya rectificada por la cámara (calibración de fábrica): sin RectifiedSource.
+        from visionx.camera.realsense import RealSenseSource
+
+        rs_cfg = (cfg.get("camera") or {}).get("realsense") or {}
+        source = RealSenseSource(
+            int(rs_cfg.get("ancho", 1280)), int(rs_cfg.get("alto", 720)),
+            int(rs_cfg.get("fps", 30)), bool(rs_cfg.get("emisor", False)),
+        )  # fmt: skip
+        print(f"RealSense: {source.nombre} (serie {source.serie}), base "
+              f"{100 * source.geometry.baseline_m:.2f} cm")  # fmt: skip
+        return source, source.geometry, None
     from visionx.calibration import StereoCalibration
     from visionx.camera import (
         CameraSettings,
@@ -622,7 +634,9 @@ def main(argv: list[str] | None = None) -> int:
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument(
-            "--fuente", default="sintetica", help="sintetica, usb o carpeta de grabación"
+            "--fuente",
+            default="sintetica",
+            help="sintetica, usb (ELP), realsense o carpeta de grabación",
         )
         p.add_argument("--detector", choices=["fake", "yolo"], default="fake")
         p.add_argument(

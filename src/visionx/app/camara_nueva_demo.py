@@ -2,6 +2,7 @@
 
     python -m visionx.app camara-nueva --fuente sim:video-zed-mini [--escala 6.3|saltear] [--voz]
     python -m visionx.app camara-nueva --fuente usb [--dispositivo "Nombre"] [--voz]
+    python -m visionx.app camara-nueva --fuente realsense [--voz]
 
 Con `sim:<variante>` usa un recorrido de `data/gt-video` como si fuera una cámara desconocida
 (el ojo derecho de «otra unidad», como en los videos del stand): sirve para mostrar el flujo
@@ -224,6 +225,21 @@ class FuenteUSB:
         return f.left, f.right
 
 
+class FuenteRealSense:
+    """La RealSense: se reconoce por su nombre y trae la calibración de fábrica."""
+
+    def __init__(self) -> None:
+        from visionx.camera.realsense import RealSenseSource
+
+        self.src = RealSenseSource()
+        self.nombre = self.src.nombre
+        self.resolucion = (self.src.geometry.width, self.src.geometry.height)
+
+    def leer(self) -> tuple[np.ndarray, np.ndarray]:
+        f = self.src.read()
+        return f.left, f.right
+
+
 # --- comando ---------------------------------------------------------------------------------
 
 
@@ -237,13 +253,16 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
         )
     elif args.fuente == "usb":
         fuente = FuenteUSB(cfg, args.dispositivo)
+    elif args.fuente == "realsense":
+        fuente = FuenteRealSense()
     else:
-        raise SystemExit("--fuente: sim:<variante de data/gt-video> o usb")
+        raise SystemExit("--fuente: sim:<variante de data/gt-video>, usb o realsense")
     decir = _voz(cfg) if args.voz else print
 
     def nueva() -> AltaCamara:
         alta = AltaCamara(cargar_perfiles(), pares_necesarios=args.pares)
-        for f in alta.conectar(args.dispositivo or fuente.nombre, "sbs", fuente.resolucion):
+        formato = "realsense" if isinstance(fuente, FuenteRealSense) else "sbs"
+        for f in alta.conectar(args.dispositivo or fuente.nombre, formato, fuente.resolucion):
             decir(f)
         return alta
 
@@ -312,7 +331,7 @@ def _voz(cfg: dict):
 def register(sub) -> None:
     p = sub.add_parser("camara-nueva", help="dar de alta una cámara estéreo (plug and play)")
     p.add_argument("--fuente", default="sim:video-zed-mini",
-                   help="sim:<variante de data/gt-video> o usb")  # fmt: skip
+                   help="sim:<variante de data/gt-video>, usb o realsense")  # fmt: skip
     p.add_argument("--escena", default="hotel_0", help="escena del recorrido simulado")
     p.add_argument("--raiz", default=None, help="carpeta gt-video (por defecto data/gt-video)")
     p.add_argument("--dispositivo", default=None, help="nombre a reconocer (por defecto, el real)")
