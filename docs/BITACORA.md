@@ -105,6 +105,12 @@ Claude, primera palabra), FPS y el cuerpo. Textos con Pillow (tildes y ñ). Dos 
 `dev-1114-distancias` corrigieron rótulos encimados, el modelo mal nombrado, la guía repetida, la
 confirmación contada como primera palabra y la captura tomada después de cerrar.
 
+**Rediseño (pedido de Tomás tras ver la primera versión):** paleta azul noche con un solo acento,
+paneles redondeados; los objetos con su **máscara** de YOLO-seg en tonos suaves (como en vivo) en
+vez de cajas verdes; rótulos chicos (nombre + distancia en el color de su certeza, máximo 6, sin
+encimarse); conversación en burbujas; el tiempo como barra voz a texto → Claude → voz con el
+total. `persona.usar_piso` (por defecto sí) apaga el piso y deja solo las proporciones.
+
 **Visor del GT** (`gtsynth visor`): láminas para la pantalla del stand y el póster (vista con
 los objetos pintados y su distancia exacta, profundidad, el conjunto y la robustez); exporta JPG.
 

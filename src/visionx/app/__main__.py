@@ -254,6 +254,8 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
 
     person = body.load()
     floor = FloorTracker()
+    # Sin piso: la cámara al 72 % de la estatura y nivelada (solo proporciones).
+    use_floor = bool((cfg.get("persona") or {}).get("usar_piso", True))
     floor_key: list = [None]
     if args.voz and not person.height_known and not args.ordenes:
         controller.announce(
@@ -364,7 +366,8 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
                 max_queues[name] = max(max_queues.get(name, 0), size)
             joint = pipeline.latest_joint()
             if (
-                joint is not None
+                use_floor
+                and joint is not None
                 and joint.depth is not None
                 and joint.depth.depth_m is not None
                 and joint.frame.key != floor_key[0]
