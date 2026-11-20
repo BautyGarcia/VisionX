@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from visionx.gtsynth.dataset import consistencia, objetos_de, particion_de, vistas
+from visionx.shared.config import ROOT
 
 
 def cmd_resumen(args: argparse.Namespace) -> int:
@@ -136,6 +137,38 @@ def cmd_evaluar(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_deteccion(args: argparse.Namespace) -> int:
+    """Recall y precisión de uno o más detectores contra el GT (ver gtsynth/deteccion.py)."""
+    from itertools import islice
+
+    from visionx.gtsynth.deteccion import escribir_csv, evaluar, predictor_yolo
+
+    resultados = []
+    for modelo in args.modelos:
+        path = modelo if modelo.endswith(".pt") else str(ROOT / "weights" / f"{modelo}.pt")
+        predecir, conocidas = predictor_yolo(path, args.imgsz, args.conf, args.dispositivo)
+        vs = []
+        for particion in args.particion:
+            vs += list(vistas(args.raiz, args.variante, particion))
+        vs = vs[:: max(1, len(vs) // args.max)] if args.max else vs
+        r = evaluar(islice(vs, None), predecir, Path(path).stem, conocidas, args.iou, args.min_px)
+        resultados.append(r)
+        tot = r.total()
+        ms = sorted(r.ms)[len(r.ms) // 2] if r.ms else float("nan")
+        print(f"{r.modelo}: {r.vistas} vistas, recall {tot.recall:.3f} ({tot.encontrados}/"
+              f"{tot.gt}), precisión ≥ {tot.precision:.3f} ({tot.det_ok}/{tot.det}), "
+              f"{ms:.0f} ms/cuadro")  # fmt: skip
+    if len(resultados) > 1:  # mismas clases para todos: las que conoce el primero
+        base = {c for c, k in resultados[0].por_clase.items() if k.gt}
+        for r in resultados:
+            tot = r.total(base)
+            print(f"  en las clases de {resultados[0].modelo}: {r.modelo} recall "
+                  f"{tot.recall:.3f}, precisión ≥ {tot.precision:.3f}")  # fmt: skip
+    escribir_csv(resultados, Path(args.csv))
+    print(f"por clase en {args.csv}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m visionx.gtsynth", description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -173,6 +206,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="el objeto apuntado de la primera vista de cada cámara corrige la escala",
     )
+    de = sub.add_parser("deteccion", help="recall y precisión de detectores contra el GT")
+    de.add_argument("raiz")
+    de.add_argument("--modelos", nargs="+", required=True, help="nombres en weights/ o rutas .pt")
+    de.add_argument("--variante", default="elp")
+    de.add_argument("--particion", nargs="+", default=["val"], choices=["train", "val", "test"])
+    de.add_argument("--csv", required=True)
+    de.add_argument("--max", type=int, default=0, help="como máximo N vistas, repartidas")
+    de.add_argument("--imgsz", type=int, default=960)
+    de.add_argument("--conf", type=float, default=0.25)
+    de.add_argument("--iou", type=float, default=0.4)
+    de.add_argument("--min-px", type=int, default=400)
+    de.add_argument("--dispositivo", default="cpu")
     for name in ("resumen", "objetos", "verificar"):
         p = sub.add_parser(name)
         p.add_argument("raiz")
@@ -184,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--max", type=int, default=20)
     args = ap.parse_args(argv)
     cmds = {"resumen": cmd_resumen, "objetos": cmd_objetos, "verificar": cmd_verificar,
-            "evaluar": cmd_evaluar}  # fmt: skip
+            "evaluar": cmd_evaluar, "deteccion": cmd_deteccion}  # fmt: skip
     if args.cmd == "visor":
         from visionx.gtsynth.visor import run
 

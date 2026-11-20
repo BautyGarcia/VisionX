@@ -385,9 +385,11 @@ def test_bytetrack_rejects_trackers_that_download_models():
 def test_cli_clases(capsys):
     assert detection_main(["clases", "tazas"]) == 0
     assert "cup" in capsys.readouterr().out
-    assert detection_main(["clases", "llaves"]) == 1
+    assert detection_main(["clases", "llaves"]) == 0  # vocabulario de VisionX (YOLOE)
+    assert "keys" in capsys.readouterr().out
+    assert detection_main(["clases", "dragón"]) == 1
     assert detection_main(["clases"]) == 0
-    assert "80 clases" in capsys.readouterr().out
+    assert "215 clases de VisionX (80 COCO" in capsys.readouterr().out
 
 
 def test_open_input_images_declare_their_geometry(tmp_path):

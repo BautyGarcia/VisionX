@@ -142,6 +142,11 @@ detection:
   track: true               # IDs temporales con ByteTrack
   tracker: bytetrack.yaml   # config de Ultralytics; su búfer de pérdida está en frames, no en segundos
   classes: null             # lista de clases del modelo a conservar (ej. [cup, bottle]); null = todas
+  # YOLOE con el vocabulario de VisionX (215 clases: pizarrón, puerta, llaves, mesa de luz…). Se
+  # usa solo mientras se busca o se mide algo que el modelo COCO no conoce (detection/switch.py:
+  # en las clases COCO acierta menos que yolo26s-seg). Se arma una vez con internet:
+  # `python -m visionx.detection vocabulario`. null o sin el archivo = solo COCO.
+  extra_model: yoloe-26s-seg-visionx
 
 # Ubicación por objeto PROVISORIA (app/spatial.py) hasta que A entregue depth/spatial (T09/T13).
 # Z = percentil front_percentile de la capa más cercana de la máscara. Candidatos medidos en

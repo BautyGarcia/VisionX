@@ -91,7 +91,7 @@ def cmd_simular(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     clock = ManualClock(1_000_000_000)
     source, geometry, detector, depth, spatial, tick_s = build(args, cfg, clock)
-    catalog = ClassCatalog(COCO_CLASSES)
+    catalog = ClassCatalog(getattr(detector, "class_names", None) or COCO_CLASSES)
     deadlines = {
         str(k): float(v) for k, v in ((cfg.get("audio") or {}).get("deadlines_s") or {}).items()
     }
@@ -221,7 +221,7 @@ def cmd_demo(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     clock = ManualClock(1_000_000_000)
     source, geometry, detector, depth, spatial, tick_s = build(args, cfg, clock)
-    catalog = ClassCatalog(COCO_CLASSES)
+    catalog = ClassCatalog(getattr(detector, "class_names", None) or COCO_CLASSES)
     settings = ModeSettings.from_config(cfg)
     deadlines = {
         str(k): float(v) for k, v in ((cfg.get("audio") or {}).get("deadlines_s") or {}).items()

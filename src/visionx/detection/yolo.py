@@ -44,6 +44,7 @@ class DetectorSettings:
     track: bool = True
     tracker: str = "bytetrack.yaml"
     classes: tuple[str, ...] | None = None
+    extra_model: str | None = None
 
     @classmethod
     def from_config(cls, cfg: dict[str, Any]) -> DetectorSettings:
@@ -60,6 +61,7 @@ class DetectorSettings:
             track=bool(d.get("track", cls.track)),
             tracker=str(d.get("tracker", cls.tracker)),
             classes=None if classes is None else tuple(str(c) for c in classes),
+            extra_model=None if not d.get("extra_model") else str(d["extra_model"]),
         )
 
     @property
@@ -100,6 +102,62 @@ def download_weights(model: str, dest_dir: Path) -> Path:
     return target
 
 
+def build_detector(settings: DetectorSettings) -> Any:
+    """El detector de la app: COCO, y YOLOE para lo que COCO no conoce si sus pesos están."""
+    import dataclasses
+
+    base = YoloDetector(dataclasses.replace(settings, extra_model=None))
+    if not settings.extra_model:
+        return base
+    extra_settings = dataclasses.replace(settings, model=settings.extra_model, extra_model=None,
+                                         classes=None)  # fmt: skip
+    if not extra_settings.weights_path.is_file():
+        print(f"aviso: no está {extra_settings.weights_path}; solo clases COCO "
+              "(armarlo con `python -m visionx.detection vocabulario`)")  # fmt: skip
+        return base
+    from visionx.detection.switch import VocabularySwitch
+
+    return VocabularySwitch(base, YoloDetector(extra_settings))
+
+
+def build_vocabulary_weights(
+    base: str, out: str, weights_dir: Path, classes: tuple[str, ...] | None = None
+) -> Path:
+    """Arma pesos YOLOE con el vocabulario de VisionX incorporado (una vez, con internet).
+
+    YOLOE es de vocabulario abierto: cada clase es un embedding de texto (MobileCLIP). Acá se
+    calculan una sola vez —promediando los sinónimos de `PROMPTS`— y quedan guardados en
+    `<out>.pt`. Ese archivo se carga después con el YOLO de siempre, sin internet ni el
+    codificador de texto: la app no cambia de vocabulario sin que quede registrado (sha256).
+    """
+    from visionx.detection.catalog import VISIONX_CLASSES, prompts_de
+
+    classes = tuple(classes or VISIONX_CLASSES)
+    base_path = download_weights(base, weights_dir)
+    target = weights_dir / f"{out}.pt"
+    try:
+        import torch
+        from ultralytics import YOLOE
+    except ImportError as exc:
+        raise EstimatorError("falta ultralytics: instalar con `uv sync --extra deteccion`") from exc
+    here = os.getcwd()
+    os.chdir(weights_dir)  # Ultralytics baja el codificador de texto a la carpeta actual
+    try:
+        model = YOLOE(str(base_path))
+        rows = []
+        for cls in classes:
+            pe = model.get_text_pe(list(prompts_de(cls)))[0]  # (n_textos, D), normalizados
+            mean = pe.mean(0)
+            rows.append(mean / mean.norm())
+        model.set_classes(list(classes), torch.stack(rows)[None])
+        partial = target.with_suffix(".parcial.pt")
+        model.save(str(partial))
+        partial.replace(target)
+    finally:
+        os.chdir(here)
+    return target
+
+
 def _import_ultralytics() -> tuple[Any, Any]:
     # YOLO_OFFLINE antes del primer import: Ultralytics manda estadísticas de uso y consulta
     # internet al arrancar; VisionX no comparte datos de quien lo usa sin pedirlo.
@@ -123,7 +181,8 @@ def _resolve_device(device: str, torch: Any) -> str:
 
 
 class YoloDetector:
-    """Detector + segmentador YOLO (vocabulario COCO con los pesos oficiales)."""
+    """Detector + segmentador YOLO: COCO con los pesos oficiales, o el vocabulario de VisionX
+    con YOLOE (`<base>-visionx.pt`, armado por `build_vocabulary_weights`)."""
 
     def __init__(self, settings: DetectorSettings) -> None:
         self.settings = settings
