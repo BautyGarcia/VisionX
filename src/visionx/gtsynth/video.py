@@ -75,13 +75,20 @@ def _z(depth, g, w8: int, h8: int, delta_px: float = 0.0) -> np.ndarray:
     return z
 
 
+def _limite_delta(g) -> float:
+    """Corrimiento máximo creíble: 2 px con la focal de la ELP en el continuo (~200 px), y más
+    con focales largas, donde el mismo giro de yaw corre más píxeles (la angosta de 60° pide
+    ~3,8 px; con el tope fijo de 2 px se descartaba y el clásico quedaba en 37 % de error)."""
+    return 2.0 * max(1.0, g.fx / 200.0)
+
+
 def _delta_conocida(depth, g, z_gt: np.ndarray, mascara: np.ndarray) -> float | None:
     """Corrimiento de disparidad que hace coincidir el objeto apuntado con su distancia real.
 
     Mediana, sobre los píxeles del objeto, de la diferencia entre la disparidad medida y la que
     corresponde a su Z real. (El percentil 80 de la disparidad contra el 20 de Z, como el
     ubicador, daba corrimientos de ~1 px de más: los extremos de las dos distribuciones no son
-    los mismos píxeles.) Si sale más de 2 px, el objeto no sirve y no se aplica.
+    los mismos píxeles.) Si pasa `_limite_delta`, el objeto no sirve y no se aplica.
     """
     h, w = depth.disparity_px.shape
     m = cv2.resize(mascara.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
@@ -92,7 +99,7 @@ def _delta_conocida(depth, g, z_gt: np.ndarray, mascara: np.ndarray) -> float | 
     d = depth.disparity_px[ok] + depth.doffs
     d_gt = g.fx * g.baseline_m / np.maximum(zg[ok], 1e-6)
     delta = float(np.median(d - d_gt))
-    return delta if abs(delta) <= 2.0 else None
+    return delta if abs(delta) <= _limite_delta(g) else None
 
 
 CALENTAR = 3  # cuadros del modo continuo que se descartan para la distancia conocida

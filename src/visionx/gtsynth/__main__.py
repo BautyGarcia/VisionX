@@ -235,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     vi.add_argument("--salida", default=str(ROOT / "data" / "stand-video"))
     vi.add_argument("--red", default=None, help="checkpoint de la red de alineación (v3)")
+    vi.add_argument("--solo", nargs="+", default=None, help="rehacer solo estas variantes")
     de = sub.add_parser("deteccion", help="recall y precisión de detectores contra el GT")
     de.add_argument("raiz")
     de.add_argument("--modelos", nargs="+", required=True, help="nombres en weights/ o rutas .pt")
@@ -267,7 +268,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "video":
         from visionx.gtsynth.video import preparar as preparar_video
 
-        preparar_video(args.raiz, args.salida, args.red)
+        solo = tuple(args.solo) if args.solo else None
+        preparar_video(args.raiz, args.salida, args.red, solo=solo)
         return 0
     if args.cmd == "visor":
         from visionx.gtsynth.visor import run
