@@ -29,13 +29,21 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
-import habitat_sim
-import magnum as mn
-import numpy as np
-from PIL import Image
+# En WSL con GPU (/dev/dxg), Mesa elige por defecto el render por software (llvmpipe). Con el
+# driver D3D12 dibuja en la placa de video: 24 ms contra 83 ms por cuadro de 1280x720 en la
+# RX 5700 XT, con el mismo resultado (instancias 100 % iguales, color 0,01 niveles, Z 0,01 %
+# en el p99; BITACORA 20/11). Fuera de WSL no se toca nada.
+if Path("/dev/dxg").exists():
+    os.environ.setdefault("GALLIUM_DRIVER", "d3d12")
+
+import habitat_sim  # noqa: E402
+import magnum as mn  # noqa: E402
+import numpy as np  # noqa: E402
+from PIL import Image  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent))
 from render_habitat import fijar_pose, objetos  # noqa: E402

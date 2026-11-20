@@ -40,6 +40,31 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-20 (noche) — Infra: Habitat dibuja en la Radeon; CREStereo con DirectML no anda
+
+Autor: Claude, a pedido de Tomás. Rama `b/render-gpu`.
+
+**Hallazgo:** todos los renders hasta hoy (Replica, HSSD, recorridos: ~100 GB) se hicieron
+**por software** (`llvmpipe`): en WSL, Mesa no elige sola la GPU. Con `GALLIUM_DRIVER=d3d12`
+dibuja en la **AMD Radeon RX 5700 XT** a través de `/dev/dxg`.
+
+| Renderer | ms por cuadro (1280×720, color) |
+|---|---|
+| llvmpipe (software, el de siempre) | 83 |
+| D3D12 (Radeon) | 24 |
+
+**Mismo resultado** (3 vistas de `apartment_1`, color + Z + instancias a 1280×720): instancias
+100 % iguales, color 0,01 niveles de diferencia media, Z 0,01 % en el percentil 99 (máximo 16
+mm, en bordes). El GT ya generado sigue valiendo. `render_tanda.py` pone `GALLIUM_DRIVER=d3d12`
+solo si existe `/dev/dxg` (WSL con GPU); en otras máquinas no cambia nada.
+
+**CREStereo en la Radeon:** PyTorch en Windows solo acelera NVIDIA. Probado con
+`torch-directml` (torch 2.4.1, venv aparte `D:/venv-dml`, el del proyecto no se tocó): DirectML
+**se cae** dentro de la red (`dml_tensor_desc.cc: Check failed: !is_dim_broadcast`) y la ELU
+vuelve a la CPU. Quedan dos caminos, ninguno probado: exportar la red a ONNX y correrla con
+ONNX Runtime + DirectML, o adaptar las operaciones del port (código de Bauty). Mientras tanto,
+CREStereo rápido = la Mac de Bauty (MPS).
+
 ## 2026-11-20 (noche) — T12/T15: E0 «enchufar sin calibrar», perfiles de cámaras y pantalla «Cámara nueva»
 
 Autor: Claude, a pedido de Tomás. Rama `b/camara-nueva`.
