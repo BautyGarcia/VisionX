@@ -182,10 +182,7 @@ class AltaCamara:
             fuente="pantalla Cámara nueva",
         )  # fmt: skip
         e.paso = Paso.MIRAR
-        return self._decir(
-            "Es una cámara que no conozco. Vamos a calibrarla. "
-            "Mirá alrededor despacio durante unos segundos."
-        )
+        return self._decir("Cámara nueva. Mirá alrededor despacio unos segundos.")
 
     def agregar_par(self, izq: np.ndarray, der: np.ndarray) -> list[str]:
         """Un par de la cámara. En MIRAR guarda los que son distintos de los anteriores."""
@@ -255,16 +252,12 @@ class AltaCamara:
         self.muestra = (rect[medio][0], rect[medio][1], der)
         e.paso = Paso.ESCALA
         frases = [self._frase_estimacion(est), self._frase_filas()]
-        frases.append(
-            "Para medir en metros necesito la escala. Decime cuántos centímetros hay entre los "
-            "dos lentes, o apuntá a un objeto y decí a qué distancia está. Si no sabés, decí "
-            "«saltear»."
-        )
+        frases.append("¿Cuántos centímetros hay entre los dos lentes? Si no sabés, decí «saltear».")
         return self._decir(*frases)
 
     def _frase_estimacion(self, est: EstimacionCamara) -> str:
         if est.confianza <= 0:
-            return "Todavía no puedo estimar la lente: uso un valor promedio."
+            return "Todavía no sé estimar la lente: uso un valor promedio."
         return f"La cámara ve unos {round(est.campo_horizontal_deg)} grados de ancho."
 
     def _frase_filas(self) -> str:
@@ -275,7 +268,7 @@ class AltaCamara:
                 "probá mirando algo con más textura."
             )
         return (
-            f"Alineé los dos ojos: el desfase entre filas pasó de {_coma(a.mediana_px)} "
+            f"Alineé los ojos: el desfase bajó de {_coma(a.mediana_px)} "
             f"a {_coma(d.mediana_px)} píxeles."
         )
 
