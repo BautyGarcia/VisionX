@@ -137,6 +137,17 @@ def cmd_evaluar(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_camaras(args: argparse.Namespace) -> int:
+    """Precalcular la demo «Cámaras» del stand (CREStereo con cada cámara)."""
+    from visionx.gtsynth.camaras import elegir_poses, preparar
+
+    poses = elegir_poses(args.raiz, args.escenas)
+    print(f"poses: {poses}")
+    preparar(args.raiz, args.salida, poses, args.profundidad)
+    print(f"listo en {args.salida}; verla con: python -m visionx.gtsynth camaras-ver {args.salida}")
+    return 0
+
+
 def cmd_deteccion(args: argparse.Namespace) -> int:
     """Recall y precisión de uno o más detectores contra el GT (ver gtsynth/deteccion.py)."""
     from itertools import islice
@@ -206,6 +217,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="el objeto apuntado de la primera vista de cada cámara corrige la escala",
     )
+    ca = sub.add_parser("camaras", help="precalcular la demo de cámaras distintas del stand")
+    ca.add_argument("raiz")
+    ca.add_argument("--salida", default=str(ROOT / "data" / "stand-camaras"))
+    ca.add_argument("--escenas", type=int, default=4, help="cuántas vistas de val (una por escena)")
+    ca.add_argument("--profundidad", default="crestereo-preciso")
+    cv_ = sub.add_parser("camaras-ver", help="mostrar la demo de cámaras en una ventana")
+    cv_.add_argument("carpeta", nargs="?", default=str(ROOT / "data" / "stand-camaras"))
     de = sub.add_parser("deteccion", help="recall y precisión de detectores contra el GT")
     de.add_argument("raiz")
     de.add_argument("--modelos", nargs="+", required=True, help="nombres en weights/ o rutas .pt")
@@ -229,7 +247,12 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--max", type=int, default=20)
     args = ap.parse_args(argv)
     cmds = {"resumen": cmd_resumen, "objetos": cmd_objetos, "verificar": cmd_verificar,
-            "evaluar": cmd_evaluar, "deteccion": cmd_deteccion}  # fmt: skip
+            "evaluar": cmd_evaluar, "camaras": cmd_camaras, "deteccion": cmd_deteccion}  # fmt: skip
+    if args.cmd == "camaras-ver":
+        from visionx.app.stand_camaras import mostrar
+
+        mostrar(args.carpeta)
+        return 0
     if args.cmd == "visor":
         from visionx.gtsynth.visor import run
 

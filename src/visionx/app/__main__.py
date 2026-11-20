@@ -356,6 +356,10 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
         )
 
     def frame_image():
+        if view_mode[0] == "camaras":
+            from visionx.app.stand_camaras import render_camaras
+
+            return render_camaras(args.camaras)
         return render_stand(stand_state()) if view_mode[0] == "stand" else render(dashboard_state())
 
     def open_audio_panel() -> None:
@@ -503,6 +507,8 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
                     break
                 if key == ord("v"):  # stand <-> diagnóstico
                     view_mode[0] = "diagnostico" if view_mode[0] == "stand" else "stand"
+                if key == ord("k"):  # stand <-> demo de cámaras (precalculada)
+                    view_mode[0] = "stand" if view_mode[0] == "camaras" else "camaras"
                 if key == ord("f"):  # pantalla completa
                     full = cv2.getWindowProperty("VisionX", cv2.WND_PROP_FULLSCREEN)
                     cv2.setWindowProperty("VisionX", cv2.WND_PROP_FULLSCREEN,
@@ -643,9 +649,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--captura", help="PNG del dashboard al terminar (sirve con --sin-ventana)")
     p.add_argument(
         "--vista",
-        choices=["stand", "diagnostico"],
+        choices=["stand", "diagnostico", "camaras"],
         default="stand",
-        help="pantalla del stand (por defecto) o el dashboard de diagnóstico; v alterna",
+        help="pantalla del stand (por defecto), el dashboard de diagnóstico (v alterna) o la "
+        "demo de cámaras distintas (k alterna)",
+    )
+    p.add_argument(
+        "--camaras",
+        default=str(ROOT / "data" / "stand-camaras"),
+        help="carpeta de la demo de cámaras (python -m visionx.gtsynth camaras)",
     )
     p.set_defaults(fn=cmd_ejecutar)
 
