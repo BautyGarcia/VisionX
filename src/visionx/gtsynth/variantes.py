@@ -41,8 +41,23 @@ def fraccion(variante: str) -> float:
     return float(variante.removeprefix("hermana-"))
 
 
-def derecha_hermana(vista: Vista, variante: str) -> np.ndarray:
-    """El ojo derecho de la vista visto por una hermana de la ELP (semilla = la vista)."""
+def distorsion_nominal() -> np.ndarray:
+    """Coeficientes de distorsión del ojo derecho de la ELP (lo que la red de alineación usa)."""
+    return _nominal().D
+
+
+def semilla_camara(primera: Vista, vistas_por_camara: int) -> int:
+    """Semilla de una hermana compartida por un grupo de vistas (la nombra su primera vista)."""
+    clave = f"camara/{primera.escena}/{primera.meta['indice']}/{vistas_por_camara}"
+    return zlib.crc32(clave.encode())
+
+
+def derecha_hermana(vista: Vista, variante: str, semilla: int | None = None) -> np.ndarray:
+    """El ojo derecho de la vista visto por una hermana de la ELP.
+
+    Sin `semilla`, cada vista tiene su propia hermana (semilla = la vista). Con `semilla`, todas
+    las vistas que la comparten son de la misma unidad, como una cámara que ve varias escenas.
+    """
     from visionx.depth.crestereo_adapt.perturb import (
         CameraRanges,
         perturb_right_camera,
@@ -56,7 +71,8 @@ def derecha_hermana(vista: Vista, variante: str) -> np.ndarray:
         **{k: getattr(base, k) * f for k in ("roll_deg", "pitch_deg", "yaw_deg", "focal",
                                               "center_px", "distortion")},
     )  # fmt: skip
-    semilla = zlib.crc32(f"{vista.escena}/{vista.meta['indice']}".encode())
+    if semilla is None:
+        semilla = zlib.crc32(f"{vista.escena}/{vista.meta['indice']}".encode())
     nominal = _nominal()
     real = sample_sibling(np.random.default_rng(semilla), nominal, rangos)
     return perturb_right_camera(vista.der(), real, nominal, vista.geometria).right
