@@ -99,6 +99,11 @@ class ModeSettings:
     # redondeados a approx_round_m. Con approx_from_m >= range_m[1] no hay tramo aproximado.
     approx_from_m: float = 3.0
     approx_round_m: float = 0.5
+    # Niveles de certeza con el intervalo del 90 % (docs/INCERTIDUMBRE-Y-GT.md, 1.3): medio
+    # ancho relativo <= precise_rel -> «a 1,4 metros»; <= approx_rel -> «a unos 1,5 metros»;
+    # más -> sin número. Sin intervalo (estimador sin b) se dice como antes.
+    precise_rel: float = 0.10
+    approx_rel: float = 0.25
     arrive_m: float = 0.6  # al frente y a esta distancia o menos: "llegaste"
     # La búsqueda termina cuando la persona lo dice («la encontré», «terminá»), no sola: al
     # llegar avisa y se queda callada; si se aleja más de arrive_m + leave_margin_m, vuelve a
@@ -316,6 +321,32 @@ def direction(angle_h_deg: float, s: ModeSettings, angle_v_deg: float | None = N
     return horizontal(angle_h_deg, s) + vertical(angle_v_deg, s)
 
 
+def distance_fact(m: Measure, s: ModeSettings) -> str:
+    """La distancia de un objeto como dato para Claude, con su nivel explícito (1.4).
+
+    El código decide qué tan segura es; Claude solo la dice. «» si no hay nada que decir.
+    """
+    if m.ok and m.z_m is not None:
+        if m.approximate:
+            said = meters(m.z_m, s, force=True)
+            how = "«más o menos»" if said.startswith("más o menos") else "«unos»"
+            return f"a {said} (medida aproximada: decilo con {how})"
+        return f"a {meters(m.z_m, s)} (medida precisa)"
+    if m.reason == "no-segura":
+        return "la distancia no se pudo medir bien (no digas ningún número)"
+    if m.reason in ("muy-cerca", "muy-lejos"):
+        return measure_phrase(m, s)
+    return ""
+
+
+def camera_line(joint: Any) -> str | None:
+    """«Estado de la cámara: …» si el estimador avisa que no puede medir (alineando, etc.)."""
+    from visionx.app.camera_status import DEFAULT_PHRASES, OK, status_code
+
+    code = status_code(getattr(joint, "depth", None), DEFAULT_PHRASES)
+    return None if code == OK else f"Estado de la cámara: {DEFAULT_PHRASES[code]}"
+
+
 def lateral_phrase(z_m: float, angle_h_deg: float, s: ModeSettings) -> str:
     """Corrimiento a un costado medido: X = Z·tan(ángulo). «al frente» si es menor que
     side_min_m; si no, «unos 30 centímetros a tu izquierda» o «1,2 metros a tu derecha»."""
@@ -323,36 +354,31 @@ def lateral_phrase(z_m: float, angle_h_deg: float, s: ModeSettings) -> str:
     if abs(x) < s.side_min_m:
         return "al frente"
     side = "derecha" if x > 0 else "izquierda"
-    if abs(x) < 1.0:
-        return f"unos {int(round(abs(x) * 20) * 5)} centímetros a tu {side}"
+    cm = int(round(abs(x) * 20) * 5)
+    if cm < 100:  # 0,98 m redondea a 100 cm: eso ya es «1 metro»
+        return f"unos {cm} centímetros a tu {side}"
     return f"{meters(abs(x), s, approx=False)} a tu {side}"
 
 
-# Altura respecto de la cámara (al pecho, nivelada): y = Z·tan(ángulo vertical), + = arriba.
-# Bandas para una persona de ~1,70 m con la cámara a ~1,3 m del piso.
-BODY_BANDS = (
-    (0.45, "más arriba de tu cabeza"),
-    (0.2, "a la altura de tu cabeza"),
-    (-0.2, "a la altura de tu pecho"),
-    (-0.55, "a la altura de tu cintura"),
-    (-0.95, "a la altura de tus rodillas"),
-)
-
-
 def body_height_phrase(z_m: float, angle_v_deg: float) -> str:
-    """«a la altura de tu cintura»: dónde queda el objeto respecto del cuerpo."""
-    y = z_m * math.tan(math.radians(angle_v_deg))
-    for limit, phrase in BODY_BANDS:
-        if y >= limit:
-            return phrase
-    return "cerca del piso"
+    """«a la altura de tu cintura»: dónde queda el objeto respecto del cuerpo de la persona.
+
+    Usa su estatura (la dijo con «mido 1,80») y la altura e inclinación reales de la cámara si
+    se ve el piso (`modes.body`, `app.floor`); si no, 1,70 m y la cámara nivelada en el pecho.
+    """
+    from visionx.modes import body
+
+    return body.current().band(z_m, angle_v_deg)
 
 
-def meters(z_m: float, s: ModeSettings, *, approx: bool = True) -> str:
+def meters(z_m: float, s: ModeSettings, *, approx: bool = True, force: bool = False) -> str:
     """Metros redondeados para decir: 1,07 -> "1,1 metros"; 1,0 -> "1 metro". Más allá de
-    `approx_from_m` (y con `approx`), aproximados: 4,3 -> "unos 4,5 metros"."""
-    if approx and z_m > s.approx_from_m:
+    `approx_from_m` (y con `approx`), o con `force` (medida aproximada por su intervalo),
+    aproximados: 4,3 -> "unos 4,5 metros"."""
+    if force or (approx and z_m > s.approx_from_m):
         r = round(round(z_m / s.approx_round_m) * s.approx_round_m, 2)
+        if r == 1:
+            return "más o menos 1 metro"  # no «unos 1 metros»
         return f"unos {r:g} metros".replace(".", ",")
     r = round(round(z_m / s.round_m) * s.round_m, 2)
     text = f"{r:g}".replace(".", ",")
@@ -365,10 +391,15 @@ class Measure:
 
     z_m: float | None
     reason: str | None  # None si z_m se puede decir
+    certainty: str = "precisa"  # "precisa" | "aproximada" (con reason None)
 
     @property
     def ok(self) -> bool:
         return self.reason is None
+
+    @property
+    def approximate(self) -> bool:
+        return self.ok and self.certainty == "aproximada"
 
 
 def measure(obj: SpatialObject | None, s: ModeSettings) -> Measure:
@@ -383,20 +414,30 @@ def measure(obj: SpatialObject | None, s: ModeSettings) -> Measure:
         return Measure(None, "reencuadrar")
     if obj.policy is not DistancePolicy.SPEAK_METERS or obj.z_m is None:
         return Measure(None, "sin-medida")
+    if obj.z_bajo_m is not None:
+        from visionx.shared.uncertainty import relative_width
+
+        width = relative_width(obj.z_m, obj.z_bajo_m, obj.z_alto_m)
+        if width > s.approx_rel:
+            return Measure(None, "no-segura")
+        certainty = "aproximada" if width > s.precise_rel else "precisa"
+    else:
+        certainty = "precisa"
     near, far = s.range_m
     if obj.z_m < near:
         return Measure(obj.z_m, "muy-cerca")
     if obj.z_m > far:
         return Measure(obj.z_m, "muy-lejos")
-    return Measure(obj.z_m, None)
+    return Measure(obj.z_m, None, certainty)
 
 
 def measure_phrase(m: Measure, s: ModeSettings) -> str:
     """Final de frase para una medida: "a 1,1 metros" o la explicación de por qué no."""
     if m.ok:
-        return f"a {meters(m.z_m, s)}"  # type: ignore[arg-type]
+        return f"a {meters(m.z_m, s, force=m.approximate)}"  # type: ignore[arg-type]
     near, far = s.range_m
     return {
+        "no-segura": "pero no puedo medir bien a qué distancia está",
         "muy-cerca": f"muy cerca, a menos de {meters(near, s, approx=False)}",
         "muy-lejos": f"lejos, a más de {meters(far, s, approx=False)}",
         "reencuadrar": "pero está cortado en el borde: girá un poco hacia ese lado",

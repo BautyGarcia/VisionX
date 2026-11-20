@@ -25,14 +25,16 @@ from visionx.modes.common import (
     View,
     age_s,
     body_height_phrase,
+    camera_line,
     candidates,
     closing_due,
     closing_text,
     direction,
+    distance_fact,
+    horizontal,
     lateral_phrase,
     measure,
     measure_phrase,
-    meters,
     precision_view,
     request_precision,
     speech_s,
@@ -189,20 +191,27 @@ class DistanceHandler:
     def _fact(self, c: Candidate, name: str) -> None:
         """Lo medido de un objeto, para que el asistente lo diga tal cual."""
         m = measure(c.obj, self.s)
-        if m.ok and m.z_m is not None:
+        if m.ok and m.z_m is not None and not m.approximate:
             parts = [
-                f"a {meters(m.z_m, self.s)}",
+                distance_fact(m, self.s),
                 lateral_phrase(m.z_m, c.angle_h_deg, self.s),
                 body_height_phrase(m.z_m, c.angle_v_deg),
             ]
+        elif m.approximate:
+            # Con la distancia aproximada, los centímetros de costado tampoco son confiables.
+            parts = [distance_fact(m, self.s), horizontal(c.angle_h_deg, self.s)]
         else:
-            parts = [direction(c.angle_h_deg, self.s, c.angle_v_deg), measure_phrase(m, self.s)]
+            fact = distance_fact(m, self.s) or measure_phrase(m, self.s)
+            parts = [direction(c.angle_h_deg, self.s, c.angle_v_deg), fact]
         self._facts.append(f"{name}: " + "; ".join(parts))
 
     def _ask(self, command: Command, view: View, joint: Joint, answer: str, now_ns: int):
         from visionx.assistant import Delivery
 
         frame = view.original if view.original is not None else joint.frame
+        line = camera_line(joint)
+        if line and line not in self._facts:
+            self._facts.append(line)
         name = self.spoken(self._label) if self._label else "lo que tengo al frente"
         job = self.assistant.submit(
             command.request_id,

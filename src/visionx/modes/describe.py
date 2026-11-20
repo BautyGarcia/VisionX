@@ -20,8 +20,10 @@ from visionx.modes.common import (
     Measure,
     ModeSettings,
     age_s,
+    camera_line,
     candidates,
     closing_text,
+    distance_fact,
     horizontal,
     measure,
     measure_phrase,
@@ -308,10 +310,11 @@ class DescribeHandler:
             if c.score < self.describe.min_score:
                 continue
             where = horizontal(c.angle_h_deg, self.s)
-            m = measure(c.obj, self.s)
-            metres = f", a {meters(m.z_m, self.s)}" if m.ok and m.z_m is not None else ""
-            out.append(f"{self.spoken(c.label)} {where}{metres}")
-        return out[:12]
+            fact = distance_fact(measure(c.obj, self.s), self.s)
+            out.append(f"{self.spoken(c.label)} {where}" + (f", {fact}" if fact else ""))
+        out = out[:12]
+        line = camera_line(joint)
+        return out + [line] if line else out
 
     def _scene_objects(self, scene: SceneFacts) -> list[str]:
         z = {m.detection_index: m.z_m for m in scene.measured}

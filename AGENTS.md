@@ -12,6 +12,10 @@
    `~/.visionx/anthropic_api_key`, **nunca** como `ANTHROPIC_API_KEY`.
 6. Antes de diseñar o cambiar la red de profundidad (T12/T13): qué tiene que entregarle a la app
    y con qué datos se la evalúa está en [INCERTIDUMBRE-Y-GT](docs/INCERTIDUMBRE-Y-GT.md).
+7. Para medir los modos para el informe (M8 buscar, M10 voz / leer / describir), en dos
+   sesiones con la cámara: [MEDICION-MODOS](docs/MEDICION-MODOS.md).
+8. Para el póster y el informe: datos, decisiones con su porqué, resultados con fuente y
+   figuras en [POSTER-INSUMOS](docs/POSTER-INSUMOS.md); el detalle de cada cosa, en BITACORA.
 
 **Leer un plan no autoriza implementarlo.** Respetar el pedido concreto de la persona:
 planificación = documentación; implementación = código del alcance solicitado.

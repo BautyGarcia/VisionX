@@ -12,6 +12,11 @@ la [sección 2](#2-mini-dataset-con-ground-truth).
 
 ## 1. Conexión de la salida de la red con Sonnet
 
+**Estado (19/11, noche): implementada del lado de la app y medida** (BITACORA, «T13: la
+incertidumbre llega a la voz»). Falta que el ubicador llene `z_bajo_m` / `z_alto_m` con
+`visionx.shared.uncertainty.laplace_interval` y el factor de b ajustado en val: hasta entonces
+todo se dice como «medida precisa», igual que antes.
+
 ### 1.1 Principio
 
 **El código decide qué tan segura es una distancia; Sonnet solo la dice con palabras.** Sonnet
@@ -121,6 +126,9 @@ para C se consigue, si se puede, en la facultad.
 | *Opcional: Booster* | [Booster](https://cvlab.unibo.it/booster-web/) (U. Bologna, CVPR 2022): 64 interiores reales con disparidad densa, sin labels de objeto | Solo si sobra tiempo | — |
 
 ### 2.2 GT-sintético-ELP: cómo se genera
+
+**Estado (19/11, noche): generado y verificado** — 1440 vistas, 15 088 objetos; cómo
+reproducirlo, verificarlo y evaluar en [GT-SINTETICO](GT-SINTETICO.md).
 
 - **Cámara:** intrínsecos y separación de la calibración vigente de la ELP (solo lectura de
   `calibration/`), imagen rectificada a 1280×720; altura 1,2–1,4 m, inclinación −15° a 0°,

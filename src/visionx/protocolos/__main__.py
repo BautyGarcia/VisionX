@@ -27,6 +27,10 @@ def main(argv=None) -> int:
             ev.add_argument("--frames", type=int, default=3)
         if metric == "m8":
             ev.add_argument("--traza", type=Path, help="una traza para todas las filas")
+            draft = commands.add_parser("borrador", help="planilla sugerida desde una traza")
+            draft.add_argument("--traza", type=Path, required=True)
+            draft.add_argument("--salida", type=Path, required=True)
+            draft.add_argument("--ambiente", required=True)
         if metric == "ocr":
             ev.add_argument("--imagen", choices=("original", "rectified"), default="original")
         if metric == "voz":
@@ -57,6 +61,13 @@ def main(argv=None) -> int:
 
             for device in input_devices():
                 print(f"{device['index']}: {device['name']} [{device['api']}]")
+            return 0
+        if args.accion == "borrador":
+            from .usage import borrador
+
+            rows = borrador(args.traza, args.salida, args.ambiente)
+            revisar = sum(r["resultado_real"].startswith("REVISAR") for r in rows)
+            print(f"{len(rows)} búsquedas en {args.salida}; {revisar} para revisar a mano")
             return 0
         if args.accion == "grabar":
             from .voice import record

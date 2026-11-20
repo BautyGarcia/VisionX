@@ -425,6 +425,40 @@ class FallbackSynth:
             prefetch(text)
 
 
+def set_speech_rate(synth, speech_rate: float) -> bool:
+    """Cambia la velocidad de la voz de Edge sobre la marcha (envoltorios incluidos).
+
+    La caché en disco cambia de carpeta (la clave incluye la velocidad) y la de memoria se vacía:
+    las frases a la velocidad nueva se sintetizan la primera vez. Devuelve si había Edge.
+    """
+    from visionx.voice.output import CachedSynth
+
+    found = False
+
+    def walk(s) -> None:
+        nonlocal found
+        if s is None:
+            return
+        for attr in ("synth", "primary", "fallback"):
+            walk(getattr(s, attr, None))
+        if isinstance(s, EdgeSynth):
+            s.rate = edge_rate(speech_rate)
+            s.voice_id = f"edge:{s.voice}{'' if s.rate == '+0%' else s.rate}"
+            found = True
+        elif isinstance(s, DiskCachedSynth):
+            base = s.folder.parent.parent
+            s.voice_id = getattr(s.synth, "voice_id", s.voice_id)
+            safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in s.voice_id)
+            s.folder = base / safe / "v1"
+        elif isinstance(s, CachedSynth):
+            with s._lock:
+                s._cache.clear()
+            s.voice_id = getattr(s.synth, "voice_id", None)
+
+    walk(synth)
+    return found
+
+
 def build_synth(settings: VoiceSettings):
     """Sintetizador de la app según `audio.tts.engine`, con caché en memoria (y preload()).
 

@@ -351,6 +351,13 @@ audio:
     backend: auto           # auto: MLX (GPU de Apple) si está instalado y bajado; si no, faster-whisper | mlx | faster-whisper
     mlx_models_dir: weights/whisper-mlx  # `python -m visionx.voice descargar --whisper-mlx small`
 
+persona:
+  # La altura de la persona se dice por voz («mido 1,75») y se guarda en ~/.visionx/persona.json.
+  # Con usar_piso, la altura e inclinación de la cámara salen del piso visto en la profundidad
+  # (corrige que la cámara del pecho se incline); sin él, la cámara al 72 % de la estatura y
+  # nivelada. Ver BITACORA 2026-11-19 «la altura de la persona, el piso y la pantalla del stand».
+  usar_piso: true
+
 assistant:
   # Claude con imagen para leer, describir y preguntas libres (T10/T11, decidido el 18/11 tras
   # comparar Opus/Sonnet/Haiku en 20 casos: outputs/vlm/comparativa.html). Necesita internet,
@@ -374,10 +381,11 @@ proximity:
   # Alerta de cercanía (T20, app/proximity.py): obstáculo en la zona central a menos de near_m,
   # sin contar el piso (altura estimada con la cámara nivelada a camera_height_m), sostenido
   # hold_s con profundidad fresca. Callada en leer/buscar/distancia. No es navegación validada.
-  # Apagada por defecto (19/11): con B0 en los clips dio ~1,7 avisos/min en la recorrida por la
-  # casa, varios falsos (pared lisa, contraluz, techo) y avisos justo después de «Llegaste».
-  # Probarla en vivo con CREStereo: `proximity: {enabled: true}` en configs/local.yaml.
-  enabled: false
+  # Encendida solo MIENTRAS GUÍA (Tomás, 19/11): avisa de otra cosa en el camino; el objetivo
+  # (su máscara) no cuenta. Con B0 en clips, siempre encendida daba ~1,7 avisos/min con varios
+  # falsos (pared lisa, contraluz, techo): por eso solo_en. `only_modes: []` = siempre.
+  enabled: true
+  only_modes: [search]
   near_m: 0.8
   zone_x: [0.3, 0.7]        # columnas centrales (fracción del ancho)
   zone_y: [0.15, 0.75]      # filas; las de abajo suelen ser piso
@@ -391,5 +399,6 @@ proximity:
   hold_s: 0.4
   max_age_s: 0.8            # profundidad más vieja: alerta suspendida
   cooldown_s: 6.0
-  silent_modes: [read, search, distance]
-  phrase: Cuidado, algo muy cerca adelante.
+  silent_modes: [read, distance]   # leer y distancia: acercarse es lo pedido
+  guide_modes: [search]          # mientras guía: el objetivo (su máscara) no es un obstáculo
+  phrase: "Cuidado: algo adelante, a {metros}."

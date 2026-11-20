@@ -87,6 +87,257 @@ evaluarla con `red_promedio`; o (2) cerrar la red como resultado negativo docume
 lo que falta de T12 (banco ELP con stickers para calibrar b, confianza de la alineación,
 integración).
 
+## 2026-11-19 (noche) — T08/T09/T20: «Hola VisionX», velocidad y largo por voz, obstáculos al guiar
+
+**Tareas:** T08, T09, T11, T20, T07. **Persona/agente:** Tomás (pedido) / Claude Code.
+**Rama:** `b/hola-visionx`.
+
+**Pedido de Tomás.** Un saludo que active todo y explique cómo funciona, pida la altura y diga
+qué se puede configurar; velocidad y largo de las respuestas configurables por el usuario; avisar
+obstáculos mientras guía; volver a ver los FPS de cada flujo en la pantalla.
+
+**Hecho.**
+- **«Hola VisionX»** (también «ayuda», «¿qué podés hacer?»; con una orden en la misma frase,
+  vale la orden): presentación en frases cortas (`app/onboarding.py`) con qué hace, cómo se le
+  habla, la alerta y lo configurable; si no sabe la estatura la pregunta y acepta un número
+  suelto («1,75») durante 30 s. Al arrancar: «VisionX está listo. Decí: hola VisionX…».
+- **Velocidad de la voz** por voz («hablá más rápido / más despacio / velocidad normal»): pasos
+  0,9–1,45; cambia Edge en caliente (`engines.set_speech_rate`: la caché en disco cambia de
+  carpeta, la de memoria se vacía).
+- **Largo de las respuestas** («respuestas más cortas / más detalladas / normales»): el prompt de
+  Claude pide una frase o hasta cinco (`assistant.detail`, `system_prompt`).
+- Las preferencias y la estatura se guardan juntas en `~/.visionx/persona.json` (antes guardar
+  la altura pisaba el archivo) y se restauran al arrancar.
+- **Obstáculos mientras guía** (`proximity`): encendida solo en buscar (`only_modes`); los
+  píxeles del objetivo (su máscara, dilatada) no cuentan; dice la distancia sin bip; descarta
+  el piso con la altura real de la cámara (estatura y piso) en vez de 1,3 m fijo.
+- **Pantalla:** chips por flujo arriba (Cámara, YOLO, la profundidad con su nombre, Preciso) con
+  FPS, latencia y salud.
+- Frases nuevas en el precalentado de la voz.
+
+**Evidencia.** Tests nuevos `tests/test_hola.py` (21); suite completa OK. Probado sobre
+`dev-1114-distancias` con órdenes escritas: la presentación sale entera y en orden y pregunta la
+altura; la búsqueda siguiente la corta (como cualquier orden nueva).
+
+**Límites.** Sin probar en vivo ni con micrófono. La alerta al guiar no se midió (falsos avisos
+por minuto): ver M8 en MEDICION-MODOS.
+
+## 2026-11-19 (noche) — T15/T12: robustez de CREStereo con el GT sintético (4 cámaras)
+
+**Tareas:** T15, T12. **Persona/agente:** Tomás / Claude Code (PC de escritorio, CPU).
+**Rama:** `b/altura-dashboard`. Resúmenes en `datasets/gtsynth/val-*.json` (los CSV por objeto,
+en `outputs/gtsynth/`).
+
+**Hecho.** `gtsynth evaluar` en val (4 escenas, 160 vistas, 3376 objetos medidos con la máscara
+exacta) con CREStereo preciso (1280×720, 4 iteraciones, 2 pasadas), sin U-Net (el checkpoint
+está en la Mac), suponiendo siempre la geometría de la ELP. ~8 s por vista en CPU, 21 min por
+cámara.
+
+| Cámara | 0,5–1 m | 1–2 m | 2–3 m | 3–4 m |
+|---|---|---|---|---|
+| ELP calibrada | **0,7 %** (P95 2) | **0,9 %** (3) | **1,2 %** (4) | **1,6 %** (4) |
+| Hermana ×0,5 (otra unidad, rangos chicos) | 23,8 % | 49,8 % | 39,2 % | 35,8 % |
+| Hermana ×1 (otra unidad, rangos completos) | 43,6 % | 54,0 % | 63,1 % | 59,1 % |
+| Distinta (90°, 12 cm), supuesta ELP | −68,8 % | −68,8 % | −68,8 % | −68,8 % |
+| Distinta + un objeto a distancia conocida (por vista) | 3,7 % | 1,5 % | 1,2 % | 1,5 % |
+
+(Error medio relativo; el de la distinta es sesgo.)
+
+**Qué dice.** Con la cámara calibrada, CREStereo + el ubicador miden objetos con 1–2 % hasta
+4 m. Otra unidad del mismo modelo sin corregir rompe los metros (25–65 %): es lo que tiene que
+arreglar la red de entrada (decisión (a)); el sesgo es chico y el error va para los dos lados
+(cada hermana es distinta). La cámara distinta es un error de escala puro (fx·B supuesto 36
+contra 115 real): un solo objeto a distancia conocida lo lleva a 1–4 %, que es el paso que la app
+ya pide («calibrá, está a 2 metros»).
+
+**Límites.** Sin U-Net: falta la cobertura del intervalo y el factor de b (Bauty, en la Mac).
+La distancia conocida es exacta y la cámara distinta no tiene otra distorsión: optimista. Una
+semilla de hermanas por vista. Val, no test.
+
+**Próximo paso.** Bauty: la misma tabla con la red de entrada (fila «hermana corregida») y con la
+U-Net (cobertura y factor de b).
+
+## 2026-11-19 (noche) — T09/T07: la altura de la persona, el piso y la pantalla del stand
+
+**Tareas:** T09, T07, T16. **Persona/agente:** Tomás (pedido) / Claude Code. **Rama:**
+`b/altura-dashboard`.
+
+**Altura.**
+- `modes/body.py`: la estatura de la persona («mido 1,80», «mi altura es 1,62», «mido un metro
+  ochenta y cinco»; guardada en `~/.visionx/persona.json`) y la cámara (altura e inclinación).
+  Bandas por proporción del cuerpo: cabeza ≥ 0,87, pecho 0,66–0,87, cintura 0,54–0,66, **cadera**
+  0,38–0,54 (nueva), rodillas 0,14–0,38 de la estatura. Sin datos: 1,70 m y la cámara al 72 %.
+  La app pide la altura al arrancar si nunca se dijo.
+- `app/floor.py`: el piso por RANSAC en la mitad de abajo de la profundidad; la orientación la da
+  el plano con más apoyo y, entre los paralelos, el más bajo; `FloorTracker` aplica la mediana
+  de los últimos 7 solo si es estable (< 12 cm, < 8°).
+- **Probado.** Piso sintético exacto: altura ±1 cm e inclinación ±0,5°. GT sintético (val): con
+  piso a la vista la inclinación queda a ~1° de la verdadera y la altura coincide con el piso
+  etiquetado (1,46 contra 1,44 m); la altura de `vista.json` resultó ~18 cm corrida (navmesh,
+  anotado en GT-SINTETICO). Clips reales con SGBM: el piso brillante de `distancias` da ajustes
+  que oscilan ±15 cm (reflejos), por eso la compuerta de estabilidad. Elegir siempre el plano más
+  bajo empeoró ese clip (reflejos debajo del piso): se probó y se descartó.
+
+**Pantalla del stand** (`app/stand.py`, vista por defecto de `ejecutar`; `v` alterna, `f`
+pantalla completa): cámara con objetos rotulados por nivel de certeza y la flecha; profundidad
+(con el nombre del modelo real) e incertidumbre (medio ancho del 90 %, verde ≤ 10 %, rojo
+≥ 25 %); radar desde arriba con objetos y margen; subtítulos de la conversación (tramos agrupados
+por orden, sin repetir la guía, sin la confirmación); tiempos de la última orden (Whisper,
+Claude, primera palabra), FPS y el cuerpo. Textos con Pillow (tildes y ñ). Dos rondas sobre
+`dev-1114-distancias` corrigieron rótulos encimados, el modelo mal nombrado, la guía repetida, la
+confirmación contada como primera palabra y la captura tomada después de cerrar.
+
+**Rediseño (pedido de Tomás tras ver la primera versión):** paleta azul noche con un solo acento,
+paneles redondeados; los objetos con su **máscara** de YOLO-seg en tonos suaves (como en vivo) en
+vez de cajas verdes; rótulos chicos (nombre + distancia en el color de su certeza, máximo 6, sin
+encimarse); conversación en burbujas; el tiempo como barra voz a texto → Claude → voz con el
+total. `persona.usar_piso` (por defecto sí) apaga el piso y deja solo las proporciones.
+
+**Visor del GT** (`gtsynth visor`): láminas para la pantalla del stand y el póster (vista con
+los objetos pintados y su distancia exacta, profundidad, el conjunto y la robustez); exporta JPG.
+
+**Evidencia.** Suite 1244 OK (tests nuevos: `test_altura.py`, `test_stand.py`).
+
+**Límites.** Sin probar en la Mac ni con CREStereo en vivo; el mapa de incertidumbre solo aparece
+con la U-Net cargada. La altura de la cámara del piso no está validada contra una medición real.
+
+## 2026-11-19 (noche) — Plan de cierre y de la exposición; insumos para el póster
+
+**Tareas:** T07, T09, T15, T16. **Persona/agente:** Tomás (decisiones) / Claude Code.
+**Rama:** `b/poster-insumos`.
+
+**Decisiones de Tomás.**
+- **Portátil (T19):** primero se muestra la demo funcional al profesor con la cámara en la Mac y se
+  pregunta qué presta el laboratorio (Pi 5 o 4, placa de sonido USB, corbatero, pulsador, power
+  bank, arnés de pecho). Arquitectura: la Pi solo captura, graba y reproduce; todo el cómputo
+  sigue en la Mac. Auricular: uno solo (Bluetooth, solo salida) para no perder el ambiente, o
+  conducción ósea. Tomás se encarga de las conexiones.
+- **Altura de la persona:** se pregunta una vez («medí 1,80») y se guarda, y además se estima la
+  altura y la inclinación real de la cámara detectando el piso con la profundidad; las bandas del
+  cuerpo («a la altura de tu cintura») se calculan para esa persona.
+- **Dashboard rediseñado para el stand:** pantalla completa con cámara + flecha, profundidad, mapa
+  de incertidumbre, radar con objetos y su margen, subtítulos de la conversación y medidor de
+  latencia. (El tercer panel actual es una vista desde arriba de la profundidad, de
+  diagnóstico; no tiene que ver con la incertidumbre.)
+- **Exposición:** setup para que el público pruebe los 4 modos; «probalo vos» con los ojos
+  vendados; «sabe cuándo no sabe» (vidrio/espejo); otra cámara (segunda ELP y, si se consigue,
+  una distinta); visor del GT sintético con la curva de robustez.
+- **Póster A0:** lo compila Bauty con ayuda de Tomás; tiene que contar datos, infraestructura,
+  datasets, resultados intermedios, lo que no sirvió y por qué.
+
+**Hecho.** [POSTER-INSUMOS](POSTER-INSUMOS.md): mensaje central, línea de tiempo, arquitectura e
+infraestructura, decisiones con su porqué, resultados con número y fuente, datasets, resultados
+negativos, el ciclo probar → corregir del 19/11 y figuras sugeridas, con lo pendiente marcado.
+Enlazado desde AGENTS (paso 8).
+
+**Qué falta para cerrar diseño, software y modelo.**
+- Bauty: red de entrada (entrenando) y su evaluación con el GT sintético; integrarla (corrección,
+  confianza, estados, `calibrar_distancia`); U-Net a Drive, factor de b en val y margen por objeto
+  en el ubicador; banco ELP s1.
+- Tomás / Claude Code: curva de robustez (corriendo); sesiones M8 y M10 con Bauty; M9 con la traza
+  rápida; altura + piso; dashboard del stand; material de la exposición.
+- Los dos: test congelado una vez; congelar 4/12; póster; informe después.
+
+## 2026-11-19 (noche) — T15/T12: GT sintético de Replica con la geometría de la ELP, generado
+
+**Tareas:** T15, T12, T13. **Persona/agente:** Tomás (decisión A + C) / Claude Code. **Rama:**
+`b/gt-sintetico` (sobre `b/incertidumbre-voz`: usa `shared.uncertainty`).
+
+**Hecho.**
+- `scripts/gt_sintetico/render_habitat.py` (entorno de Habitat-Sim, en WSL): pares rectificados
+  con la geometría de la ELP (fx 601 px, 116°, 5,98 cm) y de una cámara `distinta` (90°, 12 cm),
+  Z exacta e instancias del ojo izquierdo, apuntando a objetos desde 0,5–4 m a 1,2–1,4 m de altura.
+- `visionx.gtsynth`: lectura, tabla de objetos con la misma distancia de referencia que el
+  ubicador (percentil 20 de Z visible), clases de Replica -> COCO, partición fija por escena
+  (8 train / 4 val / 6 test congelado), cámaras hermanas al vuelo con el generador de etapa 2 de A
+  (solo lectura), `verificar` y `evaluar` (CREStereo + ubicador con la máscara exacta; error por
+  rango, cobertura del 90 % y factor de b para val). Tests: `tests/test_gtsynth.py`.
+- Guía: [GT-SINTETICO](GT-SINTETICO.md).
+
+**Evidencia.** 1440 vistas (720 `elp` + 720 `distinta`) en 65 min, 12 GB, en Drive
+`VisionX-artefactos/gt-sintetico-elp/`. Verificación de 108 vistas (3 por escena y cámara): la
+izquierda reconstruida desde la derecha con la Z del render tiene 2,9 niveles de gris de error
+medio en zonas con textura (ELP; 3,5 la distinta) contra 13,3 (23,9) con ±10 % de disparidad:
+la convención de profundidad, el centro y la separación son los correctos. 15 088 objetos `elp`;
+con clase del detector y a 0,5–4 m: 2413 train, 1115 val, 1990 test.
+
+**Problemas en el camino.** Habitat-Sim no corre en Windows: WSL + micromamba sin `sudo`, faltaba
+`libOpenGL.so.0` (conda-forge `libopengl`) y con `gpu_device_id = 0` busca CUDA (AMD: -1). Con la
+config del dataset de Replica dibuja `mesh.ply` con PTex (no soportado) y sale negro: se carga
+`mesh_semantic.ply` directo. La primera verificación marcaba «mal» vistas de paredes lisas (la
+mediana da 0 con cualquier disparidad): se mide solo en píxeles con textura.
+
+**Límites.** Ver GT-SINTETICO: escaneo estático sin gente, huecos de escaneo en algunos FRL,
+texturas por vértice, pinhole ideal sin ruido. Es la cantidad; la realidad la da el banco ELP (C).
+
+**Próximo paso.** Bauty (Mac, con la U-Net): `gtsynth evaluar` en val con `elp`, `hermana-0.5`,
+`hermana-1` y `distinta`; con val, el factor de b. Test una sola vez, al final.
+
+## 2026-11-19 (noche) — T15: guía para medir los modos (M8, M10) y M8 al día con buscar
+
+**Tareas:** T15, T09. **Persona/agente:** Tomás / Claude Code. **Rama:** `b/medicion-modos`.
+
+**Hecho.**
+- [MEDICION-MODOS](MEDICION-MODOS.md): las métricas de los modos que faltan para el informe en dos
+  sesiones con la Mac (Bauty en la cámara, Tomás por Discord), con los protocolos que ya existían
+  (`python -m visionx.protocolos`), los umbrales de TECNICO fijados antes de medir y dónde queda
+  cada número (`datasets/modos/`, Drive y BITACORA). Enlazada desde AGENTS (paso 7).
+- M8 al día con la búsqueda nueva: el falso aviso es también «Veo …» (la guía «centrar» no tiene
+  bip; `falsos_avisos_por_min`), y `exito_s` puede quedar vacío: se toma de la traza cuando la
+  persona dice «la encontré».
+- `protocolos m8 borrador`: arma la planilla desde la traza, una fila por «buscá…», con tiempos y
+  resultado sugerido (encontrado / cancelar / pérdida; lo que terminó con «terminá» queda para
+  revisar a mano). Tests en `tests/test_protocolos.py`.
+
+**Próximo paso.** Agendar las dos sesiones con Bauty.
+
+## 2026-11-19 (noche) — T13: la incertidumbre llega a la voz (tres niveles) y se verifica
+
+**Tareas:** T13, T11, T15. **Persona/agente:** Tomás (pedido; devolución de la cátedra) / Claude
+Code. **Rama:** `b/incertidumbre-voz`. Diseño en
+[INCERTIDUMBRE-Y-GT](INCERTIDUMBRE-Y-GT.md#1-conexión-de-la-salida-de-la-red-con-sonnet).
+
+**Hecho.**
+- `shared/uncertainty.py`: `laplace_interval` (b de Laplace -> intervalo del 90 % en metros, con
+  factor k) y `relative_width`. Una sola definición para el ubicador, el GT y la app.
+- Contrato: `SpatialObject.z_bajo_m` / `z_alto_m` (opcionales; `z_alto_m` None = sin cota
+  superior), validados (z_m dentro del intervalo).
+- `measure()`: niveles **precisa** (medio ancho ≤ 10 %), **aproximada** (≤ 25 %, «a unos 2,5
+  metros») y **no segura** (sin número: «no puedo medir bien a qué distancia está»); umbrales
+  `modes.precise_rel` / `approx_rel`. Sin intervalo, como antes.
+- Lo que recibe Claude (`distance_fact`, modos distancia y describir/preguntas): cada distancia
+  con su nivel explícito y, si el estimador avisa, «Estado de la cámara: …». Prompt de sistema con
+  las reglas de cada nivel; en distancia, los metros primero.
+- Verificación (`verify_distances`): un tramo con una distancia que no está en lo medido (inventada
+  o afinada) no se dice; si se descarta todo, el modo usa su respaldo local.
+- Arreglos de frases que aparecieron al armar el banco: «unos 1 metros» -> «más o menos 1 metro»
+  y «unos 100 centímetros» -> «1 metro».
+- Banco: `python -m visionx.assistant banco-incertidumbre` (60 casos, 6 grupos × 10, sobre un
+  cuadro real de `dev-1114-distancias`). Tests: `tests/test_incertidumbre_voz.py` (11).
+
+**Evidencia (Sonnet 5.5, 19/11, 0,35 USD; `datasets/incertidumbre/banco-incertidumbre.csv|json`).**
+
+| Métrica | Resultado |
+|---|---|
+| Fidelidad numérica en el texto crudo de Claude (sin números fuera de lo medido) | **60/60** |
+| Fidelidad de lo que se dice (después de verificar) | 60/60 (0 tramos descartados) |
+| Nivel respetado (exacto / «unos» / ningún número) | **60/60** (10/10 en cada grupo) |
+| Estado de la cámara dicho primero | 10/10 |
+| Metros en el primer tramo (una distancia) | precisa 7/10, aproximada 8/10 |
+| Primer texto / respuesta completa (mediana) | 0,64 s / 1,49 s |
+
+Metros en el primer tramo: con varios objetos (0/10) es a propósito (primero «Hay tres cosas.»,
+tramo corto); los 3 de «precisa» son casos donde Claude vio en la imagen otro objeto parecido y
+aplicó la regla de varios.
+
+**Límites.** Los intervalos del banco son armados (no salen todavía de la red): mide si Claude
+respeta los niveles, no si los niveles están bien calibrados (eso es el GT sintético + el banco
+ELP). En 7 casos dijo «a unos 1 metro»; después del banco la etiqueta de ese caso pasa a pedir
+«más o menos» (sin volver a medir). Un cuadro, una semilla.
+
+**Próximo paso.** Bauty: llenar `z_bajo_m` / `z_alto_m` en el ubicador con `laplace_interval` y el
+factor de b de `gtsynth evaluar` (val). Tomás / Claude Code: GT sintético completo.
+
 ## 2026-11-19 (noche) — T08/T09: la frase de distancia ya no se corta al vencer; «maus»
 
 **Tareas:** T08, T09. **Persona/agente:** Bauty (vivo, traza `outputs/beta/voz-cortes.jsonl`,
@@ -1000,6 +1251,7 @@ caché.
 
 **Próximo paso.** Precalentar la caché con las frases frecuentes de la guía antes de la expo y
 probar la voz en el bucle con micrófono (Tomás).
+
 ## 2026-11-18 — T12: compuerta de CREStereo (wrapper, latencia, cinta y robustez)
 
 **Tarea:** T12. **Persona/agente:** Bauty / Claude Code. **Rama:** `a/T12-compuerta-crestereo`
@@ -1528,6 +1780,7 @@ propios para M10.
 - Cámaras: solo está conectada la C922; la ELP no se probó en esta PC.
 
 **Límites.** Ninguna medición de esta PC representa la Mac de la demo.
+
 ## 2026-11-17 — T09 (parte A): ubicación espacial en `depth/spatial/`
 
 **Tarea:** T09, parte de A. **Persona/agente:** Bauty / Claude Code (coordinador + subagente).

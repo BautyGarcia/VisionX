@@ -23,6 +23,26 @@ REPEAT = "repetir"
 # La búsqueda no termina sola (Tomás, 19/11): termina cuando la persona dice que lo encontró o
 # que quiere terminar. «dejá de buscar», «pará» y demás siguen siendo cancelar.
 FOUND = "encontrado"
+HEIGHT = "altura"  # «mido 1,80» -> objetivo "altura:1.8"
+INTRO = "hola"  # «Hola VisionX», «ayuda», «¿qué podés hacer?»: la presentación interactiva
+# Cómo habla VisionX, a pedido de la persona: "voz:rapido|lento|normal" y
+# "detalle:corto|largo|normal".
+VOICE = "voz"
+DETAIL = "detalle"
+_INTRO = re.compile(
+    r"^((hola|buenas|buen dia|buenos dias|buenas tardes|buenas noches)( vision( ?x)?)?"
+    r"|vision ?x)( como (estas|andas|va))?$"
+    r"|^(ayuda|ayudame|que podes hacer|que sabes hacer|como funcionas|como te uso|"
+    r"que puedo (decir|pedir|configurar))\b"
+)
+_FASTER = re.compile(r"\b(mas rapido|mas ligero|acelera\w*)\b")
+_SLOWER = re.compile(r"\b(mas despacio|mas lento|mas pausado)\b")
+_SPEED_RESET = re.compile(r"\b(velocidad normal|a velocidad normal|velocidad de siempre)\b")
+_SHORTER = re.compile(r"\b(mas cort\w+|respuestas cortas|resumi\w*|habla menos|menos detalle)\b")
+_LONGER = re.compile(r"\b(mas larg\w+|mas detallad\w+|con mas detalle|respuestas largas|"
+                     r"mas completo)\b")  # fmt: skip
+_DETAIL_RESET = re.compile(r"\b(respuestas normales|largo normal|detalle normal)\b")
+_ABOUT_VOICE = re.compile(r"\b(habla\w*|deci\w*|respond\w*|respuestas?|contesta\w*|voz|lee\w*)\b")
 END_SEARCH = "terminar-busqueda"
 READ_ALL = "todo"  # «leé todo»: lectura completa por bloques, sin resumir
 CALIBRATE = "calibrar"  # «calibrá, está a 2 metros» -> objetivo "calibrar:2"
@@ -175,6 +195,26 @@ def find_object(text: str, catalog: ObjectResolver) -> str | None:
     return None
 
 
+def _preference(plain: str) -> str | None:
+    """«hablá más rápido» -> "voz:rapido"; «respuestas más cortas» -> "detalle:corto"."""
+    if _SPEED_RESET.search(plain):
+        return f"{VOICE}:normal"
+    if _DETAIL_RESET.search(plain):
+        return f"{DETAIL}:normal"
+    # «más rápido / más despacio» casi nunca es otra cosa; «más corto» puede ser una pregunta
+    # («¿cuál es más corto?»): ese pide que hable de la voz o que la frase sea corta.
+    if _FASTER.search(plain):
+        return f"{VOICE}:rapido"
+    if _SLOWER.search(plain):
+        return f"{VOICE}:lento"
+    about = bool(_ABOUT_VOICE.search(plain)) or len(plain.split()) <= 3
+    if about and _SHORTER.search(plain):
+        return f"{DETAIL}:corto"
+    if about and _LONGER.search(plain):
+        return f"{DETAIL}:largo"
+    return None
+
+
 class CommandParser:
     """Interpreta frases en español con reglas fijas. No tiene estado: la misma frase da
     siempre la misma interpretación."""
@@ -186,6 +226,14 @@ class CommandParser:
         self.questions = questions
 
     def parse(self, utterance: str) -> Interpretation:
+        plain = normalize(utterance).strip(" ¿?¡!.,")
+        plain = re.sub(r"[¿?¡!.,;:]", " ", plain)
+        plain = " ".join(plain.split())
+        if _INTRO.search(plain):
+            return Interpretation(utterance, Mode.CONTROL, INTRO, "hola")
+        pref = _preference(plain)
+        if pref is not None:
+            return Interpretation(utterance, Mode.CONTROL, pref, "preferencia")
         text = clean(utterance)
         words = text.split()
         if not words:
@@ -202,6 +250,14 @@ class CommandParser:
             return Interpretation(utterance, Mode.CONTROL, FOUND, "encontrado")
         if _END_SEARCH.search(text):
             return Interpretation(utterance, Mode.CONTROL, END_SEARCH, "terminar-busqueda")
+        from visionx.modes import body
+
+        if body.is_height_statement(utterance):
+            h = body.parse_height(utterance)
+            if h is None:
+                reply = "No te entendí la altura. Decime, por ejemplo: mido 1,75."
+                return Interpretation(utterance, Mode.CONTROL, None, "altura-sin-numero", reply)
+            return Interpretation(utterance, Mode.CONTROL, f"{HEIGHT}:{h:g}", "altura")
         if _CALIBRATE.search(text):
             from visionx.app.calibrate import parse_meters
 

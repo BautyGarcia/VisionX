@@ -32,41 +32,46 @@ def run(alert, frames):
 
 
 def test_wall_close_ahead_alerts_once_after_hold():
-    a = ProximityAlert(ProximitySettings(enabled=True), geometry=G)
+    a = ProximityAlert(ProximitySettings(enabled=True, only_modes=()), geometry=G)
     said = run(a, [(0.6, 0.1 * i, i) for i in range(1, 12)])
-    assert said == ["sonido:bip-grave", "Cuidado, algo muy cerca adelante."]
+    assert said == ["Cuidado: algo adelante, a 60 centímetros."]  # sin bip, con la distancia
     assert abs(a.last_z_m - 0.6) < 1e-6
 
 
 def test_far_or_floor_does_not_alert():
-    a = ProximityAlert(ProximitySettings(enabled=True), geometry=G)
+    a = ProximityAlert(ProximitySettings(enabled=True, only_modes=()), geometry=G)
     assert run(a, [(1.5, 0.1 * i, i) for i in range(1, 12)]) == []
-    floor = ProximityAlert(ProximitySettings(enabled=True), geometry=G)
+    floor = ProximityAlert(ProximitySettings(enabled=True, only_modes=()), geometry=G)
     said = [s for i in range(1, 12) for s in floor.observe(view(None, 0.1 * i, i, floor=True),
                                                            int(0.1 * i * SEC))]  # fmt: skip
     assert said == []
 
 
 def test_stale_depth_and_silent_modes_suspend_the_alert():
-    a = ProximityAlert(ProximitySettings(enabled=True), geometry=G)
+    a = ProximityAlert(ProximitySettings(enabled=True, only_modes=()), geometry=G)
     stale = [a.observe(view(0.5, 0.1 * i, i), int((0.1 * i + 2) * SEC)) for i in range(1, 12)]
     assert not any(stale)
-    reading = ProximityAlert(ProximitySettings(enabled=True), geometry=G, active_mode="read")
+    reading = ProximityAlert(
+        ProximitySettings(enabled=True, only_modes=()), geometry=G, active_mode="read"
+    )
     assert run(reading, [(0.4, 0.1 * i, i) for i in range(1, 12)]) == []
 
 
 def test_rearms_only_after_clearing_and_respects_cooldown():
-    a = ProximityAlert(ProximitySettings(enabled=True, cooldown_s=2.0), geometry=G)
+    a = ProximityAlert(ProximitySettings(enabled=True, cooldown_s=2.0, only_modes=()), geometry=G)
     first = run(a, [(0.6, 0.1 * i, i) for i in range(1, 8)])
     still = run(a, [(0.6, 1 + 0.1 * i, 10 + i) for i in range(1, 20)])  # sigue cerca: no repite
     cleared = run(a, [(2.0, 3 + 0.1 * i, 40 + i) for i in range(1, 5)])
     again = run(a, [(0.6, 4 + 0.1 * i, 60 + i) for i in range(1, 8)])
-    assert len(first) == 2 and still == [] and cleared == [] and len(again) == 2
+    assert len(first) == 1 and still == [] and cleared == [] and len(again) == 1
 
 
-def test_disabled_by_default_and_quiet_after_an_order_ends():
-    assert not ProximitySettings().enabled
-    a = ProximityAlert(ProximitySettings(enabled=True), geometry=G, active_mode="search")
+def test_only_while_guiding_by_default_and_quiet_after_an_order_ends():
+    s = ProximitySettings()
+    assert s.enabled and s.only_modes == ("search",)  # Tomás, 19/11: avisar mientras guía
+    a = ProximityAlert(
+        ProximitySettings(enabled=True, only_modes=()), geometry=G, active_mode="search"
+    )
     run(a, [(2.0, 0.1, 1)])
     a.active_mode = None  # terminó la búsqueda («Llegaste»)
     assert run(a, [(0.5, 0.2 + 0.1 * i, 2 + i) for i in range(1, 20)]) == []  # < quiet_after_s
