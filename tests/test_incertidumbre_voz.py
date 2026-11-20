@@ -219,3 +219,27 @@ def test_aproximada_de_1_metro_pide_mas_o_menos():
     assert (
         distance_fact(m, S) == "a más o menos 1 metro (medida aproximada: decilo con «más o menos»)"
     )
+
+
+# --- nivel de la cámara (plug and play) -----------------------------------------------------
+
+
+def test_el_nivel_de_la_camara_limita_lo_que_dice_la_voz():
+    import dataclasses
+
+    o = obj(1.4, 1.38, 1.42)  # intervalo angosto: con la ELP calibrada, «precisa»
+    assert measure(o, S).certainty == "precisa"
+    aprox = dataclasses.replace(S, camara_nivel="aproximada")
+    m = measure(o, aprox)
+    assert m.ok and m.approximate and "unos" in measure_phrase(m, aprox)
+    assert "aproximada" in distance_fact(m, aprox)
+    sin = dataclasses.replace(S, camara_nivel="sin-estimar")
+    m = measure(o, sin)
+    assert not m.ok and m.reason == "sin-escala"
+    assert "metros" in measure_phrase(m, sin) and not distances_in(measure_phrase(m, sin))
+    assert "no digas ningún número" in distance_fact(m, sin)
+    with pytest.raises(ValueError):
+        ModeSettings(camara_nivel="perfecta")
+    assert ModeSettings.from_config({"modes": {"camara_nivel": "aproximada"}}).camara_nivel == (
+        "aproximada"
+    )
