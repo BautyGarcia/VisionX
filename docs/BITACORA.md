@@ -40,6 +40,36 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T08/T07: panel de audio en la ventana (tecla «a»); el micrófono llegaba en ceros
+
+Tarea: T08, T07. Persona/agente: Bauty / Claude Code. Rama: `a/T08-panel-audio` (sin publicar).
+Problema: en la primera prueba de la interfaz nueva en la Mac, Whisper devolvía texto vacío y la
+app decía «No escuché nada». Medido fuera de la app: los auriculares PRO X y el micrófono de la
+MacBook entregan **100 % de ceros exactos** (2 s cada uno). Es lo que hace macOS cuando la terminal
+que lanza la app (Warp) no tiene permiso de micrófono: no da error, da silencio digital. No se pudo
+leer la base de permisos para confirmarlo; queda como causa más probable, a verificar al activar
+el permiso.
+Hecho (código, local): `app/audio_panel.py` y su conexión en `app/__main__.py`. La tecla **a** abre
+un panel sobre el stand o el diagnóstico con los micrófonos y salidas del sistema de audio por
+defecto; flechas o w/s mueven, Tab cambia de lista, Enter usa el dispositivo, a o Esc cierran. Una
+barra mide el micrófono bajo el cursor y avisa «sin señal» con medio segundo de ceros exactos.
+Elegir una salida hace sonar un bip por ahí. Antes de aplicar se valida con PortAudio; si no abre,
+queda el anterior y el panel muestra el error. Con el panel abierto no se habla ni se sale.
+Vale **solo para la sesión** (decisión de Bauty): al reiniciar manda `audio.*_device` de la config.
+Cada cambio va a la traza como `audio-dispositivo`. `SoundDevicePlayer.set_device` cambia la
+salida recién al empezar la frase siguiente, en el hilo que reproduce, para no cerrar un stream
+en uso. La ventana pasa a `cv2.waitKeyEx` porque las flechas no entran en un byte.
+Evidencia: `tests/test_audio_panel.py` 9 aprobados (teclas en Mac/Windows/Linux, listado por API,
+navegación, medidor con ceros y con ruido, error al abrir, dibujo a 1920×1080 y 1600×900, cambio de
+salida sin reabrir de más); suite completa aprobada; corrida sintética sin ventana de 3 s sin
+errores; capturas del panel revisadas a ojo. **No probado en vivo**: falta abrir la ventana con
+la ELP, mover el panel con las flechas reales de la Mac y oír el bip.
+Límites: con auriculares Bluetooth, abrir el micrófono para la barra baja la calidad del audio
+mientras el panel está abierto. En Windows se muestran solo los dispositivos de la API por
+defecto. Es código del lado B (voz y GUI): Tomás tiene que revisarlo antes de integrarlo.
+Próximo paso: Bauty, activar el permiso de micrófono de Warp y probar el panel en vivo; después,
+PR con revisión de Tomás.
+
 ## 2026-11-19 (noche) — T12/T15: `gtsynth evaluar` con alineación y distancia conocida; factor de b en val; pedido de renders
 
 Tarea: T12, T13, T15. Persona/agente: Bauty / Claude Code. Rama: `a/T12-gt-alineacion`.

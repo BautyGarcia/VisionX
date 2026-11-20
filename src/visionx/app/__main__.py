@@ -7,7 +7,8 @@
         [--retraso-detector MS] [--retraso-profundidad MS]
     uv run python -m visionx.app comparar [--fuente ...] [--detector ...] --csv X
 
-Teclas en la ventana: c = cancelar (botón), espacio = hablar/terminar (con --voz), q = salir.
+Teclas en la ventana: c = cancelar (botón), espacio = hablar/terminar (con --voz), q = salir,
+v = stand/diagnóstico, f = pantalla completa, a = panel de audio (micrófono y salida).
 --consola permite escribir órdenes en la terminal. Con --ordenes, un JSONL {"t_s": 2, "texto":
 "buscá la taza"} reproduce una sesión. Sin --voz, lo que se diría se imprime y no suena.
 
@@ -49,6 +50,7 @@ from visionx.app.spatial import ProvisionalSpatialEstimator
 from visionx.detection.catalog import COCO_CLASSES, ClassCatalog
 from visionx.modes import ModeSettings, build_handlers
 from visionx.shared.config import ROOT, load_config
+from visionx.shared.contracts import AudioEvent, Priority
 from visionx.shared.errors import EstimatorError, InvalidInput, SourceError
 from visionx.shared.interfaces import SpatialEstimator
 from visionx.voice.commands import CommandParser
@@ -290,6 +292,8 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
 
     recording = False
     max_queues: dict[str, int] = {}
+    # Panel de audio (tecla «a»): elegir micrófono y salida en vivo, solo para esta sesión.
+    audio_ui: list[Any] = [None, None]  # [PanelAudio, MedidorNivel]
 
     def dashboard_state() -> DashboardState:
         return DashboardState(
@@ -349,6 +353,97 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     def frame_image():
         return render_stand(stand_state()) if view_mode[0] == "stand" else render(dashboard_state())
 
+    def open_audio_panel() -> None:
+        """Lista los dispositivos de ahora (pudieron conectarse otros) y abre el panel."""
+        from visionx.app.audio_panel import MedidorNivel, PanelAudio, listar, posicion
+
+        try:
+            import sounddevice as sd
+
+            entradas, salidas = listar(sd)
+            default_in, default_out = sd.default.device
+        except Exception as exc:  # sin sounddevice o sin audio en el sistema
+            panel = PanelAudio([], [])
+            panel.abrir()
+            panel.error = f"no se pudo leer el audio del sistema: {exc}"
+            audio_ui[:] = [panel, None]
+            return
+        mic_now = voice[0].device if voice else None
+        out_now = getattr(output.player, "device", None)
+        panel = PanelAudio(
+            entradas,
+            salidas,
+            mic=posicion(entradas, mic_now, default_in),
+            salida=posicion(salidas, out_now, default_out),
+        )
+        panel.abrir()
+        if voice is None:
+            panel.error = "la voz está apagada: arrancá la app con --voz para cambiar el audio"
+        audio_ui[:] = [panel, MedidorNivel(sd)]
+        measure_mic(panel.bajo_cursor())
+
+    def measure_mic(device) -> None:
+        panel, meter = audio_ui
+        if meter is None or device is None:
+            return
+        try:
+            meter.abrir(device)
+        except Exception as exc:
+            meter.cerrar()
+            panel.error = f"{device.nombre} no abre: {exc}"
+
+    def close_audio_panel() -> None:
+        panel, meter = audio_ui
+        if meter is not None:
+            meter.cerrar()
+        if panel is not None:
+            panel.cerrar()
+
+    def audio_panel_key(name: str | None) -> None:
+        """Una tecla con el panel abierto. Usar un dispositivo lo valida antes de aplicarlo."""
+        panel = audio_ui[0]
+        action = panel.manejar(name)
+        if action is None:
+            return
+        kind, device = action
+        if kind == "cerrar":
+            close_audio_panel()
+        elif kind == "medir":
+            measure_mic(device)
+        elif voice is not None:
+            import sounddevice as sd
+
+            try:
+                if kind == "mic":
+                    sd.check_input_settings(device=device.indice, channels=1, dtype="float32")
+                    voice[0].device = device.indice  # vale desde la próxima vez que se hable
+                else:
+                    sd.check_output_settings(device=device.indice, channels=1, dtype="float32")
+                    output.cancel_all()
+                    output.player.set_device(device.indice)
+                    # Bip por la salida nueva: confirma por dónde va a hablar VisionX.
+                    output.submit(
+                        AudioEvent(0, Priority.SHORT, "sonido:bip",
+                                   created_ns=output.clock.now_ns())
+                    )  # fmt: skip
+            except Exception as exc:
+                panel.error = f"{device.nombre} no se puede usar: {exc}"
+                return
+            panel.usar(kind, device)
+            tipo = "entrada" if kind == "mic" else "salida"
+            on_event("audio-dispositivo", {"tipo": tipo, "nombre": device.nombre,
+                                           "indice": device.indice})  # fmt: skip
+
+    def window_image():
+        image = frame_image()
+        panel, meter = audio_ui
+        if panel is None or not panel.abierto:
+            return image
+        from visionx.app.audio_panel import dibujar_panel
+
+        level, silent = meter.nivel() if meter is not None else (None, False)
+        return dibujar_panel(image, panel, level, silent)
+
     window = not args.sin_ventana
     if window:
         import cv2
@@ -385,8 +480,20 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
                 floor_key[0] = joint.frame.key
                 floor.update(joint.depth.depth_m, joint.depth.valid_mask, depth_geometry, elapsed)
             if window:
-                cv2.imshow("VisionX", frame_image())
-                key = cv2.waitKey(30) & 0xFF
+                from visionx.app.audio_panel import tecla
+
+                cv2.imshow("VisionX", window_image())
+                # waitKeyEx: las flechas del panel de audio no entran en un byte.
+                name = tecla(cv2.waitKeyEx(30))
+                if audio_ui[0] is not None and audio_ui[0].abierto:
+                    # Con el panel abierto las teclas son del panel: no se habla ni se sale
+                    # sin querer, y el micrófono lo está usando la barra de nivel.
+                    audio_panel_key(name)
+                    continue
+                key = ord(name) if name is not None and len(name) == 1 else -1
+                if key == ord("a") and not recording:
+                    open_audio_panel()
+                    continue
                 if key == ord("q"):
                     break
                 if key == ord("v"):  # stand <-> diagnóstico
@@ -430,6 +537,8 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
             print(f"captura del dashboard: {args.captura}")
         if sonar is not None:
             sonar.close()
+        if audio_ui[0] is not None:
+            close_audio_panel()  # suelta el micrófono de la barra de nivel
         controller.close()
         pipeline.stop()
         output.wait_idle(timeout_s=5)

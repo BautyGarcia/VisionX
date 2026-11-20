@@ -503,8 +503,21 @@ class SoundDevicePlayer:
         self.last_underflows = 0
         self._stream = None
         self._rate: int | None = None
+        self._next_device: int | str | None = None
+        self._change = False
+
+    def set_device(self, device: int | str | None) -> None:
+        """Usar otra salida desde la próxima frase (panel de audio).
+
+        No cierra el stream acá: lo usa el hilo que reproduce. Se cambia en `_open`, que corre
+        en ese mismo hilo al empezar cada frase, así nunca se cierra un stream a mitad de uso.
+        """
+        self._next_device, self._change = device, True
 
     def _open(self, sample_rate: int) -> None:
+        if self._change:
+            self.close()
+            self.device, self._change = self._next_device, False
         if self._stream is not None and self._rate == sample_rate:
             return
         self.close()
