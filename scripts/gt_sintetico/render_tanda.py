@@ -59,6 +59,13 @@ PERFILES = {
     "cuatro-tercios-90": (1280, 960, fx_de(90, 1280), 0.06),
     "base-larga-20": (1920, 1080, fx_de(100, 1920), 0.20),
     "gran-angular-130": (1920, 1080, fx_de(130, 1920), 0.06),
+    # Geometría publicada de cámaras estéreo conocidas (campo horizontal y separación de la hoja
+    # de datos del fabricante; resolución de un ojo). Solo la geometría: no el sensor.
+    "zed-2": (1920, 1080, fx_de(110, 1920), 0.12),  # Stereolabs ZED 2: 110°, 120 mm
+    "zed-mini": (1920, 1080, fx_de(102, 1920), 0.063),  # Stereolabs ZED Mini: 102°, 63 mm
+    "realsense-d435": (1280, 720, fx_de(87, 1280), 0.05),  # Intel RealSense D435(i): 87°, 50 mm
+    "realsense-d455": (1280, 720, fx_de(86, 1280), 0.095),  # Intel RealSense D455: 86°, 95 mm
+    "oak-d": (1280, 800, fx_de(80, 1280), 0.075),  # Luxonis OAK-D Pro / S2: 80°, 75 mm
     # Solo con --ojo-de-pez y --margen 1: lente de doble esfera de ~180°, para evaluar.
     "ojo-de-pez": (1280, 960, 384.0, 0.06),
 }

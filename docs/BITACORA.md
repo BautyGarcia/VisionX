@@ -40,6 +40,40 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-20 (tarde) — T15: resultados de los videos de «Cámaras» y tope de la distancia conocida
+
+Autor: Claude. Rama `b/video-angosta`.
+
+**Resultados** (`data/stand-video/resumen.json`; mediana del error de Z entre 0,3 y 10 m, mediana
+de los 90 cuadros; CREStereo continuo 640×360 en CPU, ~1,5 s por cuadro; una «otra unidad» por
+cámara y escena, hermana ×1):
+
+| Cámara | Escena | Ideal | Sin corregir | Clásico | Corrimiento (px) |
+|---|---|---|---|---|---|
+| ELP 116° | hotel_0 | 0,62 % | 22,76 % | 1,30 % | −0,11 |
+| ELP 116° | office_2 | 0,51 % | 39,72 % | 1,70 % | +1,82 |
+| Angosta 60° | hotel_0 | 0,36 % | 14,30 % | 1,05 % | −3,79 |
+| Angosta 60° | office_2 | 0,25 % | 18,85 % | 4,54 % | +3,36 |
+| Gran angular 130° | hotel_0 | 0,68 % | 64,82 % | 3,61 % | −1,88 |
+| Gran angular 130° | office_2 | 0,56 % | 66,29 % | 3,54 % | −1,46 |
+| Base 20 cm | hotel_0 | 0,32 % | 9,58 % | 0,42 % | +1,88 |
+| Base 20 cm | office_2 | 0,23 % | 7,62 % | 0,94 % | −1,54 |
+
+**Problema y arreglo:** en la primera tanda la angosta daba 36,6 % (hotel_0) y 15,9 % (office_2)
+con el clásico, peor o casi igual que sin corregir. El corrimiento de la distancia conocida tenía
+un tope fijo de 2 px y con 60° el correcto es ~3,8 px (con focal larga, el mismo yaw corre más
+píxeles): se descartaba y quedaba en 0. Ahora el tope es 2 px × focal / 200 (la focal de la ELP en
+el continuo), al menos 2 px. Se agregó `gtsynth video --solo <variante>` para rehacer una cámara
+y sumarla al resumen.
+
+**Lectura:** el clásico cierra casi todo el hueco en estas cámaras (todas < 5 %). Lo que queda
+está en el gran angular, donde la regla no aplicó los términos de lente (3,5 % contra 0,6 %), y
+en la angosta de office_2. Los números son optimistas: el corrimiento sale del GT (en la app sale
+de una medición) y hay una sola hermana por cámara; con muchas hermanas en el modo preciso, la
+tabla de la red v2 daba 5,6 % para el clásico contra 0,75 % del oráculo. Para encontrar dónde
+se rompe el clásico (y dónde gana la v3) conviene repetir con hermanas más alejadas y varias
+semillas.
+
 ## 2026-11-20 (mediodía) — T15: videos de la pestaña «Cámaras» con CREStereo continuo
 
 Autor: Claude, a pedido de Tomás. Rama `b/video-camaras`.

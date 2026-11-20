@@ -37,6 +37,17 @@ CAMARAS_VIDEO: tuple[tuple[str, str], ...] = (
     # La ELP a resolución completa, como corre la app: a media resolución la regla del clásico
     # (ajustada a 1920×1080) dejaba pasar términos de lente que la unidad no tenía (20/11).
     ("video-elp-full", "ELP de VisionX"),
+    # Geometría publicada de cámaras estéreo conocidas (PLUG-AND-PLAY.md, sección 9): se simula
+    # el ángulo, la separación y la resolución, no el sensor.
+    ("video-realsense-d435", "Geometría de Intel RealSense D435"),
+    ("video-realsense-d455", "Geometría de Intel RealSense D455"),
+    ("video-zed-2", "Geometría de Stereolabs ZED 2"),
+    ("video-zed-mini", "Geometría de Stereolabs ZED Mini"),
+    ("video-oak-d", "Geometría de Luxonis OAK-D"),
+)
+# Las cámaras genéricas del primer video (60°, 130°, base de 20 cm) quedan para evaluar
+# (`gtsynth video --solo video-angosta-60` sigue funcionando con estas mismas variantes).
+CAMARAS_GENERICAS: tuple[tuple[str, str], ...] = (
     ("video-angosta-60", "Angular normal"),
     ("video-gran-angular-130", "Gran angular"),
     ("video-base-larga-20", "Ojos muy separados"),
@@ -75,13 +86,20 @@ def _z(depth, g, w8: int, h8: int, delta_px: float = 0.0) -> np.ndarray:
     return z
 
 
+def _limite_delta(g) -> float:
+    """Corrimiento máximo creíble: 2 px con la focal de la ELP en el continuo (~200 px), y más
+    con focales largas, donde el mismo giro de yaw corre más píxeles (la angosta de 60° pide
+    ~3,8 px; con el tope fijo de 2 px se descartaba y el clásico quedaba en 37 % de error)."""
+    return 2.0 * max(1.0, g.fx / 200.0)
+
+
 def _delta_conocida(depth, g, z_gt: np.ndarray, mascara: np.ndarray) -> float | None:
     """Corrimiento de disparidad que hace coincidir el objeto apuntado con su distancia real.
 
     Mediana, sobre los píxeles del objeto, de la diferencia entre la disparidad medida y la que
     corresponde a su Z real. (El percentil 80 de la disparidad contra el 20 de Z, como el
     ubicador, daba corrimientos de ~1 px de más: los extremos de las dos distribuciones no son
-    los mismos píxeles.) Si sale más de 2 px, el objeto no sirve y no se aplica.
+    los mismos píxeles.) Si pasa `_limite_delta`, el objeto no sirve y no se aplica.
     """
     h, w = depth.disparity_px.shape
     m = cv2.resize(mascara.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
@@ -92,7 +110,7 @@ def _delta_conocida(depth, g, z_gt: np.ndarray, mascara: np.ndarray) -> float | 
     d = depth.disparity_px[ok] + depth.doffs
     d_gt = g.fx * g.baseline_m / np.maximum(zg[ok], 1e-6)
     delta = float(np.median(d - d_gt))
-    return delta if abs(delta) <= 2.0 else None
+    return delta if abs(delta) <= _limite_delta(g) else None
 
 
 CALENTAR = 3  # cuadros del modo continuo que se descartan para la distancia conocida
@@ -286,9 +304,10 @@ def preparar(
     previo = salida / "resumen.json"
     resumen = json.loads(previo.read_text(encoding="utf-8")) if solo and previo.is_file() else []
     resumen = [f for f in resumen if f["variante"] not in (solo or ())]
-    escenas = sorted({v.escena for var, _ in CAMARAS_VIDEO for v in vistas(raiz, var)})
+    todas = CAMARAS_VIDEO + CAMARAS_GENERICAS
+    escenas = sorted({v.escena for var, _ in todas for v in vistas(raiz, var)})
     for escena in escenas:
-        for var, nombre in CAMARAS_VIDEO:
+        for var, nombre in CAMARAS_VIDEO + CAMARAS_GENERICAS:
             if solo and var not in solo:
                 continue
             vs = sorted((v for v in vistas(raiz, var) if v.escena == escena),

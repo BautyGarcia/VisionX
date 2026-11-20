@@ -89,7 +89,11 @@ def _color_error(x: float | None) -> tuple[int, int, int]:
 
 
 class Videos:
-    """Los MP4 de `gtsynth video` en orden (por escena, las cuatro cámaras), a 10 cuadros/s."""
+    """Los MP4 de `gtsynth video` en orden (por escena, las cámaras de la expo), a 10 cuadros/s.
+
+    Solo las de `CAMARAS_VIDEO`; las genéricas (60°, 130°, 20 cm) quedan para evaluar. Si en la
+    carpeta no hay ninguna de la expo, se reproducen todas.
+    """
 
     def __init__(self, carpeta: Path) -> None:
         from visionx.gtsynth.video import CAMARAS_VIDEO, FPS
@@ -100,7 +104,8 @@ class Videos:
             escena, _, var = p.stem.partition("-video-")
             return escena, orden.get("video-" + var, 99)
 
-        self.paths = sorted(carpeta.glob("*.mp4"), key=clave)
+        todas = sorted(carpeta.glob("*.mp4"), key=clave)
+        self.paths = [p for p in todas if clave(p)[1] < 99] or todas
         self.fps = FPS
         self._k = -1
         self._cap = None

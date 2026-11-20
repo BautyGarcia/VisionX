@@ -46,7 +46,13 @@ def test_sin_demo_avisa_como_generarla(tmp_path):
 def test_videos_pasa_de_cuadro_y_de_video(tmp_path):
     from visionx.app.stand_camaras import Videos
 
-    for k, nombre in enumerate(("hotel_0-video-elp-full.mp4", "hotel_0-video-angosta-60.mp4")):
+    # Una genérica (60°) que no va a la expo: no se reproduce.
+    nombres = (
+        "hotel_0-video-elp-full.mp4",
+        "hotel_0-video-zed-2.mp4",
+        "hotel_0-video-angosta-60.mp4",
+    )
+    for k, nombre in enumerate(nombres):
         w = cv2.VideoWriter(str(tmp_path / nombre), cv2.VideoWriter_fourcc(*"mp4v"), 10, (W, H))
         for j in range(3):
             w.write(np.full((H, W, 3), 60 * k + 20 * j, np.uint8))
@@ -54,7 +60,7 @@ def test_videos_pasa_de_cuadro_y_de_video(tmp_path):
     v = Videos(tmp_path)
     assert [p.name for p in v.paths] == [
         "hotel_0-video-elp-full.mp4",
-        "hotel_0-video-angosta-60.mp4",
+        "hotel_0-video-zed-2.mp4",
     ]
     a = v.cuadro(0.0)
     b = v.cuadro(0.25)  # tercer cuadro del primer video
