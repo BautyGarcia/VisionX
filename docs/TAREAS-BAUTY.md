@@ -2,26 +2,42 @@
 
 Para Bauty y su Claude. Se puede usar tal cual como pedido:
 
-> «Leé `docs/PLUG-AND-PLAY.md` y `docs/TAREAS-BAUTY.md`, y hacé las tareas en orden. Corré lo
-> que se pueda en la GPU de la Mac (MPS). Cada resultado va a la BITACORA con su tabla.»
+> «Leé `docs/PLUG-AND-PLAY.md` y `docs/TAREAS-BAUTY.md`, y hacé las tareas en orden. La Mac
+> es para **entrenar** (MPS); evaluar y correr CREStereo lo hace la PC de Tomás. Cada resultado
+> va a la BITACORA con su tabla.»
 
 **Contexto en una línea:** el objetivo del TP pasó a ser **plug and play con cualquier cámara
 estéreo de un solo cuerpo** más la red de incertidumbre. La red de entrada ya no compite con el
 clásico: **estima la cámara desconocida** (focal, centro, lente, con confianza), que el clásico
 no puede ver. Todo el porqué está en [PLUG-AND-PLAY](PLUG-AND-PLAY.md).
 
-**Por qué en la Mac:** es la única GPU que le sirve a CREStereo (continuo ~0,12 s por cuadro,
-preciso ~0,6 s). En la PC de Tomás (sin CUDA) corre en CPU a ~1,5 s por cuadro. Los renders
-(Habitat) siguen en la PC de Tomás, en Linux dentro de Windows.
+**Cambio del 20/11 a la noche: la PC de Tomás ya usa su GPU.** CREStereo exportado a ONNX
+corre en la Radeon con DirectML: 0,12 s por cuadro en continuo y 0,51 s en preciso, igual o
+mejor que la Mac, con el mismo resultado (0,002–0,004 px de diferencia). Habitat también dibuja
+en la GPU. Por eso se reparte así:
+
+| Máquina | Qué hace |
+|---|---|
+| **Mac de Bauty** | **Entrenar**: la red que estima la cámara y la U-Net de incertidumbre (PyTorch en Windows no entrena con AMD) |
+| **PC de Tomás** | **Correr**: E1, E3, E4, videos, GT sintético, disparidades precalculadas para entrenar, evaluar los checkpoints que mande Bauty |
+
+Entre las dos máquinas se intercambian archivos por el Drive: de la PC salen datos y
+disparidades; de la Mac, checkpoints (`.pt`) para evaluar acá.
+
+**Para no pisarse:**
+- Tomás / Claude tocan `app/`, `camera/`, `gtsynth/`, `voice/`, `scripts/` y los docs de
+  diseño.
+- Bauty toca `depth/` y su módulo nuevo `depth/camara_net/`. La única excepción es el modo ONNX
+  de CREStereo (`depth/crestereo_adapt/onnx_dml.py` + 13 líneas en `port.py`): lo hizo Claude
+  en un PR aparte que **Bauty revisa**.
+- BITACORA: cada uno agrega sus entradas arriba; no se editan las del otro.
 
 ## 0. Preparar
 
-1. `git pull` de `main` (o `git checkout b/video-angosta` si el PR #63 todavía no se mergeó).
+1. `git pull` de `main`.
 2. Datos: los mismos de siempre, en el Drive `VisionX-Personal/gt-sintetico-elp/`. Para estas
-   tareas hacen falta:
-   - `elp` (val y train) para E1;
-   - `camara-sorteada` (2400 train + 240 val, Replica) y `hssd-camara-sorteada` (2460 train +
-     600 val) para E2.
+   tareas hacen falta `camara-sorteada` (2400 train + 240 val, Replica) y
+   `hssd-camara-sorteada` (2460 train + 600 val) para E2.
 
    Copiarlos a un disco local antes de entrenar (leer del Drive es muy lento).
 
@@ -31,10 +47,10 @@ preciso ~0,6 s). En la PC de Tomás (sin CUDA) corre en CPU a ~1,5 s por cuadro.
      `video-zed-mini`, `video-oak-d`) y de 3 genéricas (`video-angosta-60`,
      `video-gran-angular-130`, `video-base-larga-20`), en `hotel_0` y `office_2` (val).
      **Son cámaras de evaluación: no entrenar con ellas.**
-   - `VisionX-Personal/gt-sintetico-elp/hssd-recorridos-sorteada/` (~17 GB, se sube cuando
-     termina el render de esta noche): un recorrido de 30 cuadros por casa de HSSD (125 train
-     + 30 val), **cada recorrido con su propia cámara** sorteada (55–130°, 3–20 cm, 16:9 o
-     4:3), a 960 px de ancho con lienzo de margen. Es para la versión de varios cuadros de la
+   - `VisionX-Personal/gt-sintetico-elp/hssd-recorridos-sorteada/` (15,3 GB, ya subido): un
+     recorrido de 30 cuadros por casa de HSSD (153 casas: 123 train + 30 val; las 2 de siempre
+     no se pueden dibujar), **cada recorrido con su propia cámara** sorteada (55–130°, 3–20 cm,
+     16:9 o 4:3), a 960 px de ancho con lienzo de margen. Es para la versión de varios cuadros de la
      red de entrada (E2) y para reentrenar la U-Net con cámaras variadas.
 3. `unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN` antes de correr nada (la key de VisionX es
    solo para el modo de habla).
@@ -71,37 +87,15 @@ no cierra. En particular:
 
 La tanda grande de datos (sección 7.2) **espera a esta revisión**.
 
-## 2. E1: cuánto hueco deja el clásico dentro de una misma cámara
+## 2. E1: lo corre la PC de Tomás (no hace falta hacerlo)
 
-Es la tanda de hermanas que quedó pausada el 19/11 (BITACORA), en **modo preciso**. Cada
-corrida, con 160 vistas de val, son unos minutos en la Mac.
+E1 (clásico + distancia conocida contra el oráculo, en modo preciso, con hermanas ×0,25, ×0,5 y
+×1, y `distinta`) **pasó a la PC de Tomás**: corre la noche del 20/11 en la Radeon y la tabla
+va a la BITACORA. Bauty solo la lee para decidir cuánto puede aportar la red **dentro** de una
+cámara conocida (referencia de la v2: clásico 5,6 % contra oráculo 0,75 % en ×1).
 
-```bash
-R=<carpeta local>/gt-sintetico-elp
-O=outputs/gtsynth/e1
-mkdir -p $O
-# Oráculo: el par perfecto
-python -m visionx.gtsynth evaluar $R --variante elp --particion val \
-  --profundidad crestereo-preciso --csv $O/elp.csv
-for h in hermana-0.25 hermana-0.5 hermana-1; do
-  # Sin corregir
-  python -m visionx.gtsynth evaluar $R --variante $h --particion val \
-    --profundidad crestereo-preciso --vistas-por-camara 8 --csv $O/$h-sin.csv
-  # Clásico + distancia conocida (lo que usa hoy VisionX)
-  python -m visionx.gtsynth evaluar $R --variante $h --particion val \
-    --profundidad crestereo-preciso --alinear clasico --vistas-por-camara 8 \
-    --distancia-conocida --csv $O/$h-clasico-dc.csv
-done
-# Otra cámara supuesta ELP (escala pura), con distancia conocida
-python -m visionx.gtsynth evaluar $R --variante distinta --particion val \
-  --profundidad crestereo-preciso --vistas-por-camara 8 --distancia-conocida \
-  --csv $O/distinta-dc.csv
-```
-
-**Entregable:** una tabla en la BITACORA con el error mediano por objeto, de 0,5 a 4 m, por
-rango, en cada fila: oráculo, sin corregir y clásico + distancia conocida, para ×0,25, ×0,5 y
-×1. Decide cuánto puede aportar la red **dentro** de una cámara conocida. Referencia de la v2
-(6 pares de la ELP): clásico 5,6 % contra oráculo 0,75 % en ×1.
+Lo que sí le toca: **revisar el PR del modo ONNX de CREStereo** (`onnx_dml.py`), porque es su
+código. Con la Mac no cambia nada: ahí sigue usando MPS.
 
 ## 3. E2: prototipo de la red que estima la cámara
 
@@ -159,7 +153,12 @@ con los parámetros estimados contra los reales (PLUG-AND-PLAY, sección 4).
 ## 4. Después (no arrancar hasta cerrar 1–3)
 
 - **Reentrenar la U-Net de incertidumbre con cámaras variadas** (`camara-sorteada`, recorridos)
-  y recalibrar su factor de `b` en val. Hoy vio solo la geometría de la ELP.
+  y recalibrar su factor de `b` en val. Hoy vio solo la geometría de la ELP. Si las entradas
+  de CREStereo (disparidad, pasadas, vertical) le sirven **precalculadas**, decir en qué
+  formato y la PC de Tomás las genera en la Radeon y las sube al Drive: la Mac queda solo para
+  entrenar.
+- **Mandar los checkpoints** (`.pt`) al Drive cuando haya uno para probar: la PC de Tomás los
+  evalúa (E2 en las 6 cámaras de la expo, E3, E4) y devuelve la tabla.
 - **E3 y E4** (PLUG-AND-PLAY, sección 8): el flujo completo en cámaras no vistas y la cobertura
   de la incertidumbre total.
 - **E5:** la RealSense D435i de la facultad, con cinta métrica. Su calibración de fábrica (se
@@ -167,9 +166,26 @@ con los parámetros estimados contra los reales (PLUG-AND-PLAY, sección 4).
 
 ## Lo que hace Tomás / Claude en paralelo (para no pisarse)
 
-- Recorridos de las 6 cámaras de la expo, E0 y los videos del stand, en la PC de escritorio.
-- La pantalla «Cámara nueva» del dashboard y el soporte de RealSense (dos transmisiones
-  infrarrojas).
-- La tanda de recorridos con cámaras sorteadas (`tanda_recorridos.sh`, noche del 20/11).
-- Falta simular (segunda tanda, cuando haya lugar en el Drive): las 9 cámaras de evaluación en
-  casas val de HSSD, para que E3 y E4 tengan más de dos escenas.
+Hecho:
+- recorridos de las 6 cámaras de la expo;
+- E0;
+- pantalla «Cámara nueva»;
+- perfiles de cámaras;
+- RealSense;
+- `--camara`;
+- mosaico de la expo;
+- recorridos con cámara sorteada;
+- Habitat y CREStereo en la GPU.
+
+En curso (noche del 20/11, en la Radeon):
+- videos de las 5 cámaras reales;
+- mosaico;
+- E1.
+
+Después:
+- segunda tanda sintética: las 9 cámaras de evaluación en casas val de HSSD, para que E3 y E4
+  tengan más de dos escenas;
+- disparidades precalculadas si la U-Net las necesita;
+- evaluar los checkpoints de Bauty;
+- escala por voz en la app;
+- prueba de la D435i en la facultad.

@@ -99,7 +99,7 @@ def load_model(cfg: PortConfig) -> tuple[Any, str]:
 
     check_files(cfg)
     nets = _import_nets(cfg.port_dir)
-    device = pick_device(cfg.device)
+    device = "cpu" if cfg.device == "directml" else pick_device(cfg.device)
     # test_mode=True: la red devuelve solo la última predicción y no la lista de todas.
     model = nets.Model(max_disp=cfg.max_disp, mixed_precision=False, test_mode=True)
     # weights_only=True: el archivo se lee como tensores, sin ejecutar código guardado adentro.
@@ -107,4 +107,18 @@ def load_model(cfg: PortConfig) -> tuple[Any, str]:
     model.load_state_dict(state, strict=True)
     model.requires_grad_(False)
     model.to(device).eval()
+    # Sin CUDA ni MPS (Windows con AMD o Intel): los grafos ONNX con DirectML, si están
+    # exportados (onnx_dml.py). Con `device: directml` es obligatorio; con `auto`, opcional.
+    if cfg.device == "directml" or (cfg.device == "auto" and device == "cpu"):
+        from visionx.depth.crestereo_adapt.onnx_dml import CARPETA, CreStereoOnnx, dml_disponible
+
+        carpeta = CARPETA / cfg.weights_sha256[:8]
+        listo = dml_disponible() and any(carpeta.glob("*.onnx"))
+        if listo:
+            return CreStereoOnnx(carpeta, model), "cpu"
+        if cfg.device == "directml":
+            raise EstimatorError(
+                "device: directml necesita `onnxruntime-directml` y los grafos exportados: "
+                "`python -m visionx.depth.crestereo_adapt.onnx_dml exportar`"
+            )
     return model, device
