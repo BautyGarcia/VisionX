@@ -148,3 +148,52 @@ def test_visor_arma_la_lamina(tmp_path):
     v = _vista(tmp_path)
     img = lamina(v, ["ELP calibrada: 1–2 %"], {"vistas": 2, "escenas": 1, "objetos": 1})
     assert img.shape == (1080, 1920, 3) and img.dtype == np.uint8
+
+
+class _Corrido:
+    """Disparidad exacta de cada vista más un corrimiento constante (px): escala mal supuesta."""
+
+    def __init__(self, vistas_, corrimiento_px):
+        self.vistas, self.corrimiento = vistas_, corrimiento_px
+        self.geometry = vistas_[0].geometria
+
+    def predict(self, frame):
+        from visionx.depth.stereo import build_result
+
+        g = self.geometry
+        z = self.vistas[frame.frame_id].z()
+        d = (g.fx * g.baseline_m / z + self.corrimiento).astype(np.float32)
+        return build_result(frame, "corrido", g, d, np.ones_like(d, bool), 1.0, 0.0)
+
+
+def test_distancia_conocida_saca_el_corrimiento_en_toda_la_camara(tmp_path):
+    """Con 3 px de más, la distancia sale mal; un objeto conocido en la primera vista lo arregla
+    en las demás, y esa primera vista no entra en el resumen."""
+    from visionx.depth.spatial import build_locator
+    from visionx.gtsynth.evaluar import Medidor, medir, resumen
+
+    vs = [_vista(tmp_path, indice=k, z_obj=1.2 + 0.4 * k) for k in range(3)]
+    m = Medidor(_Corrido(vs, 3.0), build_locator({}, vs[0].geometria), vs[0].geometria)
+    sin = medir(m, vs, "elp", None, min_px=100)
+    assert all(abs(f["error_rel"]) > 0.2 for f in sin)
+    con = medir(m, vs, "elp", None, min_px=100, vistas_por_camara=3, distancia_conocida=True)
+    assert [f["calibra"] for f in con] == [True, False, False]
+    assert all(f["camara"] == 0 and abs(f["delta_px"] - 3.0) < 0.05 for f in con)
+    assert all(abs(f["error_rel"]) < 0.01 for f in con)
+    r = resumen(con)
+    assert r["objetos"] == 2 and r["objetos_de_calibracion"] == 1
+
+
+def test_alineador_valida_el_modo_y_sin_alinear_devuelve_el_par():
+    from visionx.depth.crestereo_adapt.align_apply import Alineador
+    from visionx.shared.errors import InvalidInput
+    from visionx.shared.geometry import StereoGeometry
+
+    g = StereoGeometry(width=W, height=H, fx=FX, fy=FX, cx=W / 2, cy=H / 2, baseline_m=B)
+    with pytest.raises(InvalidInput):
+        Alineador("otra", g)
+    with pytest.raises(InvalidInput):
+        Alineador("red", g)  # sin checkpoint
+    par = (np.zeros((H, W, 3), np.uint8), np.full((H, W, 3), 9, np.uint8))
+    ders, info = Alineador("ninguna", g).corregir([par])
+    assert info.modo == "ninguna" and ders[0] is par[1]

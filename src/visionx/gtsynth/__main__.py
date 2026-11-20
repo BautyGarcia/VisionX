@@ -5,6 +5,8 @@ uv run python -m visionx.gtsynth objetos  data/gt-sintetico-elp --csv outputs/gt
 uv run python -m visionx.gtsynth verificar data/gt-sintetico-elp [--max 20]
 uv run --extra ml python -m visionx.gtsynth evaluar data/gt-sintetico-elp --particion val \
     --variante elp --profundidad crestereo-preciso --csv outputs/gtsynth/val-elp.csv
+    [--alinear clasico|red|clasico+red --red mejor.pt] [--vistas-por-camara 8]
+    [--distancia-conocida]
 
 Variantes de `evaluar`: elp, hermana-0.5, hermana-1 (sobre las vistas elp) y distinta.
 """
@@ -107,7 +109,16 @@ def cmd_evaluar(args: argparse.Namespace) -> int:
         if n % 10 == 0 or n == len(lista):
             print(f"  {n}/{len(lista)} vistas ({time.time() - t0:.0f} s)", flush=True)
 
-    filas = medir(m, lista, args.variante, args.max, args.min_px, progreso)
+    alineador = None
+    if args.alinear != "ninguna":
+        from visionx.depth.crestereo_adapt.align_apply import Alineador
+        from visionx.gtsynth.variantes import distorsion_nominal
+
+        alineador = Alineador(args.alinear, ELP_RENDER, distorsion_nominal(), args.red)
+    filas = medir(
+        m, lista, args.variante, args.max, args.min_px, progreso, alineador,
+        args.vistas_por_camara, args.distancia_conocida,
+    )  # fmt: skip
     if not filas:
         print("no se midió ningún objeto", file=sys.stderr)
         return 1
@@ -144,6 +155,24 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("--csv", required=True)
     ev.add_argument("--max", type=int, default=None)
     ev.add_argument("--min-px", type=int, default=400)
+    ev.add_argument(
+        "--alinear",
+        choices=["ninguna", "clasico", "red", "clasico+red"],
+        default="ninguna",
+        help="corrección del ojo derecho antes de la profundidad (T12)",
+    )
+    ev.add_argument("--red", default=None, help="checkpoint de la red de alineación")
+    ev.add_argument(
+        "--vistas-por-camara",
+        type=int,
+        default=1,
+        help="vistas seguidas que ve una misma cámara (hermana compartida, alineación conjunta)",
+    )
+    ev.add_argument(
+        "--distancia-conocida",
+        action="store_true",
+        help="el objeto apuntado de la primera vista de cada cámara corrige la escala",
+    )
     for name in ("resumen", "objetos", "verificar"):
         p = sub.add_parser(name)
         p.add_argument("raiz")

@@ -6,6 +6,7 @@ el de la profundidad y del ubicador, no el de la detección. Una fila por objeto
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
 from itertools import islice
@@ -14,7 +15,7 @@ from typing import Any
 import numpy as np
 
 from visionx.gtsynth.dataset import ObjetoGT, Vista, objetos_de, particion_de
-from visionx.gtsynth.variantes import derecha_hermana, es_hermana
+from visionx.gtsynth.variantes import derecha_hermana, es_hermana, semilla_camara
 
 LN10 = math.log(10.0)  # Laplace: P(|e| > b·ln 10) = 0,1 -> intervalo del 90 %
 
@@ -78,7 +79,11 @@ def medir_vista(m: Medidor, vista: Vista, variante: str, n: int, min_px: int) ->
         return []
     der = derecha_hermana(vista, variante) if es_hermana(variante) else vista.der()
     frame = _frame(vista, vista.izq(), der, m.geometria, n)
-    depth = m.estimador.predict(frame)
+    return _filas(m, vista, variante, frame, m.estimador.predict(frame), objs)
+
+
+def _filas(m: Medidor, vista: Vista, variante: str, frame, depth, objs: list[ObjetoGT]):
+    """Una fila por objeto, con la profundidad ya calculada."""
     dets = _detecciones(frame, vista, objs, m.geometria)
     dg = m.ubicador.depth_geometry
     fb = dg.fx * dg.baseline_m
@@ -103,12 +108,111 @@ def medir_vista(m: Medidor, vista: Vista, variante: str, n: int, min_px: int) ->
     return filas
 
 
-def medir(m: Medidor, vistas_, variante: str, maximo: int | None, min_px: int, progreso=None):
+def medir(
+    m: Medidor,
+    vistas_,
+    variante: str,
+    maximo: int | None,
+    min_px: int,
+    progreso=None,
+    alineador=None,
+    vistas_por_camara: int = 1,
+    distancia_conocida: bool = False,
+):
+    """Filas de todos los objetos de las vistas.
+
+    Sin `alineador`, con una vista por cámara y sin distancia conocida, es la medición original:
+    cada vista sola (y, en las hermanas, cada vista con su propia unidad). Si no, ver `_por_camara`.
+    """
+    if alineador is None and vistas_por_camara == 1 and not distancia_conocida:
+        filas: list[dict] = []
+        for n, v in enumerate(islice(vistas_, maximo)):
+            filas.extend(medir_vista(m, v, variante, n, min_px))
+            if progreso:
+                progreso(n + 1, v)
+        return filas
+    return _por_camara(
+        m, list(islice(vistas_, maximo)), variante, min_px, progreso, alineador,
+        vistas_por_camara, distancia_conocida,
+    )  # fmt: skip
+
+
+def con_corrimiento(depth, delta_px: float, fb: float):
+    """La profundidad después de restarle un corrimiento constante de disparidad (px).
+
+    Es lo que hace una distancia conocida: el corrimiento constante de columnas (centro óptico,
+    yaw, separación o focal mal supuestas) no se ve en la imagen y se mide con un objeto.
+    """
+    d = depth.disparity_px.astype(np.float32) - np.float32(delta_px)
+    d_eff = d + depth.doffs
+    ok = depth.valid_mask & np.isfinite(d_eff) & (d_eff > 0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = np.where(ok, fb / d_eff, 0.0).astype(np.float32)
+    return dataclasses.replace(depth, disparity_px=d, valid_mask=ok, depth_m=z)
+
+
+def _por_camara(
+    m: Medidor,
+    lista: list[Vista],
+    variante: str,
+    min_px: int,
+    progreso,
+    alineador,
+    vistas_por_camara: int,
+    distancia_conocida: bool,
+) -> list[dict]:
+    """Las vistas de a grupos de `vistas_por_camara`, cada grupo visto por una misma cámara.
+
+    Para cada grupo: (1) si es hermana, todas las vistas comparten la unidad (con 1 vista por
+    cámara, la de siempre); (2) el alineador corrige todos los pares juntos, como lo haría la
+    app acumulando cuadros; (3) con `distancia_conocida`, el objeto apuntado de la primera vista
+    que lo tenga hace de «está a 2 metros»: su error de disparidad se resta en todo el grupo y
+    esa vista queda marcada `calibra` (no entra en el resumen).
+    """
+    k_cam = max(int(vistas_por_camara), 1)
+    dg = m.ubicador.depth_geometry
+    fb = dg.fx * dg.baseline_m
     filas: list[dict] = []
-    for n, v in enumerate(islice(vistas_, maximo)):
-        filas.extend(medir_vista(m, v, variante, n, min_px))
+    for g0 in range(0, len(lista), k_cam):
+        grupo = lista[g0 : g0 + k_cam]
+        semilla = semilla_camara(grupo[0], k_cam) if k_cam > 1 else None
+        pares = [
+            (v.izq(), derecha_hermana(v, variante, semilla) if es_hermana(variante) else v.der())
+            for v in grupo
+        ]
+        if alineador is None:
+            ders, modo, aplica = [p[1] for p in pares], "ninguna", ""
+        else:
+            ders, info = alineador.corregir(pares)
+            modo, aplica = info.modo, ",".join(info.aplica)
+        medidas = []
+        for k, (v, (izq, _), der) in enumerate(zip(grupo, pares, ders, strict=True)):
+            objs = objetos_de(v, min_px=min_px)
+            frame = _frame(v, izq, der, m.geometria, g0 + k)
+            medidas.append((v, frame, m.estimador.predict(frame) if objs else None, objs))
+        delta, calibra = 0.0, None
+        if distancia_conocida:
+            for k, (v, frame, depth, objs) in enumerate(medidas):
+                apuntado = [o for o in objs if o.apuntado]
+                if depth is None or not apuntado:
+                    continue
+                f0 = _filas(m, v, variante, frame, depth, apuntado)[0]
+                if f0["d_frente_px"] is not None:
+                    delta, calibra = float(f0["d_frente_px"] - f0["d_gt_px"]), k
+                    break
+        for k, (v, frame, depth, objs) in enumerate(medidas):
+            if depth is None:
+                continue
+            if delta:
+                depth = con_corrimiento(depth, delta, fb)
+            for f in _filas(m, v, variante, frame, depth, objs):
+                f.update({
+                    "camara": g0 // k_cam, "alineacion": modo, "aplica": aplica,
+                    "delta_px": round(delta, 3), "calibra": k == calibra,
+                })  # fmt: skip
+                filas.append(f)
         if progreso:
-            progreso(n + 1, v)
+            progreso(min(g0 + k_cam, len(lista)), grupo[-1])
     return filas
 
 
@@ -127,7 +231,12 @@ def factor_b(filas: list[dict], cobertura: float = 0.9) -> float | None:
 
 
 def resumen(filas: list[dict]) -> dict[str, Any]:
+    # Las vistas que se usaron como «distancia conocida» no se evalúan (salen exactas).
+    calibran = [f for f in filas if f.get("calibra")]
+    filas = [f for f in filas if not f.get("calibra")]
     out: dict[str, Any] = {"objetos": len(filas)}
+    if calibran:
+        out["objetos_de_calibracion"] = len(calibran)
     pol: dict[str, int] = {}
     for f in filas:
         pol[f["politica"]] = pol.get(f["politica"], 0) + 1
