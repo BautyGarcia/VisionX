@@ -99,6 +99,7 @@ class Videos:
         from visionx.gtsynth.video import CAMARAS_VIDEO, FPS
 
         orden = {var: k for k, (var, _) in enumerate(CAMARAS_VIDEO)}
+        orden["video-mosaico"] = -1  # las 6 cámaras juntas, primero
 
         def clave(p: Path):
             escena, _, var = p.stem.partition("-video-")
