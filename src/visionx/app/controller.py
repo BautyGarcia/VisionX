@@ -31,10 +31,13 @@ from visionx.voice.commands import (
     CANCEL,
     DETAIL,
     END_SEARCH,
+    EXPAND,
     FOUND,
     INTRO,
+    NO,
     REPEAT,
     VOICE,
+    YES,
     CommandParser,
     Interpretation,
     acknowledgement,
@@ -42,6 +45,7 @@ from visionx.voice.commands import (
 )
 
 EXPIRED_REPEAT = "Ya no está vigente. Pedilo de nuevo."
+MORE_OFFER = "¿Querés más detalle?"  # = assistant.core.MORE_OFFER (sin importar el asistente)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +109,9 @@ class Controller:
         # «Hablá más rápido», «respuestas más cortas» (app): "voz:rapido" -> frases.
         self.preferences = preferences
         self._awaiting_height_ns: int | None = None  # se preguntó la altura: vale un número suelto
+        # «¿Querés más detalle?»: hasta cuándo un «sí» pide ampliar la respuesta anterior.
+        self._offer_until_ns: int | None = None
+        self.offer_s = 15.0
         self.output = output
         self.latest_view = latest_view
         self.handlers = handlers or {}
@@ -209,6 +216,24 @@ class Controller:
                 self.history.append((None, interp))
                 return None
             from visionx.modes import body
+
+            if interp.mode is Mode.CONTROL and interp.target in (YES, NO):
+                offered = self._offer_until_ns is not None and now <= self._offer_until_ns
+                self._offer_until_ns = None
+                if not offered:
+                    self._on_event("orden", order)  # un «sí» suelto: no hay nada que ampliar
+                    self.history.append((None, interp))
+                    return None
+                if interp.target == NO:
+                    rid = self._new_id()
+                    order["request_id"] = rid
+                    self._on_event("orden", order)
+                    self._say(Say("Dale."), rid, now, remember=False)
+                    self.history.append((None, interp))
+                    return None
+                # «Sí»: Claude amplía su respuesta anterior (recuerda la conversación).
+                interp = Interpretation(interp.utterance, Mode.DESCRIBE, EXPAND, "mas-detalle")
+                order.update(modo=interp.mode, objetivo=interp.target, regla=interp.rule)
 
             if (
                 self._awaiting_height_ns is not None
@@ -486,6 +511,8 @@ class Controller:
             deadline = self._past_deadline(request_id, deadline)
             if now > deadline:
                 return
+        if say.text_or_sound == MORE_OFFER:  # abre la ventana del «sí»
+            self._offer_until_ns = now + int(self.offer_s * 1e9)
         if say.replace:
             self.output.cancel(request_id)
             self._on_event("reemplazo", {"request_id": request_id, "texto": say.text_or_sound})
