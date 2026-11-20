@@ -578,24 +578,43 @@ def _metrics(canvas, st: StandState, texts: Texts, x, y, w, h):
         label = f"{name} {ms / 1000:.1f} s".replace(".", ",") if ms else f"{name} —"
         texts.add(label, (lx + 16, by + bh + 13), 14, MUTED)
         lx += text_width(label, 14) + 40
-    # FPS y cuerpo, discretos.
     fy = by + bh + 58
-    chips = []
-    for s in st.statuses:
-        f = s.fps()
-        chips.append(f"{s.name} {f:.0f} fps" if f else f"{s.name} —")
-    cx = x + 18
-    for c in chips:
-        cw = text_width(c, 13) + 22
-        _rounded(canvas, cx, fy, cx + cw, fy + 26, (44, 38, 33), 13)
-        texts.add(c, (cx + 11, fy + 5), 13, MUTED)
-        cx += cw + 8
     b = st.body
     if b is not None:
         est = f"{b.height_m:.2f} m".replace(".", ",") if b.height_known else "1,70 m (sin decir)"
         cam = f"cámara a {b.camera_m:.2f} m".replace(".", ",")
         inc = f", inclinada {b.pitch_deg:+.0f}°" if b.floor_seen else ""
-        texts.add(f"Estatura {est} · {cam}{inc}", (x + 18, fy + 40), 13, FAINT)
+        texts.add(f"Estatura {est} · {cam}{inc}", (x + 18, fy + 4), 13, FAINT)
+
+
+STREAM = {"captura": "Cámara", "detector": "YOLO", "profundidad": None, "precisa": "Preciso"}
+
+
+def _streams(canvas, st: StandState, texts: Texts, x: int, y: int) -> None:
+    """Un chip por flujo: Cámara, YOLO, la profundidad (CREStereo) y el preciso, con FPS y ms."""
+    depth = st.joint.depth if st.joint is not None else None
+    now = time.monotonic_ns()
+    cx = x
+    for s in st.statuses:
+        name = STREAM.get(s.name, s.name)
+        if name is None:
+            name = model_name(depth.model_id) if depth is not None else "Profundidad"
+        f = s.fps()
+        parts = [f"{f:.0f} fps" if f else "— fps"]
+        if s.name != "captura" and s.last_latency_ms is not None:
+            ms = s.last_latency_ms
+            parts.append(f"{ms / 1000:.1f} s".replace(".", ",") if ms >= 1000 else f"{ms:.0f} ms")
+        age = s.age_ms(now)
+        health = (LEVEL_COLOR["no-segura"] if s.errors else
+                  LEVEL_COLOR["aproximada"] if age is not None and age > 800 else
+                  LEVEL_COLOR["precisa"])  # fmt: skip
+        label, value = name, " · ".join(parts)
+        cw = 30 + text_width(label, 14, True) + 8 + text_width(value, 14) + 14
+        _rounded(canvas, cx, y, cx + cw, y + 32, (40, 33, 27), 16)
+        cv2.circle(canvas, (cx + 15, y + 16), 5, health, -1, cv2.LINE_AA)
+        texts.add(label, (cx + 27, y + 7), 14, INK, True)
+        texts.add(value, (cx + 27 + text_width(label, 14, True) + 8, y + 7), 14, MUTED)
+        cx += cw + 8
 
 
 def render_stand(st: StandState) -> np.ndarray:
@@ -614,6 +633,7 @@ def render_stand(st: StandState) -> np.ndarray:
     _rounded(canvas, W - cw - 32, 22, W - 32, 58, (48, 40, 30), 18)
     cv2.circle(canvas, (W - cw - 32 + 18, 40), 6, color, -1, cv2.LINE_AA)
     texts.add(chip, (W - cw - 32 + 32, 30), 16, INK, True)
+    _streams(canvas, st, texts, 470, 24)
     _camera(canvas, st, texts, 24, 80, 1160, 653)
     _depth_panels(canvas, st, texts, 1204, 80, 692, 236)
     _radar(canvas, st, texts, 1204, 330, 692, 403)

@@ -116,9 +116,23 @@ segura) y la flecha al objetivo; profundidad e incertidumbre; el radar desde arr
 objetos y su margen; los subtítulos de la conversación; los tiempos de la última orden (Whisper,
 Claude, primera palabra), los FPS y el cuerpo (estatura, altura e inclinación de la cámara).
 
-**Altura de la persona:** la primera vez (con `--voz`) VisionX pide «decime cuánto medís»;
-responder «mido 1,75». Queda guardada en `~/.visionx/persona.json` y se cambia diciéndolo de
-nuevo. Con el piso a la vista, la altura y la inclinación de la cámara se estiman solas. Auriculares puestos. Para verlo por Discord: compartir la ventana de la app **con audio**
+**«Hola VisionX»:** al arrancar dice «VisionX está listo. Decí: hola VisionX…». Al decirlo
+(o «ayuda», «¿qué podés hacer?») cuenta qué hace y cómo se le habla, qué se puede configurar y,
+si no sabe la estatura, pregunta «¿cuánto medís?» (se responde con el número solo: «1,75»).
+
+**Configurable por voz** (queda guardado en `~/.visionx/persona.json`):
+- velocidad: «hablá más rápido», «más despacio», «velocidad normal» (0,9 a 1,45);
+- largo de las respuestas de Claude: «respuestas más cortas», «más detalladas», «respuestas
+  normales»;
+- estatura: «mido 1,80». Con el piso a la vista, la altura y la inclinación de la cámara se
+  estiman solas (`persona.usar_piso`).
+
+**Obstáculos mientras guía:** al buscar, si OTRA cosa se interpone a menos de 0,8 m dice
+«Cuidado: algo adelante, a 60 centímetros.» (el objeto buscado no cuenta). Fuera de buscar no
+avisa (`proximity.only_modes`).
+
+**Arriba en la pantalla:** un chip por flujo con FPS y latencia (Cámara, YOLO, CREStereo,
+Preciso) y un punto de salud: verde bien, ámbar atrasado (> 0,8 s), rojo con errores. Auriculares puestos. Para verlo por Discord: compartir la ventana de la app **con audio**
 (la voz y el sonar salen por los auriculares de la Mac).
 
 Si CREStereo no carga, va lento o se queda sin memoria: repetir con `--profundidad B0

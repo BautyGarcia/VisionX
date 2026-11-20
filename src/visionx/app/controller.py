@@ -29,9 +29,12 @@ from visionx.shared.contracts import AudioEvent, Command, FrameKey, Mode, Priori
 from visionx.shared.interfaces import AudioSink
 from visionx.voice.commands import (
     CANCEL,
+    DETAIL,
     END_SEARCH,
     FOUND,
+    INTRO,
     REPEAT,
+    VOICE,
     CommandParser,
     Interpretation,
     acknowledgement,
@@ -88,6 +91,8 @@ class Controller:
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
         watchers: list[Any] | None = None,
         calibrate: Callable[[float, Any, int], list[str]] | None = None,
+        intro: Callable[[], list[str]] | None = None,
+        preferences: Callable[[str], list[str]] | None = None,
     ) -> None:
         self.parser = parser
         # Observadores fuera de las órdenes (p. ej. app.camera_status): observe(view, now) ->
@@ -95,6 +100,11 @@ class Controller:
         self.watchers = list(watchers or [])
         # «Calibrar distancia» (app.calibrate): (metros, vista, ahora) -> frases.
         self.calibrate = calibrate
+        # «Hola VisionX»: la presentación (app); sin ella, una corta por defecto.
+        self.intro = intro
+        # «Hablá más rápido», «respuestas más cortas» (app): "voz:rapido" -> frases.
+        self.preferences = preferences
+        self._awaiting_height_ns: int | None = None  # se preguntó la altura: vale un número suelto
         self.output = output
         self.latest_view = latest_view
         self.handlers = handlers or {}
@@ -198,14 +208,64 @@ class Controller:
                     self._say(Say(EXPIRED_REPEAT), repeat_id, now, remember=False)
                 self.history.append((None, interp))
                 return None
-            if interp.mode is Mode.CONTROL and (interp.target or "").startswith("altura:"):
-                from visionx.modes import body
+            from visionx.modes import body
 
+            if (
+                self._awaiting_height_ns is not None
+                and now - self._awaiting_height_ns < 30e9
+                and interp.target != CANCEL
+                and not (interp.ok and interp.mode is not None and interp.mode is not Mode.DESCRIBE)
+            ):
+                # Respuesta a «¿cuánto medís?»: «1,75», «un metro setenta».
+                h = body.parse_height(interp.utterance)
+                if h is not None:
+                    interp = Interpretation(
+                        interp.utterance, Mode.CONTROL, f"altura:{h:g}", "altura"
+                    )
+                    order.update(modo=interp.mode, objetivo=interp.target, regla=interp.rule)
+            if interp.mode is Mode.CONTROL and interp.target == INTRO:
+                rid = self._new_id()
+                order["request_id"] = rid
+                self._on_event("orden", order)
+                if self._audio_request_id is not None:
+                    self.output.cancel(self._audio_request_id)
+                phrases = (
+                    self.intro()
+                    if self.intro is not None
+                    else [
+                        "Hola, soy VisionX. Puedo buscar cosas, decirte a qué distancia "
+                        "están, leer y describir lo que tenés adelante."
+                    ]
+                )
+                for phrase in phrases:
+                    self._say(Say(phrase), rid, now, remember=False)
+                self._awaiting_height_ns = None if body.current().height_known else now
+                self._audio_request_id = rid
+                self.history.append((None, interp))
+                return None
+            if interp.mode is Mode.CONTROL and (interp.target or "").startswith(
+                (f"{VOICE}:", f"{DETAIL}:")
+            ):
+                rid = self._new_id()
+                order["request_id"] = rid
+                self._on_event("orden", order)
+                phrases = (
+                    self.preferences(interp.target)
+                    if self.preferences is not None
+                    else ["Eso todavía no se puede cambiar."]
+                )
+                self._on_event("preferencia", {"request_id": rid, "cambio": interp.target})
+                for phrase in phrases:
+                    self._say(Say(phrase), rid, now)
+                self.history.append((None, interp))
+                return None
+            if interp.mode is Mode.CONTROL and (interp.target or "").startswith("altura:"):
                 rid = self._new_id()
                 order["request_id"] = rid
                 self._on_event("orden", order)
                 h = float(interp.target.split(":", 1)[1])
                 body.set_height(h)
+                self._awaiting_height_ns = None
                 said = f"{h:.2f}".rstrip("0").rstrip(".").replace(".", ",")
                 self._on_event("altura", {"request_id": rid, "altura_m": h})
                 self._say(Say(f"Listo, medís {said} metros. Lo uso para decirte a qué altura "
@@ -343,6 +403,8 @@ class Controller:
             for watcher in self.watchers:
                 if hasattr(watcher, "active_mode"):
                     watcher.active_mode = self.active.mode.value if self.active else None
+                if hasattr(watcher, "active_target"):
+                    watcher.active_target = self.active.target if self.active else None
                 for say in watcher.observe(view, now):
                     request_id = self._new_id()
                     self._on_event("aviso", {"request_id": request_id, "texto": say.text_or_sound})

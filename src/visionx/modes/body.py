@@ -82,11 +82,38 @@ def _store() -> Path:
     return Path.home() / ".visionx" / "persona.json"
 
 
+def _read() -> dict:
+    try:
+        data = json.loads(_store().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write(**values) -> None:
+    """Suma estos valores a lo guardado (altura, velocidad, detalle) sin borrar lo demás."""
+    data = _read()
+    data.update(values)
+    path = _store()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def preferences() -> dict:
+    """Preferencias guardadas de la persona: {"velocidad": 1.3, "detalle": "corto"}."""
+    data = _read()
+    return {k: data[k] for k in ("velocidad", "detalle") if k in data}
+
+
+def save_preference(**values) -> None:
+    _write(**values)
+
+
 def load() -> Body:
     """Lee la altura guardada (si hay) al arrancar la app."""
     global _body
     try:
-        data = json.loads(_store().read_text(encoding="utf-8"))
+        data = _read()
         h = float(data["altura_m"])
         if MIN_HEIGHT_M <= h <= MAX_HEIGHT_M:
             with _lock:
@@ -103,9 +130,7 @@ def set_height(height_m: float, *, persist: bool = True) -> Body:
     with _lock:
         _body = replace(_body, height_m=height_m, height_known=True)
     if persist:
-        path = _store()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"altura_m": round(height_m, 2)}), encoding="utf-8")
+        _write(altura_m=round(height_m, 2))
     return current()
 
 
