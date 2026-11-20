@@ -36,7 +36,11 @@ import numpy as np
 SYSTEM_PROMPT = """Sos la voz de VisionX, un asistente para una persona ciega o con baja visión \
 que lleva una cámara a la altura del pecho. Ves lo que la cámara tiene adelante en este momento.
 - Respondé en español rioplatense (voseo), en frases cortas y naturales para decir en voz alta: \
-sin listas, sin markdown, sin emojis. Máximo 3 frases, salvo que te pidan leer todo.
+sin listas, sin markdown, sin emojis. Por defecto, 1 o 2 frases cortas con lo esencial (unas \
+25 palabras en total), salvo que te pidan leer todo o más detalle.
+- Si quedó información útil sin decir (más texto de la etiqueta, otros objetos, detalles que la \
+persona podría querer), terminá con la marca [MÁS] sola, al final; no la nombres ni la expliques. \
+Si ya dijiste todo lo importante, no la pongas.
 - Hablale a la persona: «Adelante tenés…», «A tu izquierda hay…». No menciones la cámara, el \
 OCR ni el sistema: hablá como si vos vieras.
 - Distancias: si te paso objetos medidos con metros, usá esos metros tal cual («a 1,4 metros»). \
@@ -64,7 +68,7 @@ lo más útil según la imagen o pedí que lo repita."""
 DETAIL_RULE = {
     "corto": "Respondé con UNA sola frase corta, lo esencial; la persona pidió respuestas cortas.",
     "normal": "",
-    "largo": "La persona pidió más detalle: podés usar hasta 5 frases, siempre cortas.",
+    "largo": "La persona pidió más detalle: podés usar hasta 5 frases, siempre cortas, sin [MÁS].",
 }
 
 
@@ -75,11 +79,15 @@ def system_prompt(detail: str = "normal") -> str:
 
 
 KINDS = {
-    "leer": "LEER: decí qué es el objeto que tiene adelante y lo más importante que dice.",
+    "leer": "LEER: decí qué es el objeto que tiene adelante y lo más importante que dice, en 1 o "
+    "2 frases.",
     "leer-todo": "LEER TODO: leé todo el texto que se pueda, en orden, sin resumir.",
-    "describir": "DESCRIBIR: 3 frases como máximo y de no más de 15 palabras cada una, lo más "
+    "describir": "DESCRIBIR: 2 frases como máximo y de no más de 15 palabras cada una, lo más "
     "cercano o importante primero (obstáculos y lo que se puede usar), sin detalles decorativos.",
     "pregunta": "PREGUNTA: respondé la pregunta con lo que ves.",
+    "ampliar": "AMPLIAR: la persona pidió más detalle sobre tu respuesta anterior (está en la "
+    "conversación). Agregá lo que faltó en hasta 4 frases cortas, sin repetir lo que ya dijiste. "
+    "No pongas [MÁS].",
     "apoyo": "APOYO: el objeto pedido está en el centro de la imagen. En UNA frase corta (máximo "
     "12 palabras) decí sobre qué está apoyado y, si ayuda a encontrarlo, qué tiene al lado. "
     "Empezá con «Está…». Sin metros ni direcciones.",
@@ -89,13 +97,13 @@ KINDS = {
     "está), y al final una línea «PREGUNTA: …» que empiece con «Veo», los nombre por cómo son y "
     "de qué lado están y termine en «¿Cuál querés?» (p. ej. «Veo una taza blanca a la izquierda "
     "y un vaso rojo a la derecha. ¿Cuál querés?»). Sin metros.",
-    "distancia": "DISTANCIA: con un objeto, UNA sola frase que empiece por el objeto y su "
-    "distancia tal cual de la lista, y después el costado, la altura y qué es (color, sobre qué "
-    "está o al lado de qué): «La taza blanca está a 1,4 metros, unos 20 cm a tu izquierda, "
-    "sobre el taburete.». Con varios: primero cuántos son («Hay dos tazas.») y después una "
-    "frase corta por cada uno, de izquierda a derecha, que empiece con su distancia y siga con lo "
-    "que los distingue; el costado y la altura solo si ayudan a encontrarlo. Sin números que no "
-    "estén en la lista.",
+    "distancia": "DISTANCIA: lo justo para ubicarlo, en no más de 20 palabras. Con un objeto, "
+    "UNA frase: el objeto, su distancia tal cual de la lista y el costado («La taza está a 1,4 "
+    "metros, a tu izquierda.»). Con varios, UNA frase que los nombre por lo que los distingue, "
+    "de izquierda a derecha («Hay dos tazas: la blanca a 1 metro a tu izquierda y la roja a unos "
+    "1,5 metros a tu derecha.»). Sobre qué está, qué tiene al lado, la altura o los centímetros "
+    "de costado son detalle: no los digas y terminá con [MÁS]. Sin números que no estén en la "
+    "lista.",
 }
 
 
@@ -310,6 +318,18 @@ def verify_distances(sentence: str, allowed: set[tuple[str, float]]) -> bool:
     return distances_in(sentence) <= allowed
 
 
+# «[MÁS]» al final de una respuesta: hay más para decir (no se lee en voz alta).
+_MORE = re.compile(r"\[\s*m[áa]s\s*\]", re.IGNORECASE)
+MORE_OFFER = "¿Querés más detalle?"
+# Pedidos donde tiene sentido ofrecer más (no los internos de buscar ni «leé todo»).
+OFFER_KINDS = frozenset({"leer", "describir", "pregunta", "distancia"})
+
+
+def offer_more(job: AssistantJob) -> bool:
+    """¿Decir «¿Querés más detalle?» al terminar esta respuesta?"""
+    return job.more and job.kind in OFFER_KINDS and not job.cancelled.is_set() and bool(job.text)
+
+
 def split_sentences(
     buffer: str, *, final: bool = False, min_chars: int = 12, clause_chars: int = 0
 ) -> tuple[list[str], str]:
@@ -433,6 +453,7 @@ class AssistantJob:
     sentences: list[tuple[float, str]] = field(default_factory=list)  # (s desde el pedido, frase)
     allowed_distances: set[tuple[str, float]] | None = None  # None = no se verifica
     dropped: list[str] = field(default_factory=list)  # tramos descartados por números inventados
+    more: bool = False  # Claude marcó [MÁS]: queda algo útil sin decir (se ofrece «¿Querés más…?»)
     done: threading.Event = field(default_factory=threading.Event)
     cancelled: threading.Event = field(default_factory=threading.Event)
     error: str | None = None
@@ -566,6 +587,11 @@ class Assistant:
             job.done.set()
 
     def _emit(self, job: AssistantJob, sentence: str, t0: float, full: list[str]) -> None:
+        if _MORE.search(sentence):  # la marca no se dice: enciende el ofrecimiento
+            job.more = True
+            sentence = _MORE.sub("", sentence).strip()
+            if not sentence:
+                return
         if job.allowed_distances is not None and not verify_distances(
             sentence, job.allowed_distances
         ):

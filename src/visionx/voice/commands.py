@@ -27,6 +27,16 @@ HEIGHT = "altura"  # «mido 1,80» -> objetivo "altura:1.8"
 INTRO = "hola"  # «Hola VisionX», «ayuda», «¿qué podés hacer?»: la presentación interactiva
 # Cómo habla VisionX, a pedido de la persona: "voz:rapido|lento|normal" y
 # "detalle:corto|largo|normal".
+# Respuesta a «¿Querés más detalle?»: el controlador la usa solo si hay un ofrecimiento abierto.
+YES = "si"
+NO = "no"
+EXPAND = "__ampliar__"  # objetivo de DESCRIBE: ampliar la respuesta anterior
+_YES = re.compile(
+    r"^(si|dale|bueno|ok|okey|okay|claro|de una|obvio|mas detalle|con mas detalle|contame mas|"
+    r"decime mas|amplia\w*|segui)( si)?( dale)?( por favor| gracias)?$"
+)
+_NO = re.compile(r"^(no|nah|no gracias|asi esta bien|esta bien asi|esta bien|nada mas|"
+                 r"no hace falta|no por ahora)( gracias)?$")  # fmt: skip
 VOICE = "voz"
 DETAIL = "detalle"
 _INTRO = re.compile(
@@ -137,7 +147,9 @@ _DESCRIBE = re.compile(r"^(descri\w*|contame|cuentame)\b|^que (hay|ves|tengo|veo
 _SEARCH = re.compile(
     # Guiar empieza buscando (TECNICO T09): "llevame a la silla" es una búsqueda con guía.
     # "encontr\w*" y "encuentr\w*" aceptan "encontré" y "encuéntrame", que Whisper escribe a veces.
-    r"^(busca\w*|buscar|encontr\w*|encuentr\w*|ubica\w*|ubicar|hay|guia\w*|llevame|acercame)\b|"
+    # También conjugados de pedido («que me guíes», «busques», «me lleves»), vivo 19/11.
+    r"^(busca\w*|buscar|busqu\w*|encontr\w*|encuentr\w*|ubica\w*|ubicar|ubiqu\w*|hay|"
+    r"gui(a|e|es|as)\w*|llev(ame|es|ar|arme)|acerc(ame|ar|arme)|acerqu\w*)\b|"
     r"^donde (esta|estan|hay|quedo|dejo|deje)\b"
 )
 _CHOOSE = {
@@ -156,8 +168,44 @@ _COMMAND_WORDS = {
     "ubica", "ubicame", "ubicar", "hay", "donde", "esta", "estan", "quedo", "dejo", "deje",
     "a", "que", "distancia", "tan", "lejos", "cerca", "cuan", "cuanto", "cuantos", "metros",
     "queda", "estoy", "de", "hasta", "me", "se", "en", "algun", "alguna", "aca", "guiame",
-    "guiar", "llevame", "acercame", "para", "con",
+    "guiar", "llevame", "acercame", "para", "con", "busques", "buscarme", "guies", "guias",
+    "guiarme", "lleves", "llevar", "llevarme", "acerques", "acercar", "acercarme", "ubiques",
+    "encuentres", "mi", "mis",
 }  # fmt: skip
+
+
+# Pedidos amables: el verbo de la orden viene después (vivo 19/11: «Sí, puedes buscar mi teléfono»
+# y «Quiero que me guíes a la taza» terminaban en Claude, que describe en vez de guiar).
+_POLITE = (
+    "si", "podes", "puedes", "podrias", "podria", "me podes", "me puedes", "me podrias",
+    "me podria", "vos podes", "queres", "quiero que", "quisiera que", "necesito que",
+    "necesito", "ayudame a", "me ayudas a", "me ayudarias a", "te pido que", "por favor",
+)  # fmt: skip
+_ME_VERB = re.compile(r"^me (?=(gui|busqu|busca|llev|acerq|acerc|ubiq|encuentr|lea|leas|descri))")
+# Lo que Whisper escribe en vez de «guiame» (vivo 19/11: «Guiame al pizarrón» -> «Diame al
+# pizarrón»). Solo cuenta si sigue «a / al / hasta» y un objeto del catálogo.
+_HEARD_GUIAME = re.compile(
+    r"^(diame|kiame|quiame|viame|biame|liame|giame|guiame)\s+(a|al|hasta)\s+(.+)$"
+)
+# Un verbo de orden en cualquier lugar de la frase (si no está al principio).
+_VERB_ANY = re.compile(
+    r"\b(busca\w*|buscar|busqu\w*|encontra\w*|ubica\w*|gui(a|e|es|as)\w*|llev(ame|es|ar)|"
+    r"acerc(ame|ar)|acerqu\w*|distancia|lee\w*|leer|leas|describ\w*|descri\w*)\b"
+)
+
+
+def polite(text: str) -> str:
+    """«podés buscar la taza» -> «buscar la taza»; «quiero que me guíes» -> «guies»."""
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _POLITE:
+            if text.startswith(prefix + " ") and len(text) > len(prefix) + 1:
+                text, changed = text[len(prefix) + 1 :], True
+        new = _ME_VERB.sub("", text)
+        if new != text:
+            text, changed = new, True
+    return text
 
 
 def clean(text: str) -> str:
@@ -231,10 +279,17 @@ class CommandParser:
         plain = " ".join(plain.split())
         if _INTRO.search(plain):
             return Interpretation(utterance, Mode.CONTROL, INTRO, "hola")
+        if _YES.search(plain):
+            return Interpretation(utterance, Mode.CONTROL, YES, "si")
+        if _NO.search(plain):
+            return Interpretation(utterance, Mode.CONTROL, NO, "no")
         pref = _preference(plain)
         if pref is not None:
             return Interpretation(utterance, Mode.CONTROL, pref, "preferencia")
-        text = clean(utterance)
+        text = polite(clean(utterance))
+        heard = _HEARD_GUIAME.match(text)
+        if heard and find_object(heard.group(3), self.catalog) is not None:
+            text = f"guiame {heard.group(2)} {heard.group(3)}"
         words = text.split()
         if not words:
             return Interpretation(utterance, None, None, "vacio", "No escuché nada.")
@@ -315,6 +370,18 @@ class CommandParser:
         cls = self.catalog.resolve(text)
         if cls is not None:
             return Interpretation(utterance, Mode.SEARCH, cls, "solo-objeto")
+        # Red de seguridad: una orden con el verbo en el medio («¿me ayudás a buscar la taza?»)
+        # es esa orden, no una pregunta para Claude.
+        verb = _VERB_ANY.search(text)
+        if verb is not None and verb.start() > 0:
+            inner = self.parse(text[verb.start() :])
+            if (
+                inner.ok
+                and inner.mode in (Mode.SEARCH, Mode.DISTANCE, Mode.READ)
+                or (inner.ok and inner.mode is Mode.DESCRIBE and inner.target is None)
+            ):
+                return Interpretation(utterance, inner.mode, inner.target,
+                                      f"{inner.rule}-verbo-en-el-medio", inner.reply)  # fmt: skip
         if self.questions and len(words) >= 2:
             return Interpretation(utterance, Mode.DESCRIBE, utterance.strip(), "pregunta")
         return Interpretation(

@@ -40,6 +40,43 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-19 (noche) — T08: respuestas cortas con «¿Querés más detalle?» y órdenes que no van a Claude
+
+Autor: Tomás (B), con Claude. Devolución del vivo de hoy: las respuestas de Claude eran muy
+densas, y 6 de 26 órdenes por voz terminaban en Claude (que describe en vez de guiar).
+
+**Respuestas cortas.** El prompt pide por defecto 1 o 2 frases (≤ 25 palabras); en distancia,
+objeto + metros + costado (≤ 20 palabras). Si quedó algo útil (sobre qué está, al lado de qué,
+altura, más texto), Claude termina con la marca `[MÁS]`, que no se dice: VisionX agrega
+«¿Querés más detalle?». Durante 15 s, «sí / dale / contame más» pide el pedido `ampliar`
+(Claude amplía sin repetir, con la conversación que ya recuerda); «no» contesta «Dale.». Un
+«sí» sin ofrecimiento abierto no hace nada. Solo en leer, describir, preguntas y distancia;
+nunca en buscar ni en «leé todo». «Respuestas más detalladas» sigue subiendo el tope.
+
+Banco de incertidumbre (60 casos, Sonnet 5.5, `outputs/vlm/banco-incertidumbre-corto2.csv`
+contra `banco-incertidumbre.csv`):
+
+| | antes | ahora |
+|---|---:|---:|
+| palabras dichas (mediana / máx.) | 43,5 / 67 | 24,5 / 46 |
+| fidelidad de números | 60/60 | 60/60 |
+| nivel respetado | 60/60 | 59/60 |
+| tiempo total (mediana) | 1,49 s | 1,77 s |
+| ofrece «¿más detalle?» | — | 59/60 |
+
+El caso 31 («varios») omitió uno de tres objetos y dijo «unos 1 metro» en vez de «más o menos».
+Un primer intento solo con el prompt general bajó a 36,5 palabras: el pedido de distancia exigía
+costado, altura y apoyo; se movieron a `[MÁS]`. Costo de las dos corridas: 0,71 USD.
+
+**Órdenes mal transcriptas.** Antes, con el asistente activo, lo que no empezaba con el verbo
+iba a Claude como pregunta. Ahora, sin tocar a Claude: se sacan pedidos amables al principio
+(«sí, podés…», «quiero que me…», «necesito», «ayudame a»), se aceptan conjugaciones de pedido
+(«guíes», «busques», «lleves»), «diame / kiame / viame…» cuentan como «guiame» solo si sigue
+«a / al / hasta» y un objeto del catálogo, «tasa» es «taza», y una orden con el verbo en el medio
+se interpreta como esa orden. «Guiame al pizarrón» responde «No sé buscar pizarrón» en vez de ir
+a Claude. `tests/test_parser_vivo.py` tiene las frases del vivo; las 62 del set de frases siguen
+bien (62/62).
+
 ## 2026-11-19 (noche) — T08/T07: panel de audio en la ventana (tecla «a»); el micrófono llegaba en ceros
 
 Tarea: T08, T07. Persona/agente: Bauty / Claude Code. Rama: `a/T08-panel-audio` (sin publicar).

@@ -293,11 +293,14 @@ class DescribeHandler:
         joint = view.measured
         if joint is not None and age_s(joint, now_ns) <= self.s.max_measure_age_s:
             objects = self._measured_objects(joint)
+        from visionx.voice.commands import EXPAND
+
+        expand = question == EXPAND
         job = self.assistant.submit(
             command.request_id,
-            "pregunta",
+            "ampliar" if expand else "pregunta",
             frame.left,
-            request=question,
+            request="Contame más detalle." if expand else question,
             objects=objects,
             read_text=bool(_TEXTUAL.search(question)),
         )
@@ -364,6 +367,10 @@ class DescribeHandler:
                     "error": job.error,
                 },
             )
+            from visionx.assistant.core import MORE_OFFER, offer_more
+
+            if offer_more(job):
+                says.append(Say(MORE_OFFER, Priority.SHORT))
             return says, True
         return says, False
 
