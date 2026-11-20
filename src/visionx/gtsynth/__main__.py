@@ -241,6 +241,9 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--salida", default=str(ROOT / "outputs" / "gtsynth" / "e0.json"))
     sc.add_argument("--variantes", nargs="+", default=None)
     sc.add_argument("--cada", type=int, default=6, help="un cuadro de cada N")
+    mo = sub.add_parser("mosaico", help="las 6 cámaras de la expo a la vez (desde los videos)")
+    mo.add_argument("carpeta", help="carpeta de `gtsynth video` (data/stand-video)")
+    mo.add_argument("--e0", default=str(ROOT / "outputs" / "gtsynth" / "e0.json"))
     de = sub.add_parser("deteccion", help="recall y precisión de detectores contra el GT")
     de.add_argument("raiz")
     de.add_argument("--modelos", nargs="+", required=True, help="nombres en weights/ o rutas .pt")
@@ -275,6 +278,12 @@ def main(argv: list[str] | None = None) -> int:
 
         solo = tuple(args.solo) if args.solo else None
         preparar_video(args.raiz, args.salida, args.red, solo=solo)
+        return 0
+    if args.cmd == "mosaico":
+        from visionx.gtsynth.mosaico import armar_todos
+
+        for path in armar_todos(args.carpeta, args.e0):
+            print(path)
         return 0
     if args.cmd == "sin-calibrar":
         from visionx.gtsynth.sin_calibrar import correr_todo

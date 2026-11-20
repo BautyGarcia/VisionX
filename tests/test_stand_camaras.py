@@ -68,3 +68,25 @@ def test_videos_pasa_de_cuadro_y_de_video(tmp_path):
     assert a.shape == (H, W, 3) and int(b.mean()) > int(a.mean()) and int(c.mean()) >= 55
     img = render_camaras(tmp_path, ahora_s=0.0)
     assert img.shape == (H, W, 3)
+
+
+def test_mosaico_junta_las_camaras_y_marca_las_que_faltan(tmp_path):
+    from visionx.gtsynth.mosaico import CLASICO, armar
+
+    lam = np.zeros((1080, 1920, 3), np.uint8)
+    x, y, w, h = CLASICO
+    lam[y : y + h, x : x + w] = (0, 200, 0)  # el panel «Clásico» en verde
+    v = cv2.VideoWriter(str(tmp_path / "hotel_0-video-zed-2.mp4"),
+                        cv2.VideoWriter_fourcc(*"mp4v"), 10, (1920, 1080))  # fmt: skip
+    for _ in range(3):
+        v.write(lam)
+    v.release()
+    path = armar(tmp_path, "hotel_0")
+    cap = cv2.VideoCapture(str(path))
+    assert int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) == 3
+    ok, f = cap.read()
+    assert ok and f.shape == (1080, 1920, 3)
+    # ZED 2 es la cuarta celda (abajo a la izquierda): ahí aparece el verde del panel.
+    celda = f[72 + (1080 - 72) // 2 :, : 1920 // 3]
+    assert (celda[:, :, 1] > 150).mean() > 0.2
+    assert armar(tmp_path, "otra_escena") is None
