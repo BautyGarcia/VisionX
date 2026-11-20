@@ -76,9 +76,27 @@ ELP_RENDER = StereoGeometry(
 )  # igual que spatial.front_percentile: la superficie del frente
 
 
+def _hssd() -> dict[str, tuple[str, ...]]:
+    """Partición de HSSD (125 train / 30 val / 13 test), de su `scene_splits.yaml`."""
+    global _HSSD
+    if _HSSD is None:
+        path = Path(__file__).with_name("hssd_particion.json")
+        datos = json.loads(path.read_text(encoding="utf-8"))
+        _HSSD = {k: tuple(datos[k]) for k in ("train", "val", "test")}
+    return _HSSD
+
+
+_HSSD: dict[str, tuple[str, ...]] | None = None
+
+
+def escenas_de(particion: str) -> tuple[str, ...]:
+    """Escenas de una partición: las de Replica más las de HSSD."""
+    return PARTICION[particion] + _hssd()[particion]
+
+
 def particion_de(escena: str) -> str | None:
-    for nombre, escenas in PARTICION.items():
-        if escena in escenas:
+    for nombre in PARTICION:
+        if escena in escenas_de(nombre):
             return nombre
     return None
 
@@ -183,7 +201,7 @@ def vistas(
 ) -> Iterator[Vista]:
     """Vistas de una variante, ordenadas; opcionalmente solo las de una partición."""
     base = Path(raiz) / variante
-    escenas = PARTICION[particion] if particion else None
+    escenas = set(escenas_de(particion)) if particion else None
     for json_path in sorted(base.glob("*/*/vista.json")):
         if escenas is not None and json_path.parent.parent.name not in escenas:
             continue

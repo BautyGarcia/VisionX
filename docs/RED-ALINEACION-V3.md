@@ -117,6 +117,15 @@ detalle en [GT-SINTETICO](GT-SINTETICO.md)). Se lee con `visionx.gtsynth`.
 |---|---:|---|
 | `elp-margen` (train) | 2400 | ELP a media resolución (960×540 nominal), con margen |
 | `camara-sorteada` | 2400 | En cada vista, otro campo (55–130°), otra separación (3–20 cm) y otra proporción (16:9 o 4:3): lo que necesita la v3 para servir en cualquier cámara |
+| `camara-sorteada-ojo` | 2400 | Como `camara-sorteada`, con el ojo derecho **realmente** corrido ±2 mm en altura y en profundidad, distinto en cada vista (`ojo_derecho_m` en `vista.json`). El paralaje es real, cosa que un remuestreo no simula |
+| `elp-margen-ojo` | 1200 | ELP a media resolución con el ojo derecho corrido ±2 mm por vista |
+| `hssd-camara-sorteada` | hasta 2500 | Cámara sorteada (16:9) + ojo ±2 mm en las 125 escenas train de HSSD: casas modeladas, con mucha más variedad de objetos y texturas que Replica. Vistas oscuras con exposición automática (misma curva en los dos ojos) |
+
+Las tres últimas salieron de las colas del 20/11 (`scripts/gt_sintetico/tanda_noche2.sh` y `tanda_hssd.sh`); los
+totales exactos están en la BITÁCORA. **Distorsión de lente:** no se renderiza. Es un
+remuestreo 2D que no depende de la profundidad, así que se aplica al entrenar (con
+`perturb.py`, sobre el lienzo con margen, sin bordes negros). Lo que sí hace falta renderizar es
+lo que depende de la profundidad: otra separación y el ojo corrido.
 
 **Cómo se arma una muestra:**
 1. Leer el lienzo: `v.izq()`, `v.der()`, `v.z()`, con la geometría del lienzo `v.geometria`.
@@ -133,6 +142,9 @@ Verificado el 20/11: en las variantes con margen, `v.recortar` da la misma image
 **Test mínimo antes de entrenar:** aplicar el campo exacto a la derecha desalineada y comparar
 con la derecha limpia. Fuera de los bordes, el error tiene que ser ≲ 1 nivel de gris.
 
+Partición de HSSD: `src/visionx/gtsynth/hssd_particion.json` (125 train, 30 val, 13 test, de su
+`scene_splits.yaml`). `vistas(raiz, variante, "train")` ya incluye las escenas de HSSD.
+
 ### 3.2 Para validar (solo escenas `val`)
 
 | Variante | Vistas | Qué mide |
@@ -141,7 +153,9 @@ con la derecha limpia. Fuera de los bordes, el error tiene que ser ≲ 1 nivel d
 | 6 perfiles: `angosta-60`, `base-corta-3`, `media-90`, `cuatro-tercios-90`, `base-larga-20`, `gran-angular-130` | 6 × 160 | ¿Generaliza a otras cámaras? |
 | `elp-arriba-1`, `elp-arriba-2`, `elp-adelante-2`, `elp-arriba-1-adelante-2` | 4 × 160 | Ojo derecho **realmente** corrido 1–2 mm: con paralaje de verdad, cosa que un remuestreo no simula |
 | `pose-altura`, `pose-poca-textura`, `pose-cerca` | 3 × 80 | Casos difíciles para la correlación |
-| `secuencias` | 320 | 10 recorridos de 8 cuadros por escena: el campo por cámara con cuadros seguidos, como en el uso real |
+| `secuencias` | 320 | 10 recorridos de 8 cuadros por escena: el campo por cámara con cuadros seguidos, como en el uso real (rehechas el 20/11: ya no se meten en las paredes) |
+| `camara-sorteada`, `camara-sorteada-ojo` (val) | 240 + 160 | Cámaras sorteadas en escenas que la red no vio |
+| `hssd-camara-sorteada` (val) | hasta 600 | 30 escenas de HSSD: ¿generaliza a otras casas? |
 | `ojo-de-pez` | 160 | **Fuera del alcance.** Solo se informa |
 
 `test` (6 escenas) no está renderizado para estas variantes. Se renderiza y se usa **una sola
@@ -237,7 +251,7 @@ extra.
 **HSSD:** aceptar la licencia en
 [huggingface.co/datasets/hssd/hssd-hab](https://huggingface.co/datasets/hssd/hssd-hab). Después,
 `git lfs install && git clone https://huggingface.co/datasets/hssd/hssd-hab` con un token de
-lectura de Hugging Face, o `datasets_download --uids hssd-hab`. `render_tanda.py` hoy carga el
+lectura de Hugging Face, o `datasets_download --uids hssd-hab`. **Hecho el 20/11**: ver GT-SINTETICO. Antes, `render_tanda.py` cargaba el
 `.ply` de Replica directo: para HSSD hay que pasarle el `scene_dataset_config`.
 
 Fuentes: [DATASETS.md de habitat-sim](https://github.com/facebookresearch/habitat-sim/blob/main/DATASETS.md),

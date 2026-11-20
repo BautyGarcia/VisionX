@@ -212,3 +212,14 @@ def test_lienzo_con_margen_recorta_la_camara_nominal(tmp_path):
     z = v.z()
     assert v.recortar(z).shape == (136, 240)
     assert np.array_equal(v.recortar(z), z[22:158, 40:280])
+
+
+def test_particion_de_hssd_sin_solapamientos():
+    from visionx.gtsynth.dataset import _hssd, escenas_de
+
+    h = _hssd()
+    assert (len(h["train"]), len(h["val"]), len(h["test"])) == (125, 30, 13)
+    todas = [e for es in h.values() for e in es]
+    assert len(todas) == len(set(todas))
+    assert particion_de(h["test"][0]) == "test" and particion_de("room_2") == "test"
+    assert "room_1" in escenas_de("val") and h["val"][0] in escenas_de("val")
