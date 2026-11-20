@@ -432,6 +432,12 @@ def main() -> int:
         help="con --perfil sorteada; cada proporción vuelve a cargar la escena",
     )
     ap.add_argument("--max-vistas", type=int, default=0, help="por escena (pruebas); 0 = todas")
+    ap.add_argument(
+        "--ancho-sorteada",
+        type=int,
+        default=1280,
+        help="con --perfil sorteada: ancho de la cámara nominal (960 para tandas livianas)",
+    )
     args = ap.parse_args()
 
     if bool(args.replica) == bool(args.hssd):
@@ -447,10 +453,20 @@ def main() -> int:
             [args.semilla, sum(map(ord, escena)), sum(map(ord, args.variante))]
         )
         if args.perfil == "sorteada":
-            grupos = {k: v for k, v in {"16:9": (1280, 720), "4:3": (1280, 960)}.items()
-                      if k in args.proporciones}  # fmt: skip
-            elegido = [str(rng.choice(list(grupos))) for _ in range(args.vistas)]
-        else:
+            a = args.ancho_sorteada
+            tamanos = {"16:9": (a, a * 9 // 16 // 2 * 2), "4:3": (a, a * 3 // 4 // 2 * 2)}
+            grupos = {k: v for k, v in tamanos.items() if k in args.proporciones}
+            if args.tipo_pose == "recorrido":  # un recorrido es una sola cámara: una proporción
+                elegido = [str(rng.choice(list(grupos)))] * args.vistas
+            else:
+                elegido = [str(rng.choice(list(grupos))) for _ in range(args.vistas)]
+        # En un recorrido la cámara sorteada es la misma en todos los cuadros (se sortea una vez).
+        cam_recorrido = (
+            (float(rng.uniform(55, 130)), float(rng.uniform(0.03, 0.20)))
+            if args.perfil == "sorteada" and args.tipo_pose == "recorrido"
+            else None
+        )
+        if args.perfil != "sorteada":
             grupos = {"fijo": PERFILES[args.perfil][:2]}
             elegido = ["fijo"] * args.vistas
         hechas = 0
@@ -497,9 +513,12 @@ def main() -> int:
                 if args.perfil == "sorteada":  # campo y separación de esta vista, en caliente
                     # DESPUÉS de fijar la pose: set_state(reset_sensors=True) vuelve los sensores
                     # a la posición de su especificación.
-                    hfov_n = float(rng.uniform(55, 130))
+                    if cam_recorrido is not None:
+                        hfov_n, cam_b = cam_recorrido
+                    else:
+                        hfov_n = float(rng.uniform(55, 130))
+                        cam_b = float(rng.uniform(0.03, 0.20))
                     cam_fx = fx_de(hfov_n, wn)
-                    cam_b = float(rng.uniform(0.03, 0.20))
                     hfov_l = math.degrees(2.0 * math.atan(wl / (2.0 * cam_fx)))
                     for name in ("izq", "der", "z", "inst"):
                         sim._sensors[name]._sensor_object.fov = mn.Deg(hfov_l)

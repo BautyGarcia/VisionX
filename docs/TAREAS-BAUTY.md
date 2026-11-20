@@ -24,8 +24,39 @@ preciso ~0,6 s). En la PC de Tomás (sin CUDA) corre en CPU a ~1,5 s por cuadro.
      600 val) para E2.
 
    Copiarlos a un disco local antes de entrenar (leer del Drive es muy lento).
+
+   Datos nuevos (20/11):
+   - `VisionX-Personal/gt-video/` (~15 GB): los recorridos de 90 cuadros de las **6 cámaras de
+     la expo** (`video-elp-full`, `video-realsense-d435`, `video-realsense-d455`, `video-zed-2`,
+     `video-zed-mini`, `video-oak-d`) y de 3 genéricas (`video-angosta-60`,
+     `video-gran-angular-130`, `video-base-larga-20`), en `hotel_0` y `office_2` (val).
+     **Son cámaras de evaluación: no entrenar con ellas.**
+   - `VisionX-Personal/gt-sintetico-elp/hssd-recorridos-sorteada/` (~17 GB, se sube cuando
+     termina el render de esta noche): un recorrido de 30 cuadros por casa de HSSD (125 train
+     + 30 val), **cada recorrido con su propia cámara** sorteada (55–130°, 3–20 cm, 16:9 o
+     4:3), a 960 px de ancho con lienzo de margen. Es para la versión de varios cuadros de la
+     red de entrada (E2) y para reentrenar la U-Net con cámaras variadas.
 3. `unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN` antes de correr nada (la key de VisionX es
    solo para el modo de habla).
+
+### 0.1 Bajar el Drive a tu disco (importante)
+
+El Drive de Tomás tiene un límite de 200 GB y ya está casi lleno. **Bajá a tu disco todo lo que
+puedas** de `VisionX-Personal/`; cuánto, lo decidís vos según el espacio que tengas. Cuando
+termines, **avisale a Tomás qué carpetas bajaste completas**: él las borra del Drive para seguir
+subiendo datos nuevos. Las copias originales quedan en el disco de 2 TB de su PC, así que no se
+pierde nada.
+
+Orden sugerido (tamaños aproximados):
+
+| Prioridad | Carpetas | GB | Para qué |
+|---|---|---:|---|
+| 1 | `gt-sintetico-elp/elp`, `camara-sorteada`, `hssd-camara-sorteada` | 39 | E1 y E2 |
+| 2 | `gt-video` (6 cámaras de la expo + 3 genéricas) | 15 | Evaluar E2 en cámaras no vistas |
+| 2 | `gt-sintetico-elp/hssd-recorridos-sorteada` (sube la noche del 20/11) | 17 | E2 con varios cuadros, reentrenar la U-Net |
+| 3 | `camara-sorteada-ojo`, `elp-margen`, `elp-margen-ojo`, `distinta` | 39 | Ojo corrido, lentes con margen, escala |
+| 4 | `secuencias`, perfiles fijos (`media-90`, `gran-angular-130`, `cuatro-tercios-90`, `base-larga-20`, `base-corta-3`, `angosta-60`), poses (`elp-arriba-*`, `elp-adelante-2`, `pose-*`), `ojo-de-pez` | 26 | Casos difíciles y otras evaluaciones |
+| — | `pesos/`, `stand-camaras/`, `stand-video/` | < 1 | Pesos de YOLOE y demos del stand |
 
 ## 1. Revisar el diseño (antes de entrenar)
 
@@ -120,7 +151,8 @@ con los parámetros estimados contra los reales (PLUG-AND-PLAY, sección 4).
 **Entregable:**
 - error del campo de visión, del centro y de `k1` en val (mediana y p90);
 - el mismo error en las 6 cámaras de la expo, sin entrenar con ellas: los recorridos
-  `video-*` de `data/gt-video`, que Tomás pasa por disco;
+  `video-*` de `VisionX-Personal/gt-video` (las etiquetas están en `vista.json`, igual que en
+  `camara-sorteada`);
 - cobertura del intervalo del 90 % de cada `b`;
 - una entrada en la BITACORA.
 
@@ -138,4 +170,6 @@ con los parámetros estimados contra los reales (PLUG-AND-PLAY, sección 4).
 - Recorridos de las 6 cámaras de la expo, E0 y los videos del stand, en la PC de escritorio.
 - La pantalla «Cámara nueva» del dashboard y el soporte de RealSense (dos transmisiones
   infrarrojas).
-- La tanda grande de recorridos con cámaras sorteadas, cuando Bauty cierre la revisión (paso 1).
+- La tanda de recorridos con cámaras sorteadas (`tanda_recorridos.sh`, noche del 20/11).
+- Falta simular (segunda tanda, cuando haya lugar en el Drive): las 9 cámaras de evaluación en
+  casas val de HSSD, para que E3 y E4 tengan más de dos escenas.
