@@ -197,3 +197,18 @@ def test_alineador_valida_el_modo_y_sin_alinear_devuelve_el_par():
     par = (np.zeros((H, W, 3), np.uint8), np.full((H, W, 3), 9, np.uint8))
     ders, info = Alineador("ninguna", g).corregir([par])
     assert info.modo == "ninguna" and ders[0] is par[1]
+
+
+def test_lienzo_con_margen_recorta_la_camara_nominal(tmp_path):
+    v = _vista(tmp_path)
+    assert v.nominal is None and v.geometria_nominal == v.geometria and v.modelo == "pinhole"
+    meta = dict(v.meta)
+    meta["nominal"] = {"ancho": 240, "alto": 136, "x0": 40, "y0": 22, "cx": 119.5, "cy": 67.5,
+                       "hfov_deg": 73.7}  # fmt: skip
+    (v.carpeta / "vista.json").write_text(json.dumps(meta), encoding="utf-8")
+    v = Vista(v.carpeta)
+    g = v.geometria_nominal
+    assert (g.width, g.height, g.cx, g.fx) == (240, 136, 119.5, FX)
+    z = v.z()
+    assert v.recortar(z).shape == (136, 240)
+    assert np.array_equal(v.recortar(z), z[22:158, 40:280])

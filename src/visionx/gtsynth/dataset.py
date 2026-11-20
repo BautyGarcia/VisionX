@@ -111,6 +111,41 @@ class Vista:
         return StereoGeometry(c["ancho"], c["alto"], c["fx"], c["fy"], c["cx"], c["cy"],
                               c["base_m"])  # fmt: skip
 
+    @property
+    def modelo(self) -> str:
+        """«pinhole» u «ojo-de-pez-doble-esfera» (solo para evaluar: no es un par rectificado)."""
+        return self.meta["camara"].get("modelo", "pinhole")
+
+    @property
+    def nominal(self) -> dict | None:
+        """Dónde está la cámara nominal dentro del lienzo con margen (tanda #53), o None.
+
+        Las variantes con margen (`elp-margen`, perfiles, `camara-sorteada`…) se renderizan en un
+        lienzo más grande con la misma focal y el centro en el medio: así se puede desalinear el
+        ojo derecho sin que entren bordes negros y después recortar la parte nominal.
+        """
+        n = self.meta.get("nominal")
+        c = self.meta["camara"]
+        if n is None or (n["ancho"], n["alto"]) == (c["ancho"], c["alto"]):
+            return None
+        return n
+
+    @property
+    def geometria_nominal(self) -> StereoGeometry:
+        """La cámara que se simula (el recorte nominal); sin margen, la misma que `geometria`."""
+        n, c = self.nominal, self.meta["camara"]
+        if n is None:
+            return self.geometria
+        return StereoGeometry(n["ancho"], n["alto"], c["fx"], c["fy"], n["cx"], n["cy"],
+                              c["base_m"])  # fmt: skip
+
+    def recortar(self, img: np.ndarray) -> np.ndarray:
+        """Del lienzo al recorte nominal (imagen, Z o instancias); sin margen, la misma imagen."""
+        n = self.nominal
+        if n is None:
+            return img
+        return img[n["y0"] : n["y0"] + n["alto"], n["x0"] : n["x0"] + n["ancho"]]
+
     def izq(self) -> np.ndarray:
         """BGR uint8, como entrega la cámara."""
         return _leer_bgr(self.carpeta / "izq.png")
