@@ -72,6 +72,70 @@ def lienzo(ancho: int, alto: int, margen: float) -> tuple[int, int, int, int]:
     return ancho + 2 * mx, alto + 2 * my, mx, my
 
 
+# Objetos de la escena cargada cuando no vienen del `semantic_scene` de Replica (HSSD): los
+# arma `preparar_hssd` y los usa `sortear_poses`.
+_OBJETOS: list | None = None
+
+
+def categorias_hssd(raiz: Path) -> dict[str, str]:
+    """Plantilla de objeto de HSSD -> categoría (metadata/fpmodels-with-decomposed.csv)."""
+    import csv
+
+    out = {}
+    with open(raiz / "metadata" / "fpmodels-with-decomposed.csv", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            cat = r.get("main_category") or (r.get("wnsynsetkey") or "").split(".")[0]
+            out[r["id"]] = cat or "otro"
+    return out
+
+
+def preparar_hssd(sim, categorias: dict[str, str]) -> dict[int, str]:
+    """Navmesh, un id semántico por objeto (el sensor `inst` los dibuja) y la tabla id -> clase.
+
+    HSSD no trae navmesh: se calcula con los objetos estáticos, para una persona de 1,7 m. La
+    sala (paredes, piso, techo) queda con id 0.
+    """
+    global _OBJETOS
+    # Luz de casa iluminada: dos luces de arriba y una que acompaña a la cámara (con la luz por
+    # defecto de Habitat el brillo medio daba 30–50 sobre 255 y se perdía la textura).
+    gfx = habitat_sim.gfx
+    luces = [
+        gfx.LightInfo(vector=[0.3, 1.0, 0.4, 0.0], color=[1.6, 1.6, 1.5],
+                      model=gfx.LightPositionModel.Global),
+        gfx.LightInfo(vector=[-0.4, 1.0, -0.3, 0.0], color=[1.2, 1.2, 1.2],
+                      model=gfx.LightPositionModel.Global),
+        gfx.LightInfo(vector=[0.0, 0.0, 1.0, 0.0], color=[1.0, 1.0, 1.0],
+                      model=gfx.LightPositionModel.Camera),
+    ]  # fmt: skip
+    sim.set_light_setup(luces, gfx.DEFAULT_LIGHTING_KEY)
+    ns = habitat_sim.NavMeshSettings()
+    ns.set_defaults()
+    ns.agent_height, ns.agent_radius = 1.7, 0.2
+    ns.include_static_objects = True
+    if not sim.recompute_navmesh(sim.pathfinder, ns):
+        raise RuntimeError("no se pudo calcular la navmesh")
+    rom = sim.get_rigid_object_manager()
+    clases, objs = {}, []
+    for k, handle in enumerate(sorted(rom.get_object_handles()), start=1):
+        obj = rom.get_object_by_handle(handle)
+        obj.semantic_id = k
+        # «<hash>_:0000» o, si el modelo viene en partes, «<hash>_part_15_:0000».
+        plantilla = handle.split("/")[-1].split(":")[0].rstrip("_").split("_part_")[0]
+        clase = categorias.get(plantilla, "otro")
+        clases[k] = clase
+        bb = obj.root_scene_node.cumulative_bb
+        centro = obj.transformation.transform_point(bb.center())
+        if clase not in NO_OBJETO_HSSD and bb.size().length() > 0.05:
+            objs.append((k, clase, np.asarray(centro, dtype=np.float64)))
+    _OBJETOS = objs
+    return clases
+
+
+# Categorías de HSSD que no se apuntan (estructura o cosas a las que nadie pregunta la distancia).
+NO_OBJETO_HSSD = frozenset({"otro", "window", "door", "curtain", "ceiling_lamp", "wall_lamp",
+                            "carpet", "picture", "counter", "stairs", "fireplace"})  # fmt: skip
+
+
 def armar(
     malla: str,
     ancho_l: int,
@@ -82,7 +146,16 @@ def armar(
     ojo_de_pez: bool,
 ) -> habitat_sim.Simulator:
     b = habitat_sim.SimulatorConfiguration()
-    b.scene_id = malla
+    if "::" in malla:  # «config_del_dataset::escena» (HSSD)
+        b.scene_dataset_config_file, b.scene_id = malla.split("::")
+        b.load_semantic_mesh = False
+        # HSSD trae materiales con luz física y ninguna luz: sin esto las vistas salen oscuras.
+        b.override_scene_light_defaults = True
+        b.scene_light_setup = habitat_sim.gfx.DEFAULT_LIGHTING_KEY
+        if hasattr(b, "pbr_image_based_lighting"):  # luz de entorno para los materiales PBR
+            b.pbr_image_based_lighting = True
+    else:
+        b.scene_id = malla
     b.gpu_device_id = -1
     b.enable_physics = False
     specs = []
@@ -125,15 +198,33 @@ def _recorte(arr: np.ndarray, x0: int, y0: int, w: int, h: int) -> np.ndarray:
 
 def secuencias(sim, rng, n, rec, d_min, d_max, min_px, ids, largo: int = 8) -> list[dict]:
     """n // largo recorridos: arranca apuntando a un objeto y avanza ~10 cm por cuadro
-    (hacia donde mira, con un giro suave de ±3°), como una persona que camina con la cámara."""
+    (hacia donde mira, con un giro suave de ±3°), como una persona que camina con la cámara.
+
+    Camina sobre la navmesh (`try_step`) y gira 30–60° si adelante, en el centro de la imagen,
+    queda algo a menos de 0,6 m: sin eso, algunos recorridos terminaban metidos en una pared
+    (19/11: cuadros con todo a centímetros, que no se pueden verificar).
+    """
     out = []
     for r, inicio in enumerate(sortear_poses(sim, rng, n // largo, "normal", rec, max(d_min, 1.2),
                                               d_max, min_px, ids)):  # fmt: skip
         ojo, yaw = inicio["ojo"].copy(), inicio["yaw"]
+        altura = float(inicio["altura"])
         for f in range(largo):
+            for _ in range(6):  # mirar adelante; si está muy cerca, girar y volver a mirar
+                fijar_pose(sim, ojo, yaw, inicio["pitch"])
+                z = _recorte(np.asarray(ver(sim, "z")["z"]), *rec)
+                h, w = z.shape
+                centro = z[h // 3 : 2 * h // 3, w // 3 : 2 * w // 3]
+                centro = centro[np.isfinite(centro) & (centro > 0)]
+                if centro.size and float(np.percentile(centro, 10)) >= 0.6:
+                    break
+                yaw += math.radians(float(rng.choice([-1, 1])) * rng.uniform(30, 60))
             out.append({**inicio, "ojo": ojo.copy(), "yaw": yaw, "tipo": "secuencia",
                         "secuencia": {"recorrido": r, "cuadro": f}})  # fmt: skip
-            ojo = ojo + 0.10 * np.array([-math.sin(yaw), 0.0, -math.cos(yaw)])
+            pie = ojo - np.array([0.0, altura, 0.0])
+            destino = pie + 0.10 * np.array([-math.sin(yaw), 0.0, -math.cos(yaw)])
+            pie = np.asarray(sim.pathfinder.try_step(pie, destino), dtype=np.float64)
+            ojo = pie + np.array([0.0, altura, 0.0])
             yaw += math.radians(rng.uniform(-3, 3))
     return out
 
@@ -157,7 +248,7 @@ def sortear_poses(sim, rng, n, tipo, rec, d_min, d_max, min_px, ids_estructura) 
     min_px = max(60, round(min_px * rec[2] * rec[3] / (1920 * 1080)))
     if tipo == "secuencia":
         return secuencias(sim, rng, n, rec, d_min, d_max, min_px, ids_estructura)
-    objs = objetos(sim)
+    objs = _OBJETOS if _OBJETOS is not None else objetos(sim)
     out, intentos = [], 0
     while len(out) < n and intentos < n * 60:
         intentos += 1
@@ -214,6 +305,25 @@ def sortear_poses(sim, rng, n, tipo, rec, d_min, d_max, min_px, ids_estructura) 
     return out
 
 
+def exponer(obs: dict, objetivo: float = 110.0) -> float | None:
+    """Si la vista quedó oscura, sube la exposición con la misma curva en los dos ojos.
+
+    Es una transformación punto a punto idéntica en izquierda y derecha: no cambia qué píxel
+    corresponde a cuál (la disparidad y la Z siguen exactas). Devuelve el exponente usado.
+    """
+    izq = np.asarray(obs["izq"])[..., :3].astype(np.float32)
+    media = float(izq.mean())
+    if media >= 0.7 * objetivo or media <= 1.0:
+        return None
+    g = float(np.clip(np.log(objetivo / 255.0) / np.log(media / 255.0), 0.35, 1.0))
+    for ojo in ("izq", "der"):
+        img = np.asarray(obs[ojo]).copy()
+        rgb = img[..., :3].astype(np.float32) / 255.0
+        img[..., :3] = np.clip(255.0 * rgb**g + 0.5, 0, 255).astype(np.uint8)
+        obs[ojo] = img
+    return g
+
+
 def guardar(carpeta: Path, obs, meta: dict) -> None:
     carpeta.mkdir(parents=True, exist_ok=True)
     Image.fromarray(np.asarray(obs["izq"])[:, :, :3]).save(carpeta / "izq.png")
@@ -226,7 +336,15 @@ def guardar(carpeta: Path, obs, meta: dict) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--replica", required=True)
+    ap.add_argument("--replica", help="carpeta de Replica (una escena por carpeta)")
+    ap.add_argument("--hssd", help="carpeta de hssd-hab (en vez de --replica)")
+    ap.add_argument(
+        "--ojo-sorteado",
+        type=float,
+        default=0.0,
+        metavar="M",
+        help="por vista, corre el ojo derecho ±M metros en y y en z (paralaje real)",
+    )
     ap.add_argument("--escenas", nargs="+", required=True)
     ap.add_argument("--salida", required=True)
     ap.add_argument("--variante", required=True, help="nombre de la carpeta de salida")
@@ -243,17 +361,31 @@ def main() -> int:
     ap.add_argument("--d-min", type=float, default=0.5)
     ap.add_argument("--d-max", type=float, default=4.0)
     ap.add_argument("--min-px", type=int, default=400)
+    ap.add_argument(
+        "--proporciones",
+        nargs="+",
+        default=["16:9", "4:3"],
+        choices=["16:9", "4:3"],
+        help="con --perfil sorteada; cada proporción vuelve a cargar la escena",
+    )
     ap.add_argument("--max-vistas", type=int, default=0, help="por escena (pruebas); 0 = todas")
     args = ap.parse_args()
 
-    replica = Path(args.replica)
+    if bool(args.replica) == bool(args.hssd):
+        ap.error("hace falta --replica o --hssd (uno solo)")
+    hssd = Path(args.hssd) if args.hssd else None
+    cats = categorias_hssd(hssd) if hssd else {}
     for escena in args.escenas:
-        malla = str(replica / escena / "habitat" / "mesh_semantic.ply")
+        if hssd:
+            malla = f"{hssd / 'hssd-hab.scene_dataset_config.json'}::{escena}"
+        else:
+            malla = str(Path(args.replica) / escena / "habitat" / "mesh_semantic.ply")
         rng = np.random.default_rng(
             [args.semilla, sum(map(ord, escena)), sum(map(ord, args.variante))]
         )
         if args.perfil == "sorteada":
-            grupos = {"16:9": (1280, 720), "4:3": (1280, 960)}
+            grupos = {k: v for k, v in {"16:9": (1280, 720), "4:3": (1280, 960)}.items()
+                      if k in args.proporciones}  # fmt: skip
             elegido = [str(rng.choice(list(grupos))) for _ in range(args.vistas)]
         else:
             grupos = {"fijo": PERFILES[args.perfil][:2]}
@@ -274,10 +406,14 @@ def main() -> int:
             fx = PERFILES[args.perfil][2] if args.perfil != "sorteada" else fx_de(90, wn)
             base = PERFILES[args.perfil][3] if args.perfil != "sorteada" else 0.06
             sim = armar(malla, wl, hl, fx, base, tuple(args.ojo_derecho), args.ojo_de_pez)
-            ids_estructura = [int(o.id.split("_")[-1]) for o in sim.semantic_scene.objects
-                              if o is not None and o.category is not None
-                              and o.category.name() in ESTRUCTURA]  # fmt: skip
-            clases = {i: c for i, c, _ in objetos(sim)}
+            if hssd:
+                clases = preparar_hssd(sim, cats)
+            ids_estructura = [] if hssd else [
+                int(o.id.split("_")[-1]) for o in sim.semantic_scene.objects
+                if o is not None and o.category is not None and o.category.name() in ESTRUCTURA
+            ]  # fmt: skip
+            if not hssd:
+                clases = {i: c for i, c, _ in objetos(sim)}
             if poses_fijas is not None:
                 poses = poses_fijas
             else:
@@ -304,11 +440,17 @@ def main() -> int:
                     hfov_l = math.degrees(2.0 * math.atan(wl / (2.0 * cam_fx)))
                     for name in ("izq", "der", "z", "inst"):
                         sim._sensors[name]._sensor_object.fov = mn.Deg(hfov_l)
-                    dx, dy, dz = args.ojo_derecho
+                ojo_der = [float(v) for v in args.ojo_derecho]
+                if args.ojo_sorteado:  # otra unidad: el ojo derecho corrido unos mm, con paralaje
+                    ojo_der[1] += float(rng.uniform(-args.ojo_sorteado, args.ojo_sorteado))
+                    ojo_der[2] += float(rng.uniform(-args.ojo_sorteado, args.ojo_sorteado))
+                if args.perfil == "sorteada" or args.ojo_sorteado:
+                    # DESPUÉS de fijar la pose (set_state reinicia los sensores).
                     sim._sensors["der"]._sensor_object.node.translation = mn.Vector3(
-                        cam_b + dx, dy, dz
+                        cam_b + ojo_der[0], ojo_der[1], ojo_der[2]
                     )
-                obs = sim.get_sensor_observations()
+                obs = dict(sim.get_sensor_observations())
+                gamma = exponer(obs) if hssd else None
                 inst = np.asarray(obs["inst"])
                 ids = [int(i) for i in np.unique(_recorte(inst, x0, y0, wn, hn)) if i != 0]
                 meta = {
@@ -322,7 +464,9 @@ def main() -> int:
                     "nominal": {"ancho": wn, "alto": hn, "x0": x0, "y0": y0,
                                 "cx": wn / 2 - 0.5, "cy": hn / 2 - 0.5,
                                 "hfov_deg": math.degrees(2 * math.atan(wn / (2 * cam_fx)))},
-                    "ojo_derecho_m": list(args.ojo_derecho),
+                    "ojo_derecho_m": ojo_der,
+                    "fuente": "hssd" if hssd else "replica",
+                    "exposicion_gamma": gamma,
                     "pose": {"ojo_izq": [float(x) for x in pose["ojo"]], "yaw_rad": pose["yaw"],
                              "pitch_rad": pose["pitch"], "altura_m": pose["altura"]},
                     "tipo_pose": pose.get("tipo", args.tipo_pose),

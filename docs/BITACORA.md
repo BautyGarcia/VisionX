@@ -40,6 +40,58 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-20 (madrugada) — T12/T15: más renders para la v3 (Replica con ojo corrido, HSSD) y otros detectores
+
+Autor: Tomás (pedido: «muchísimos datos, variantes de cámaras, lentes, distorsiones») / Claude.
+
+**Replica, cola 2** (`scripts/gt_sintetico/tanda_noche2.sh`, 2:24–4:26, 4–5 procesos): todo
+verificado (`gtsynth verificar`, 20 vistas por variante, 0 vistas malas) y copiado al Drive.
+
+| Variante | Vistas | Qué es | Verificación (niveles de gris) |
+|---|---:|---|---:|
+| `secuencias` (rehechas) | 320 | ya no se meten en las paredes: caminan sobre la navmesh y giran si adelante hay algo a < 0,6 m | 4,95 |
+| `camara-sorteada` (+ val) | 2400 + 240 | cámara sorteada, ahora también en val | 3,92 |
+| `camara-sorteada-ojo` | 2400 + 160 | ídem con el ojo derecho corrido ±2 mm en y y z, distinto por vista | 6,08 |
+| `elp-margen-ojo` | 1200 | ELP a media resolución con ojo ±2 mm | 4,45 |
+
+En la primera versión de `secuencias`, 2 de 320 cuadros quedaban pegados a una pared y la
+verificación daba `nan`. Por eso se rehicieron.
+
+**HSSD** (`hssd/hssd-hab`, Hugging Face; 168 escenas, 11 GB; la descarga sin cuenta tardó 3 h
+por el límite de pedidos). `render_tanda.py --hssd`:
+- carga la escena con su `scene_dataset_config` y calcula la navmesh (HSSD no la trae);
+- le da un id semántico a cada objeto y saca su clase de `metadata/fpmodels-with-decomposed.csv`.
+
+Cuatro problemas resueltos en el camino:
+1. **Nombres de los objetos:** se llaman `<hash>_:0000` (o `_part_N_`). Al principio ningún
+   objeto coincidía con la tabla.
+2. **Vistas oscuras:** brillo medio 30–50 sobre 255; ni la luz por defecto, ni luces
+   explícitas, ni la luz de entorno lo arreglaron. Queda una **exposición automática**: la misma
+   curva gamma en los dos ojos, sin cambiar la correspondencia, guardada en
+   `vista.json:exposicion_gamma` (brillo 80–100).
+3. **Carga lenta:** cada escena tarda ~5 min (navmesh + cientos de objetos). Por eso hay una
+   sola variante y una carga por escena: `hssd-camara-sorteada` (16:9, ojo ±2 mm,
+   20 vistas por escena) en las 125 escenas train y 30 val (`gtsynth/hssd_particion.json`; las
+   13 de test no se renderizan). Arrancó a las 4:41 con 6 procesos; los totales van en la
+   próxima entrada.
+4. **Vistas exteriores:** algunas caen en el jardín o la vereda, porque la navmesh incluye el
+   exterior. Se dejan como variedad.
+
+**Detectores con más clases fijas** (pedido de Tomás; mismas 240 vistas de Replica, script en
+`outputs/deteccion/oiv7-vs-replica.csv`):
+
+| | Recall COCO | Recall clases nuevas | ms/cuadro |
+|---|---:|---:|---:|
+| yolo26s-seg + YOLOE-s (lo que quedó) | 0,38 | 0,32 | 207 / 225 |
+| YOLOv8s Open Images V7 (600 clases) | 0,13 | 0,06 | 197 |
+| YOLOv8m Open Images V7 | 0,18 | 0,08 | 391 |
+| YOLOE-m con el vocabulario | 0,42 | 0,35 | 576 |
+
+- **Open Images:** precisión alta (0,87) pero se le escapa casi todo (lámparas, botellas,
+  tazas: 0 %), y solo da cajas.
+- **YOLOE-m:** mejora poco, es 2,5 veces más lento y encuentra el pizarrón en 8 de 13 fotos
+  (el chico, en 9). Queda la combinación de la entrada de YOLOE.
+
 ## 2026-11-20 (madrugada) — T06/T09: vocabulario de 215 objetos con YOLOE, solo cuando hace falta
 
 Autor: Tomás (pedido) / Claude. Pedido: que el detector reconozca 200–300 tipos de objeto (lo

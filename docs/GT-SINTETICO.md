@@ -74,6 +74,25 @@ Comando de una tanda (dentro de WSL):
 `--ojo-de-pez`, `--vistas`. Las escenas `test` no se renderizaron para estas variantes: se hace
 una sola vez, cuando la red esté cerrada en val.
 
+## Más renders para la red v3 (20/11): Replica con ojo corrido y HSSD
+
+- **Replica** (`tanda_noche2.sh`): `camara-sorteada-ojo` (2560), `elp-margen-ojo` (1200),
+  `camara-sorteada` en val (240), `secuencias` rehechas (320).
+- **HSSD** (`tanda_hssd.sh`): `hssd-camara-sorteada`, 20 vistas en cada una de las 155 escenas
+  train + val.
+  - Bajar `hssd/hssd-hab` de Hugging Face a `D:/datasets/hssd-hab` (11 GB, sin la carpeta
+    `urdf/`).
+  - Renderizar con `render_tanda.py --hssd /mnt/d/datasets/hssd-hab --proporciones 16:9`.
+  - Partición en `src/visionx/gtsynth/hssd_particion.json`: 125 / 30 / 13, de su
+    `scene_splits.yaml`. `vistas(raiz, variante, particion)` ya la usa.
+- **Campos nuevos de `vista.json`:**
+  - `fuente`: replica o hssd.
+  - `ojo_derecho_m`: el corrimiento usado en esa vista.
+  - `exposicion_gamma`: en HSSD; null si no hizo falta.
+- **Opciones nuevas de `render_tanda.py`:**
+  - `--ojo-sorteado M`: ±M metros por vista, en y y z.
+  - `--proporciones`: con `sorteada`, cada proporción vuelve a cargar la escena.
+
 ## Qué hay en cada vista
 
 `data/gt-sintetico-elp/<variante>/<escena>/<nnnn>/` (no se sube al repo; copia en Drive
