@@ -48,6 +48,23 @@ REPLICA_A_VISIONX: dict[str, str] = {
     "microwave": "microwave", "hair-dryer": "hair drier", "toothbrush": "toothbrush",
     "backpack": "backpack", "beanbag": "pillow", "cooktop": "stove",
 }  # fmt: skip
+# Categorías de HSSD (metadata/fpmodels-with-decomposed.csv) -> clase de VisionX. Las que
+# coinciden con un nombre de Replica (chair, table, cabinet…) ya están arriba.
+REPLICA_A_VISIONX.update({
+    "carpet": "rug", "potted_plant": "potted plant", "shelves": "shelf",
+    "ceiling_lamp": "ceiling light", "chest_of_drawers": "dresser", "fridge": "refrigerator",
+    "table_lamp": "lamp", "floor_lamp": "lamp", "wall_lamp": "lamp", "stove": "stove",
+    "drinkware": "cup", "wall_clock": "clock", "alarm_clock": "clock", "mantel_clock": "clock",
+    "tray": "tray", "stairway": "stairs", "trashcan": "trash can", "car": "car",
+    "washer_dryer": "washing machine", "shower": "shower", "picture_frame": "picture frame",
+    "clothing": "clothes", "plate": "plate", "paper_towel": "paper towel", "oven": "oven",
+    "wardrobe": "wardrobe", "plant": "potted plant", "shoes": "shoe",
+    "computer_screen": "computer monitor", "quilt": "blanket", "throw": "blanket",
+    "phone": "cell phone", "railing": "handrail", "kitchen_scale": "scale",
+    "bathroom_scale": "scale", "hamper": "basket", "storage_box": "box", "gift_box": "box",
+    "crate": "box", "coffee_maker": "coffee maker", "plush_toy": "teddy bear",
+    "mirror": "mirror",
+})  # fmt: skip
 # Con un detector COCO, la misma clase de Replica se compara con la COCO más cercana.
 VISIONX_A_COCO: dict[str, str] = {"computer monitor": "tv"}
 

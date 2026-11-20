@@ -40,6 +40,39 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-20 (mañana) — T12/T06: cierre de la noche: HSSD terminado y detectores medidos en HSSD
+
+Autor: Claude (noche autorizada por Tomás).
+
+**HSSD** (`tanda_hssd.sh`, 4:41–6:17 con 6 procesos, más las escenas que faltaron, hasta 6:40):
+- `hssd-camara-sorteada`: **3060 vistas en 153 escenas** (2460 train y 600 val), 16 GB.
+- `gtsynth verificar` sobre 40 vistas: 8,6 niveles de gris, **0 malas**. Da más que Replica por
+  el ojo corrido y la exposición.
+- Un proceso se cortó y dejó 7 escenas sin hacer; se relanzaron y salieron 5. Las otras 2
+  (`108736611_177263226` y `108736851_177263586`, de train) tienen un material que Habitat 0.3.3
+  no dibuja: el proceso se cierra sin error («material doesn't have a common texture coordinate
+  transformation»). Quedan afuera.
+
+**Total generado en las dos noches:** 97 GB en `data/gt-sintetico-elp/`, todo en el Drive
+`VisionX-Personal/gt-sintetico-elp/` (22 variantes; tamaños por variante en
+`outputs/gtsynth/`).
+
+**Detectores en HSSD** (val, ~500 vistas, `gtsynth deteccion`; `REPLICA_A_VISIONX` suma las
+categorías de HSSD):
+
+| | Recall clases COCO | Precisión (cota) |
+|---|---:|---:|
+| yolo26s-seg | 0,484 | 0,352 |
+| YOLOE-26s con el vocabulario | 0,451 | 0,361 |
+
+- Confirma lo de Replica: YOLOE no supera al COCO en lo de siempre, así que queda el esquema
+  mixto.
+- **Clases nuevas que andan:** almohada 72 %, lámpara 69 %, plato 55 %, espejo 40 %.
+- **Lo estructural anda mal en render:** ventana 1 %, estante 1 %, escalera 2 %, lámpara de
+  techo 5 %, puerta 10 %, baranda 2 %. Para la facultad («guiame a la puerta / la escalera»)
+  hay que probarlo con la ELP antes de prometerlo. En las fotos reales de aulas, YOLOE sí marcó
+  puertas.
+
 ## 2026-11-20 (madrugada) — T12/T15: más renders para la v3 (Replica con ojo corrido, HSSD) y otros detectores
 
 Autor: Tomás (pedido: «muchísimos datos, variantes de cámaras, lentes, distorsiones») / Claude.
