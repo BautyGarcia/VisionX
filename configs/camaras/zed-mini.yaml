@@ -1,0 +1,11 @@
+id: zed-mini
+nombre: Stereolabs ZED Mini
+fabricante: Stereolabs
+formato: sbs
+usb: ["ZED-M", "ZED Mini", "ZED M"]
+resolucion: [1920, 1080]
+campo_horizontal_deg: 102
+separacion_m: 0.063
+calibracion: null
+nivel: aproximada
+fuente: hoja de datos de Stereolabs (102° H, base 63 mm)

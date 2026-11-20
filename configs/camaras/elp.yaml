@@ -1,0 +1,11 @@
+id: elp
+nombre: ELP de VisionX
+fabricante: ELP
+formato: sbs
+usb: ["ELP", "3D USB Camera"]  # a confirmar con la ELP conectada: python -m visionx.camera listar
+resolucion: [1920, 1080]
+campo_horizontal_deg: 116
+separacion_m: 0.0598
+calibracion: configs/calib/elp-2026-11-11-corregida.yaml
+nivel: precisa
+fuente: calibración ChArUco propia (BITACORA 2026-11-11)
