@@ -28,6 +28,7 @@ htmlcov/
 *.pem
 # overrides personales (ej. índice de cámara de cada uno)
 configs/local*.yaml
+configs/camaras/locales/
 
 # ---------- Datos y datasets ----------
 # Los datasets se describen en datasets/*.yaml (manifests con hashes), no se suben.

@@ -39,7 +39,8 @@ Con una cámara desconocida no tiene de dónde arrancar. El experimento E0 (secc
 
 ## 3. El flujo de una cámara nueva
 
-Es también la pantalla del dashboard («Cámara nueva»), guiada por voz:
+Es también la pantalla del dashboard («Cámara nueva», `python -m visionx.app camara-nueva`;
+`--fuente sim:video-zed-mini` la muestra con una cámara simulada), guiada por voz:
 
 1. **Conectar.** Detecta el formato, la resolución y cuál es cada ojo.
 2. **¿La conozco?** Busca el nombre del dispositivo en una lista de perfiles (`configs/camaras/`, a crear). Si está («Reconocí:
@@ -160,7 +161,7 @@ Partición por casa, como siempre (`hssd_particion.json`); el test sigue congela
 
 | Id | Qué | Para qué |
 |---|---|---|
-| **E0** | Cámaras distintas **arrancando desde la calibración de la ELP** (como quien enchufa sin calibrar), con y sin clásico, con distancia conocida | La línea de base: muestra con números que el clásico solo no alcanza |
+| **E0** ✔ | Cámaras distintas **arrancando desde la calibración de la ELP** (como quien enchufa sin calibrar), con y sin clásico, con distancia conocida | Hecho el 20/11 (BITACORA): calibrada 0,9–5,5 %, sin calibrar 25–115 %, sin calibrar + clásico 9–79 % |
 | E1 | Clásico + distancia conocida contra el oráculo, **modo preciso**, muchas hermanas, val | Cuánto hueco queda dentro de una misma cámara (hoy: 5,6 % contra 0,75 %) |
 | E2 | Red de entrada sola: error de campo de visión, centro y distorsión en cámaras **que no vio** | ¿Se puede estimar una cámara? Meta: campo ±3 % |
 | E3 | Flujo completo (red + clásico + cada referencia de escala) en cámaras no vistas | El resultado del TP |

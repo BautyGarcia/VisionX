@@ -1,0 +1,11 @@
+id: realsense-d435
+nombre: Intel RealSense D435
+fabricante: Intel
+formato: realsense
+usb: ["RealSense", "D435"]  # la D435i (con sensor de movimiento) también entra acá
+resolucion: [1280, 720]
+campo_horizontal_deg: 87
+separacion_m: 0.050
+calibracion: null  # la de fábrica se lee con librealsense al conectarla
+nivel: precisa
+fuente: hoja de datos de Intel (87° x 58°, base 50 mm); calibración de fábrica por librealsense

@@ -1,0 +1,11 @@
+id: oak-d
+nombre: Luxonis OAK-D
+fabricante: Luxonis
+formato: dos-dispositivos  # por DepthAI; soporte en la app pendiente
+usb: ["OAK-D", "Luxonis", "Movidius MyriadX"]
+resolucion: [1280, 800]
+campo_horizontal_deg: 80
+separacion_m: 0.075
+calibracion: null
+nivel: aproximada
+fuente: hoja de datos de Luxonis OAK-D S2 / Pro (80° H, base 75 mm; otras fuentes dan 72°)

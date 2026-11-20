@@ -1,0 +1,11 @@
+id: realsense-d455
+nombre: Intel RealSense D455
+fabricante: Intel
+formato: realsense
+usb: ["D455"]
+resolucion: [1280, 720]
+campo_horizontal_deg: 86
+separacion_m: 0.095
+calibracion: null
+nivel: precisa
+fuente: hoja de datos de Intel (86° x 57°, base 95 mm); calibración de fábrica por librealsense

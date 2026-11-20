@@ -1,0 +1,11 @@
+id: zed-2
+nombre: Stereolabs ZED 2
+fabricante: Stereolabs
+formato: sbs
+usb: ["ZED 2", "ZED2"]
+resolucion: [1920, 1080]
+campo_horizontal_deg: 110
+separacion_m: 0.120
+calibracion: null
+nivel: aproximada
+fuente: hoja de datos de Stereolabs (110° H, base 120 mm)

@@ -40,6 +40,55 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-20 (noche) — T12/T15: E0 «enchufar sin calibrar», perfiles de cámaras y pantalla «Cámara nueva»
+
+Autor: Claude, a pedido de Tomás. Rama `b/camara-nueva`.
+
+**E0** (`gtsynth sin-calibrar`, `outputs/gtsynth/e0.json`): cada recorrido de `data/gt-video`
+con «otra unidad» (hermana ×1), CREStereo continuo, 15 cuadros por escena (uno de cada 6),
+mediana del error de Z entre 0,3 y 10 m. **Calibrada** = el sistema conoce la cámara: clásico
++ distancia conocida. **Sin calibrar** = supone la geometría de la ELP (116°, 5,98 cm) y no
+corrige nada. **Sin calibrar + clásico** = supone la ELP, corre el clásico desde ahí y usa la
+distancia conocida. Dos escenas (hotel_0 / office_2):
+
+| Cámara | Campo | Base | Calibrada | Sin calibrar | Sin calibrar + clásico |
+|---|---|---|---|---|---|
+| ELP (control: es la ELP) | 116° | 6 cm | 1,4 / 2,0 % | 25,3 / 39,1 % | 1,5 / 2,1 % |
+| RealSense D435 | 87° | 5 cm | 3,1 / 4,2 % | 42,9 / 49,5 % | 13,0 / 43,5 % |
+| RealSense D455 | 86° | 9,5 cm | 5,2 / 2,1 % | 53,2 / 58,9 % | 55,2 / 53,6 % |
+| ZED 2 | 110° | 12 cm | 2,4 / 2,4 % | 61,1 / 51,6 % | 55,1 / 54,6 % |
+| ZED Mini | 102° | 6,3 cm | 1,1 / 2,4 % | 48,7 / 27,0 % | 45,0 / 8,8 % |
+| OAK-D | 80° | 7,5 cm | 2,8 / 4,0 % | 54,2 / 61,0 % | 59,2 / 54,8 % |
+| Angosta | 60° | 6 cm | 1,9 / 5,5 % | 56,9 / 67,1 % | 43,3 / 67,5 % |
+| Gran angular | 130° | 6 cm | 5,3 / 4,3 % | 114,2 / 115,3 % | 34,2 / 61,0 % |
+| Base larga | 100° | 20 cm | 0,9 / 1,4 % | 77,7 / 75,6 % | 79,1 / 76,1 % |
+
+**Lectura:** conociendo la cámara, el error queda entre 0,9 y 5,5 %. Sin conocerla, 25–115 %,
+y ni el clásico ni la distancia conocida la rescatan (salvo la propia ELP, que es el control).
+Es la línea de base del plug and play y el número que justifica la red de entrada
+(PLUG-AND-PLAY, sección 4). Límites: 2 escenas, una hermana por cámara, la distancia conocida
+sale del GT (optimista).
+
+**Perfiles de cámaras** (`configs/camaras/*.yaml`, `camera/perfiles.py`): ELP, RealSense D435
+y D455, ZED 2, ZED Mini y OAK-D con la geometría de la hoja de datos; se reconocen por el
+nombre del dispositivo USB (`listar_dispositivos`, Windows / macOS / Linux) y arman una
+calibración nominal pinhole. Los perfiles que se calibran en la app van a
+`configs/camaras/locales/` (fuera de Git). El nombre USB de la ELP falta confirmarlo con la
+cámara conectada.
+
+**Pantalla «Cámara nueva»** (`app/camara_nueva.py`, `app/camara_nueva_demo.py`,
+`python -m visionx.app camara-nueva`): conectar → reconocer → mirar alrededor (8 vistas
+distintas) → estimar la cámara (lugar de la red; hoy 90° por defecto, «sin estimar») →
+alinear con el clásico → escala (separación dicha, objeto a distancia conocida o saltear) →
+perfil, con voz y nivel final (precisa / aproximada / sin escala). Con
+`--fuente sim:video-zed-mini` usa un recorrido simulado como cámara desconocida: el desfase
+de filas bajó de 1,9 a 0,2 px. 8 tests nuevos (`tests/test_camara_nueva.py`); uno encontró un
+error real (un desfase de 0,0 px se tomaba como «sin dato»).
+
+**Próximo paso:** conectar la red de entrada de Bauty al contrato `EstimadorCamara`; soporte
+de RealSense (dos transmisiones) para la prueba en la facultad; la escala por voz dentro de la
+app («los lentes están a 6 centímetros»).
+
 ## 2026-11-20 (tarde) — T15: resultados de los videos de «Cámaras» y tope de la distancia conocida
 
 Autor: Claude. Rama `b/video-angosta`.

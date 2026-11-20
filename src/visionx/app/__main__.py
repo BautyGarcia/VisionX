@@ -616,6 +616,9 @@ def main(argv: list[str] | None = None) -> int:
     from visionx.app.recepcion import register as register_reception
 
     register_reception(sub)
+    from visionx.app.camara_nueva_demo import register as register_camara
+
+    register_camara(sub)
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument(
