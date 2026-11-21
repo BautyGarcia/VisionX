@@ -132,6 +132,16 @@ def _delta_conocida(depth, g, z_gt: np.ndarray, mascara: np.ndarray) -> float | 
 CALENTAR = 3  # cuadros del modo continuo que se descartan para la distancia conocida
 
 
+def _placa(cfg: dict) -> str | None:
+    """«Radeon RX 5700 XT (DirectML)», «Apple M2 Max (MPS)» o «CPU», para la lámina."""
+    try:
+        from visionx.app.aceleracion import _crestereo
+
+        return _crestereo(cfg)
+    except Exception:  # noqa: BLE001 (sin placa, la lámina igual se dibuja)
+        return None
+
+
 def _error(z_est: np.ndarray, z_gt: np.ndarray) -> tuple[np.ndarray, np.ndarray, float | None]:
     ok_gt = np.isfinite(z_gt) & (z_gt >= Z_MIN) & (z_gt <= Z_MAX)
     ok = ok_gt & np.isfinite(z_est)
@@ -204,6 +214,7 @@ def preparar_camara(vs: list[Vista], nombre: str, red: str | None, cfg: dict) ->
         deltas[k] = _delta_de_cuadros(ds, dg)
     out: dict[str, Any] = {
         "nombre": nombre, "izq": izqs, "z": zs, "g": g,
+        "placa": _placa(cfg),
         "hfov_deg": math.degrees(2 * math.atan(g.width / (2 * g.fx))),
         "base_cm": 100 * g.baseline_m, "ms_por_cuadro": ms,
         "clasico_aplica": list(info_cl.aplica), "delta_px": deltas, "versiones": {},
@@ -238,9 +249,16 @@ def lamina(c: dict[str, Any], i: int, escena: str) -> np.ndarray:
     texts.add("VisionX", (32, 18), 30, INK, True)
     titulo = "¿Funciona con otra cámara?"
     texts.add(titulo, (32 + text_width("VisionX", 30, True) + 16, 26), 20, ACCENT, True)
-    sub = (f"{c['nombre']}  ·  campo {c['hfov_deg']:.0f}°  ·  ojos a {c['base_cm']:.0f} cm  ·  "
+    base = f"{c['base_cm']:.1f}".replace(".", ",")
+    sub = (f"{c['nombre']}  ·  campo {c['hfov_deg']:.0f}°  ·  lentes a {base} cm  ·  "
            f"cuadro {i + 1}/{len(c['izq'])}")  # fmt: skip
-    texts.add(sub, (W - 32 - text_width(sub, 17), 30), 17, MUTED)
+    texts.add(sub, (W - 32 - text_width(sub, 17), 22), 17, MUTED)
+    ms = float(c.get("ms_por_cuadro") or 0)
+    if ms > 0:
+        placa = c.get("placa") or ("GPU" if ms < 400 else "CPU")
+        fps = f"{1000 / ms:.1f}".replace(".", ",")
+        rend = f"CREStereo continuo: {ms:.0f} ms por cuadro · {fps} fps · {placa}"
+        texts.add(rend, (W - 32 - text_width(rend, 14), 46), 14, FAINT)
 
     z_gt = c["z"][i]
     ok_gt = np.isfinite(z_gt) & (z_gt >= Z_MIN) & (z_gt <= Z_MAX)
@@ -261,7 +279,10 @@ def lamina(c: dict[str, Any], i: int, escena: str) -> np.ndarray:
         ("Ideal", "el par perfecto: el techo"),
         ("Sin corregir", "otra unidad del mismo modelo: ojo derecho un poco girado, otra lente"),
         ("Clásico", "lo que usa hoy VisionX (alineación + distancia conocida)"),
-        ("Red de entrada", "corrige encima del clásico (en entrenamiento)"),
+        (
+            "Red de entrada",
+            "estima la cámara desconocida (campo, centro y lente); en entrenamiento",
+        ),
     ]
     yy = y0 + 46
     for a, b in lineas:
@@ -281,8 +302,8 @@ def lamina(c: dict[str, Any], i: int, escena: str) -> np.ndarray:
         zs = c["versiones"].get(nombre)
         if zs is None:
             _panel(canvas, x, y, vw, 2 * vh + 14, "Red de entrada (v3)", texts)
-            pendiente = ("Pendiente: la red se está", "por reentrenar. Cuando esté,",
-                         "este lugar muestra su", "distancia y su error.")  # fmt: skip
+            pendiente = ("Pendiente: la red de entrada", "se está entrenando. Cuando",
+                         "esté, este lugar muestra su", "distancia y su error.")  # fmt: skip
             for k, linea in enumerate(pendiente):
                 texts.add(linea, (x + 24, y + 120 + k * 26), 16, FAINT)
             continue
@@ -309,6 +330,7 @@ def preparar(
     red: str | None = None,
     cfg: dict | None = None,
     solo: tuple[str, ...] | None = None,
+    solo_escenas: tuple[str, ...] | None = None,
 ) -> list[dict]:
     """Todos los videos, o solo los de las variantes `solo` (se suman al resumen que había)."""
     from visionx.shared.config import load_config
@@ -321,6 +343,8 @@ def preparar(
     resumen = [f for f in resumen if f["variante"] not in (solo or ())]
     todas = CAMARAS_VIDEO + CAMARAS_GENERICAS
     escenas = sorted({v.escena for var, _ in todas for v in vistas(raiz, var)})
+    if solo_escenas:
+        escenas = [e for e in escenas if e in solo_escenas]
     for escena in escenas:
         for var, nombre in CAMARAS_VIDEO + CAMARAS_GENERICAS:
             if solo and var not in solo:
@@ -337,7 +361,7 @@ def preparar(
             writer.release()
             fila = {"escena": escena, "variante": var, "nombre": nombre, "video": path.name,
                     "hfov_deg": round(c["hfov_deg"], 1), "base_cm": round(c["base_cm"], 1),
-                    "ms_por_cuadro": round(c["ms_por_cuadro"]),
+                    "ms_por_cuadro": round(c["ms_por_cuadro"]), "placa": c.get("placa"),
                     "clasico_aplica": c["clasico_aplica"],
                     "delta_px": {k: round(v, 3) for k, v in c["delta_px"].items()}}  # fmt: skip
             for k, zs in c["versiones"].items():
