@@ -195,6 +195,24 @@ def cmd_verificar(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_listar(args: argparse.Namespace) -> int:
+    """Cámaras conectadas según el sistema y el perfil con el que se reconoce cada una."""
+    from visionx.camera.perfiles import cargar_perfiles, listar_dispositivos, reconocer
+
+    perfiles = cargar_perfiles()
+    nombres = listar_dispositivos()
+    if not nombres:
+        print("no se encontraron cámaras (o el sistema no las lista)")
+        return 1
+    for nombre in nombres:
+        perfil = reconocer(nombre, perfiles)
+        if perfil is None:
+            print(f"{nombre}  ->  sin perfil (usar «python -m visionx.app camara-nueva»)")
+        else:
+            print(f"{nombre}  ->  {perfil.nombre} (perfil {perfil.id}, distancias {perfil.nivel})")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m visionx.camera",
@@ -221,6 +239,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--nota", help="texto libre para el manifiesto (escena, iluminación...)")
     p.add_argument("--config")
     p.set_defaults(fn=cmd_grabar)
+
+    p = sub.add_parser("listar", help="cámaras conectadas y con qué perfil se reconocen")
+    p.set_defaults(fn=cmd_listar)
 
     p = sub.add_parser("verificar", help="reproducir una grabación y comprobar sus hashes")
     p.add_argument("carpeta")
