@@ -28,6 +28,7 @@ from visionx.gtsynth.video import (
     CALENTAR,
     _camara_nominal,
     _delta_conocida,
+    _delta_de_cuadros,
     _error,
     _hermana,
     _z,
@@ -87,8 +88,7 @@ def evaluar(vs, cfg: dict, cada: int = 6) -> dict:
         delta = 0.0
         if referencia:
             ds = [_delta_conocida(deps[i], dg, zs[i], mascaras[i]) for i in idx[min(CALENTAR, 1) :]]
-            ds = [d for d in ds if d is not None]
-            delta = float(np.median(ds)) if ds else 0.0
+            delta = _delta_de_cuadros(ds, dg)
         errs = [e for e in (_error(_z(deps[i], dg, w8, h8, delta), zs[i])[2] for i in idx)
                 if e is not None]  # fmt: skip
         return (round(float(np.median(errs)), 2) if errs else None), round(delta, 3)

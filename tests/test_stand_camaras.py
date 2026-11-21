@@ -6,6 +6,7 @@ import json
 
 import cv2
 import numpy as np
+import pytest
 
 from visionx.app.stand import H, W
 from visionx.app.stand_camaras import cargar, render_camaras
@@ -90,3 +91,17 @@ def test_mosaico_junta_las_camaras_y_marca_las_que_faltan(tmp_path):
     celda = f[72 + (1080 - 72) // 2 :, : 1920 // 3]
     assert (celda[:, :, 1] > 150).mean() > 0.2
     assert armar(tmp_path, "otra_escena") is None
+
+
+def test_distancia_conocida_se_controla_sobre_todos_los_cuadros():
+    from types import SimpleNamespace
+
+    from visionx.gtsynth.video import _delta_de_cuadros, _limite_delta
+
+    d455 = SimpleNamespace(fx=343.2)  # focal del continuo de la D455
+    # −3,7 px en todos los cuadros: un yaw real, aunque pase el tope viejo (3,4 px).
+    assert _delta_de_cuadros([-3.7, -3.6, -3.85, None, -3.65], d455) == pytest.approx(-3.675)
+    assert _delta_de_cuadros([-3.0, 1.0, 4.0, -2.0], d455) == 0.0  # salta: no sirve
+    assert _delta_de_cuadros([None, None], d455) == 0.0
+    assert _delta_de_cuadros([9.0, 9.1, 9.0], d455) == 0.0  # más que el tope de esa focal
+    assert _limite_delta(SimpleNamespace(fx=50.0)) == 2.0  # mínimo
