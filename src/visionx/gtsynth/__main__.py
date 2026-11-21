@@ -99,11 +99,22 @@ def cmd_evaluar(args: argparse.Namespace) -> int:
 
     cfg = load_config(args.config)
     carpeta = "elp" if es_hermana(args.variante) else args.variante
-    lista = list(vistas(args.raiz, carpeta, args.particion))
+    lista = list(vistas(args.raiz, carpeta, args.particion))[:: max(1, args.cada)]
     if not lista:
         print(f"no hay vistas {carpeta}/{args.particion}", file=sys.stderr)
         return 1
-    m = Medidor.armar(args.profundidad, cfg, ELP_RENDER)
+    geometria = ELP_RENDER
+    if args.geometria == "vista":  # la cámara de las vistas (recorte nominal), no la ELP
+        from visionx.gtsynth.dataset import VistaNominal
+
+        lista = [VistaNominal(v.carpeta) for v in lista]
+        ids = {v.geometria.geometry_id for v in lista}
+        if len(ids) != 1:
+            print(f"--geometria vista pide una sola cámara por variante ({len(ids)})",
+                  file=sys.stderr)  # fmt: skip
+            return 1
+        geometria = lista[0].geometria
+    m = Medidor.armar(args.profundidad, cfg, geometria)
     t0 = time.time()
 
     def progreso(n, v):
@@ -198,6 +209,14 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("--config", default=None)
     ev.add_argument("--csv", required=True)
     ev.add_argument("--max", type=int, default=None)
+    ev.add_argument("--cada", type=int, default=1, help="una de cada N vistas (recorridos)")
+    ev.add_argument(
+        "--geometria",
+        choices=["elp", "vista"],
+        default="elp",
+        help="elp: el sistema cree tener la ELP (por defecto); vista: la cámara de las vistas, "
+        "recortada a su tamaño nominal (gt-video, perfiles)",
+    )
     ev.add_argument("--min-px", type=int, default=400)
     ev.add_argument(
         "--alinear",

@@ -257,6 +257,22 @@ def test_lienzo_con_margen_recorta_la_camara_nominal(tmp_path):
     assert np.array_equal(v.recortar(z), z[22:158, 40:280])
 
 
+def test_vista_nominal_recorta_todo_y_usa_la_geometria_nominal(tmp_path):
+    from visionx.gtsynth.dataset import VistaNominal
+
+    v = _vista(tmp_path)
+    meta = dict(v.meta)
+    meta["nominal"] = {"ancho": 240, "alto": 136, "x0": 40, "y0": 22, "cx": 119.5, "cy": 67.5,
+                       "hfov_deg": 73.7}  # fmt: skip
+    (v.carpeta / "vista.json").write_text(json.dumps(meta), encoding="utf-8")
+    n = VistaNominal(v.carpeta)
+    g = n.geometria
+    assert (g.width, g.height, g.cx) == (240, 136, 119.5) and n.nominal is None
+    assert n.izq().shape[:2] == n.der().shape[:2] == n.z().shape == n.instancias().shape
+    assert n.z().shape == (136, 240)
+    assert np.array_equal(n.z(), Vista(v.carpeta).z()[22:158, 40:280])
+
+
 def test_particion_de_hssd_sin_solapamientos():
     from visionx.gtsynth.dataset import _hssd, escenas_de
 
