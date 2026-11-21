@@ -108,3 +108,31 @@ def test_distancia_conocida_se_controla_sobre_todos_los_cuadros():
     assert _delta_de_cuadros([None, None], d455) == 0.0
     assert _delta_de_cuadros([9.0, 9.1, 9.0], d455) == 0.0  # más que el tope de esa focal
     assert _limite_delta(SimpleNamespace(fx=50.0)) == 2.0  # mínimo
+
+
+def test_presentacion_portada_camaras_y_controles(tmp_path):
+    from visionx.app.stand_camaras import Videos
+
+    cv2.imwrite(str(tmp_path / "resumen-camaras.png"), np.full((H, W, 3), 200, np.uint8))
+    for k, nombre in enumerate(("hotel_0-video-zed-2.mp4", "hotel_0-video-mosaico.mp4",
+                                "hotel_0-video-elp-full.mp4")):  # fmt: skip
+        w = cv2.VideoWriter(str(tmp_path / nombre), cv2.VideoWriter_fourcc(*"mp4v"), 10, (W, H))
+        for _ in range(3):
+            w.write(np.full((H, W, 3), 40 * (k + 1), np.uint8))
+        w.release()
+    v = Videos(tmp_path)
+    assert [p.name for p in v.paths] == [
+        "resumen-camaras.png", "hotel_0-video-elp-full.mp4", "hotel_0-video-zed-2.mp4",
+        "hotel_0-video-mosaico.mp4",
+    ]  # fmt: skip
+    assert int(v.cuadro(0.0).mean()) > 150 and v.titulo() == "Portada"
+    assert int(v.cuadro(v.PORTADA_S + 0.01).mean()) < 150  # pasó sola al primer video
+    v.siguiente(20.0)
+    assert v.titulo() == "hotel_0 · zed-2"
+    v.anterior(20.0)
+    v.anterior(20.0)
+    assert v.titulo() == "Portada"
+    v.ir(3, 21.0)
+    a = v.cuadro(21.0)
+    v.pausar(21.0)
+    assert v.pausado and np.array_equal(v.cuadro(30.0), a)

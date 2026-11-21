@@ -89,48 +89,90 @@ def _color_error(x: float | None) -> tuple[int, int, int]:
 
 
 class Videos:
-    """Los MP4 de `gtsynth video` en orden (por escena, las cámaras de la expo), a 10 cuadros/s.
+    """La presentación de la segunda pantalla: portada, una cámara por pantalla y el mosaico.
 
-    Solo las de `CAMARAS_VIDEO`; las genéricas (60°, 130°, 20 cm) quedan para evaluar. Si en la
-    carpeta no hay ninguna de la expo, se reproducen todas.
+    Orden: la portada (`resumen-camaras.png`, `PORTADA_S` segundos), y por escena los videos de
+    `CAMARAS_VIDEO` (una cámara a pantalla completa, con su ficha) y al final el mosaico. Pasa
+    sola; `siguiente`, `anterior`, `ir` y `pausar` la manejan a mano. Las cámaras genéricas (60°,
+    130°, 20 cm) quedan para evaluar: si no hay ninguna de la expo, se reproducen todas.
     """
+
+    PORTADA_S = 12.0
 
     def __init__(self, carpeta: Path) -> None:
         from visionx.gtsynth.video import CAMARAS_VIDEO, FPS
 
         orden = {var: k for k, (var, _) in enumerate(CAMARAS_VIDEO)}
-        orden["video-mosaico"] = -1  # las 6 cámaras juntas, primero
+        orden["video-mosaico"] = len(CAMARAS_VIDEO)  # las 6 juntas, para cerrar cada escena
 
         def clave(p: Path):
             escena, _, var = p.stem.partition("-video-")
             return escena, orden.get("video-" + var, 99)
 
         todas = sorted(carpeta.glob("*.mp4"), key=clave)
-        self.paths = [p for p in todas if clave(p)[1] < 99] or todas
+        self.paths: list[Path] = [p for p in todas if clave(p)[1] < 99] or todas
+        portada = carpeta / "resumen-camaras.png"
+        if portada.is_file():
+            self.paths.insert(0, portada)
         self.fps = FPS
+        self.pausado = False
         self._k = -1
         self._cap = None
+        self._img: np.ndarray | None = None  # la portada
         self._t0 = 0.0
         self._leidos = 0
         self._ultimo = None
 
-    def _siguiente(self, t: float) -> None:
+    def _abrir(self, k: int, t: float) -> None:
         if self._cap is not None:
             self._cap.release()
-        self._k = (self._k + 1) % len(self.paths)
-        self._cap = cv2.VideoCapture(str(self.paths[self._k]))
-        self._t0, self._leidos = t, 0
+            self._cap = None
+        self._k = k % len(self.paths)
+        path = self.paths[self._k]
+        self._img = cv2.imread(str(path)) if path.suffix == ".png" else None
+        if self._img is None:
+            self._cap = cv2.VideoCapture(str(path))
+        self._t0, self._leidos, self._ultimo = t, 0, self._img
+
+    def _siguiente(self, t: float) -> None:
+        self._abrir(self._k + 1, t)
+
+    def siguiente(self, t: float) -> None:
+        self._abrir(self._k + 1, t)
+
+    def anterior(self, t: float) -> None:
+        self._abrir(self._k - 1, t)
+
+    def ir(self, k: int, t: float) -> None:
+        if 0 <= k < len(self.paths):
+            self._abrir(k, t)
+
+    def pausar(self, t: float) -> None:
+        self.pausado = not self.pausado
+        self._t0 = t - self._leidos / self.fps  # al seguir, retoma desde el mismo cuadro
+
+    def titulo(self) -> str:
+        if self._k < 0:
+            return ""
+        nombre = self.paths[self._k].stem
+        return "Portada" if nombre == "resumen-camaras" else nombre.replace("-video-", " · ")
 
     def cuadro(self, t: float) -> np.ndarray:
-        if self._cap is None:
-            self._siguiente(t)
+        if self._k < 0:
+            self._abrir(0, t)
+        if self.pausado:
+            return self._ultimo if self._ultimo is not None else np.full((H, W, 3), BG, np.uint8)
+        if self._img is not None:  # la portada: quieta un rato
+            if t - self._t0 >= self.PORTADA_S:
+                self._siguiente(t)
+                return self.cuadro(t)
+            return self._img if self._img.shape[:2] == (H, W) else cv2.resize(self._img, (W, H))
         quiero = int((t - self._t0) * self.fps) + 1
         while self._leidos < quiero:
             ok, img = self._cap.read()
-            if not ok:  # terminó: el próximo video
+            if not ok:  # terminó: lo próximo
                 self._siguiente(t)
-                quiero = 1
-                continue
+                return self.cuadro(t)
             self._leidos += 1
             self._ultimo = img
         if self._ultimo is None or self._ultimo.shape[:2] != (H, W):
@@ -230,13 +272,49 @@ def _fotos(carpeta: str | Path, ahora_s: float | None = None) -> np.ndarray:
     return texts.draw(canvas)
 
 
+# Flechas según el sistema (cv2.waitKeyEx): Windows, Linux (GTK) y macOS.
+_IZQUIERDA = {2424832, 65361, 63234}
+_DERECHA = {2555904, 65363, 63235}
+
+
+def _ayuda(img: np.ndarray, titulo: str, pausado: bool) -> np.ndarray:
+    """Una línea discreta abajo a la derecha con dónde estamos y las teclas."""
+    texts = Texts()
+    estado = "pausa · " if pausado else ""
+    linea = f"{estado}{titulo}   ← → cambiar · espacio pausa · 1–9 ir · f pantalla completa"
+    texts.add(linea, (W - 24 - text_width(linea, 13), H - 26), 13, FAINT)
+    return texts.draw(img.copy())
+
+
 def mostrar(carpeta: str | Path) -> None:
-    """Ventana sola (segundo monitor del stand): q, Esc o la X salen; f pantalla completa."""
+    """Ventana sola (segunda pantalla de la expo).
+
+    Pasa sola; ← → cambian de pantalla, espacio pausa, 1–9 salta, f pantalla completa y q, Esc o
+    la X salen.
+    """
+    carpeta = Path(carpeta)
     cv2.namedWindow("VisionX - Cámaras", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("VisionX - Cámaras", 1600, 900)
+    videos = None
+    if carpeta.is_dir() and any(carpeta.glob("*.mp4")):
+        videos = _VIDEOS.setdefault(str(carpeta), Videos(carpeta))
     while True:
-        cv2.imshow("VisionX - Cámaras", render_camaras(carpeta))
-        key = cv2.waitKey(30) & 0xFF
+        ahora = time.monotonic()
+        img = render_camaras(carpeta, ahora)
+        if videos is not None:
+            img = _ayuda(img, videos.titulo(), videos.pausado)
+        cv2.imshow("VisionX - Cámaras", img)
+        tecla = cv2.waitKeyEx(30)
+        key = tecla & 0xFF
+        if videos is not None:
+            if tecla in _DERECHA or key in (ord("n"), ord(".")):
+                videos.siguiente(ahora)
+            elif tecla in _IZQUIERDA or key in (ord("p"), ord(",")):
+                videos.anterior(ahora)
+            elif key == ord(" "):
+                videos.pausar(ahora)
+            elif ord("1") <= key <= ord("9"):
+                videos.ir(key - ord("1"), ahora)
         # q, Esc o la X de la ventana (sin esto, cerrarla con la X la volvía a abrir).
         cerrada = cv2.getWindowProperty("VisionX - Cámaras", cv2.WND_PROP_VISIBLE) < 1
         if key in (ord("q"), 27) or cerrada:

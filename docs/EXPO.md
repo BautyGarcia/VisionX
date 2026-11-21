@@ -1,14 +1,18 @@
 # Cómo correr el stand en la expo
 
-Guía para el día de la expo (12/12) y los ensayos. La expo corre en la **Mac de Bauty** (M2 Max,
-MPS). Todo se ve a 1920×1080 en una TV o monitor; cada pantalla se lee a 2–3 m.
+Guía para el día de la expo (12/12) y los ensayos. Todo se ve a 1920×1080 en una TV o monitor;
+cada pantalla se lee a 2–3 m. Son **dos puestos**:
+
+- **Mac de Bauty** (M2 Max, MPS): el stand en vivo, con la cámara y la voz.
+- **Segunda pantalla** (monitor o laptop aparte): la presentación de las cámaras, que pasa sola:
+  `python -m visionx.gtsynth camaras-ver` (necesita solo `data/stand-video/`, sin cámara ni GPU).
 
 ## Las tres pantallas
 
 | Pantalla | Qué muestra | Cómo se abre |
 |---|---|---|
 | **Stand (en vivo)** | Lo que ve la cámara con detecciones y distancias con su nivel, la profundidad, la vista desde arriba, la conversación, los tiempos de respuesta, los FPS de cada etapa, la cámara en uso y en qué corre cada modelo | `python -m visionx.app ejecutar --fuente usb --detector yolo --profundidad crestereo --voz --camara elp` |
-| **Cámaras (precalculada)** | El mosaico de las 6 cámaras a la vez (error, datos, alineación, rendimiento) y después una lámina por cámara | Tecla `k` dentro del stand, o `python -m visionx.gtsynth camaras-ver` |
+| **Cámaras (segunda pantalla)** | Portada con la comparación de las 6 cámaras; una cámara por pantalla con su recorrido y su **ficha** (datos, errores, qué corrige el clásico, rendimiento y placa); el mosaico de las 6 para cerrar | `python -m visionx.gtsynth camaras-ver`, o la tecla `k` dentro del stand |
 | **Cámara nueva** | El alta de una cámara desconocida paso a paso: reconocer, mirar alrededor, estimar, alinear (antes / después), escala, perfil, con métricas | `python -m visionx.app camara-nueva --fuente usb --voz`. Sin cámara: `--fuente sim:video-zed-mini --raiz data/gt-video` |
 
 ## Teclas
@@ -25,11 +29,15 @@ MPS). Todo se ve a 1920×1080 en una TV o monitor; cada pantalla se lee a 2–3 
 | `r` | — | empezar de nuevo |
 | `q` / Esc / la X | salir | salir |
 
+En la segunda pantalla (`camaras-ver`): ← → cambian de pantalla, espacio pausa, 1–9 saltan
+(1 = portada), `f` pantalla completa, `q` sale. Abajo a la derecha se ve dónde está.
+
 ## Antes de la expo (checklist)
 
 1. `git pull` de `main` y `uv sync`. En la Mac, `device: auto` usa MPS; no hace falta ONNX.
-2. Datos de la pestaña «Cámaras» en `data/stand-video/`: los 18 videos `*-video-*.mp4`, los 2
-   mosaicos y `resumen.json`. Están en el Drive (`VisionX-Personal/stand-video`).
+2. Datos de la segunda pantalla en `data/stand-video/`: los 18 videos `*-video-*.mp4`, los 2
+   mosaicos, `resumen-camaras.png` (la portada) y `resumen.json`. Están en el Drive
+   (`VisionX-Personal/stand-video`).
 3. Pesos en `weights/`: CREStereo (`crestereo/crestereo_eth3d.pth`), YOLO (`yolo26s-seg.pt`) y
    YOLOE (`yoloe-26s-seg-visionx.pt`, Drive `pesos/`).
 4. Voz: la key de Claude en `~/.visionx/anthropic_api_key` (nunca como variable de entorno) y

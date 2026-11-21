@@ -232,4 +232,89 @@ def armar_todos(carpeta: str | Path, e0: str | Path | None = None) -> list[Path]
     carpeta = Path(carpeta)
     escenas = sorted({p.name.split("-video-")[0] for p in carpeta.glob("*-video-*.mp4")})
     hechos = [armar(carpeta, e, e0) for e in escenas]
-    return [p for p in hechos if p is not None]
+    portada = carpeta / "resumen-camaras.png"
+    cv2.imwrite(str(portada), resumen_camaras(carpeta, e0))
+    return [p for p in hechos if p is not None] + [portada]
+
+
+def resumen_camaras(carpeta: str | Path, e0: str | Path | None = None) -> np.ndarray:
+    """La portada de la presentación: las 6 cámaras con su error, para comparar de un vistazo.
+
+    Por cámara, el promedio de las escenas que haya en `resumen.json`: VisionX (alineación
+    clásica + distancia conocida), otra unidad sin corregir y sin calibrar (E0).
+    """
+    from visionx.app.stand import (
+        ACCENT,
+        BG,
+        FAINT,
+        INK,
+        LEVEL_COLOR,
+        MUTED,
+        H,
+        Texts,
+        W,
+        _fondo_panel,
+        _rounded,
+        text_width,
+    )
+
+    carpeta = Path(carpeta)
+    filas = _resumen(carpeta)
+    errores_e0 = _e0(e0)
+    perfiles = _perfiles()
+    canvas = np.full((H, W, 3), BG, np.uint8)
+    t = Texts()
+    t.add("VisionX", (40, 26), 34, INK, True)
+    t.add("Una app, seis cámaras estéreo", (40 + text_width("VisionX", 34, True) + 20, 36), 24,
+          ACCENT, True)  # fmt: skip
+    t.add("¿Cuánto se equivoca midiendo distancias con cada cámara? Mediana del error en casas "
+          "simuladas, con la distancia real de cada píxel.", (40, 82), 17, MUTED)  # fmt: skip
+
+    def media(var: str, clave: str) -> float | None:
+        vals = [f[clave] for (_e, v), f in filas.items() if v == var and f.get(clave) is not None]
+        return float(np.mean(vals)) if vals else None
+
+    def media_e0(var: str) -> float | None:
+        vals = [x for (_e, v), x in errores_e0.items() if v == var and x is not None]
+        return float(np.mean(vals)) if vals else None
+
+    y0, alto = 130, 140
+    for k, (var, nombre) in enumerate(CAMARAS_VIDEO):
+        y = y0 + k * (alto + 8)
+        _fondo_panel(canvas, 40, y, W - 80, alto)
+        t.add(nombre.removeprefix("Geometría de "), (66, y + 20), 24, INK, True)
+        datos = []
+        uno = next((f for (_e, v), f in filas.items() if v == var), None)
+        if uno:
+            datos += [f"{uno['hfov_deg']:.0f}°", f"{_coma(uno['base_cm'])} cm entre lentes"]
+        perfil = perfiles.get(PERFIL_DE.get(var, ""))
+        if perfil is not None:
+            datos.append(f"{perfil.resolucion[0]}×{perfil.resolucion[1]}")
+        px = 66
+        for d in datos:
+            px = _pastilla(canvas, t, px, y + 62, d)
+        es_elp = var == "video-elp-full"
+        barras = [
+            ("VisionX", media(var, "error_clásico_pct"), None),
+            ("Otra unidad, sin corregir", media(var, "error_sin corregir_pct"),
+             LEVEL_COLOR["aproximada"]),
+            ("Sin calibrar: no aplica, es la ELP" if es_elp else "Sin calibrar (creyendo ELP)",
+             None if es_elp else media_e0(var), LEVEL_COLOR["no-segura"]),
+        ]  # fmt: skip
+        bx, bw = 620, W - 80 - 620 - 30
+        for j, (etiqueta, pct, color) in enumerate(barras):
+            yb = y + 18 + j * 40
+            t.add(etiqueta, (bx, yb + 2), 15, MUTED)
+            valor = "—" if pct is None else f"{_coma(pct)} %"
+            if color is None:
+                color = _color_error(pct) if pct is not None else FAINT
+            t.add(valor, (bx + bw - text_width(valor, 19, True), yb), 19, color, True)
+            x0, x1 = bx + 260, bx + bw - 110
+            _rounded(canvas, x0, yb + 8, x1, yb + 18, (48, 40, 34), 5)
+            if pct is not None:
+                largo = int((x1 - x0) * min(pct, 100.0) / 100.0)
+                _rounded(canvas, x0, yb + 8, x0 + max(largo, 10), yb + 18, color, 5)
+    t.add("VisionX = alineación clásica + distancia conocida · otra unidad = el mismo modelo sin "
+          "corregir · sin calibrar = si el sistema creyera que es la ELP · escala de 0 a 100 %",
+          (40, H - 44), 15, FAINT)  # fmt: skip
+    return t.draw(canvas)
