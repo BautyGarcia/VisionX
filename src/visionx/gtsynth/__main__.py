@@ -241,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--salida", default=str(ROOT / "outputs" / "gtsynth" / "e0.json"))
     sc.add_argument("--variantes", nargs="+", default=None)
     sc.add_argument("--cada", type=int, default=6, help="un cuadro de cada N")
+    sc.add_argument("--escenas", nargs="+", default=None, help="solo estas escenas")
     mo = sub.add_parser("mosaico", help="las 6 cámaras de la expo a la vez (desde los videos)")
     mo.add_argument("carpeta", help="carpeta de `gtsynth video` (data/stand-video)")
     mo.add_argument("--e0", default=str(ROOT / "outputs" / "gtsynth" / "e0.json"))
@@ -288,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "sin-calibrar":
         from visionx.gtsynth.sin_calibrar import correr_todo
 
-        correr_todo(args.raiz, args.salida, args.variantes, cada=args.cada)
+        correr_todo(args.raiz, args.salida, args.variantes, cada=args.cada, escenas=args.escenas)
         return 0
     if args.cmd == "visor":
         from visionx.gtsynth.visor import run

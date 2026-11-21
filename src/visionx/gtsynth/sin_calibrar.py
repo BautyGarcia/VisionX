@@ -104,7 +104,8 @@ def evaluar(vs, cfg: dict, cada: int = 6) -> dict:
 
 
 def correr_todo(raiz: str | Path, salida: str | Path, variantes: list[str] | None = None,
-                cfg: dict | None = None, cada: int = 6) -> list[dict]:  # fmt: skip
+                cfg: dict | None = None, cada: int = 6,
+                escenas: list[str] | None = None) -> list[dict]:  # fmt: skip
     from visionx.shared.config import load_config
 
     cfg = cfg or load_config()
@@ -115,7 +116,8 @@ def correr_todo(raiz: str | Path, salida: str | Path, variantes: list[str] | Non
     for var in variantes:
         por_escena: dict[str, list] = {}
         for v in vistas(raiz, var):
-            por_escena.setdefault(v.escena, []).append(v)
+            if escenas is None or v.escena in escenas:
+                por_escena.setdefault(v.escena, []).append(v)
         for escena in sorted(por_escena):
             vs = sorted(por_escena[escena], key=lambda v: v.meta["indice"])
             fila = evaluar(vs, cfg, cada)
