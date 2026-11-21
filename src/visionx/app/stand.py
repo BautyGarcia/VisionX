@@ -228,6 +228,7 @@ class StandState:
     target_label: str | None = None
     spoken: Any = None  # nombre en castellano de una clase
     camara: tuple[str, str] | None = None  # (texto, nivel) del perfil de `--camara`
+    aceleracion: str | None = None  # «CREStereo en Radeon … · YOLO en CPU»
 
 
 def short_m(z: float, s: ModeSettings, approx: bool = False) -> str:
@@ -302,9 +303,55 @@ def _blend_rect(canvas, x1, y1, x2, y2, color, alpha, r=8):
     roi[mask] = (roi[mask] * (1 - alpha) + np.array(color) * alpha).astype(np.uint8)
 
 
+SOMBRA_PAD = 12  # margen alrededor del panel que ocupa la sombra
+PANEL_ALTO = tuple(min(255, c + 8) for c in PANEL)  # arriba del degradé
+PANEL_BAJO = tuple(max(0, c - 4) for c in PANEL)  # abajo
+BRILLO = tuple(min(255, c + 22) for c in BORDER)  # filo de arriba
+
+
+@lru_cache(maxsize=96)
+def _panel_bitmap(w: int, h: int, r: int = 14) -> tuple[np.ndarray, np.ndarray]:
+    """El fondo de un panel de w × h ya dibujado: sombra suave, degradé vertical, borde y un filo
+    de luz arriba. Se calcula una vez por tamaño (la pantalla en vivo no paga el desenfoque)."""
+    pad = SOMBRA_PAD
+    alto, ancho = h + 2 * pad, w + 2 * pad
+    sombra = np.zeros((alto, ancho), np.uint8)
+    _rounded(sombra, pad + 2, pad + 6, pad + w - 2, pad + h + 4, 255, r)
+    sombra = cv2.GaussianBlur(sombra, (0, 0), 7)
+    a = (sombra.astype(np.float32) / 255.0 * 0.55)[:, :, None]
+    img = (np.array(BG, np.float32) * (1 - a) + np.array((6, 5, 4), np.float32) * a).astype(
+        np.uint8
+    )
+    forma = np.zeros((alto, ancho), np.uint8)
+    _rounded(forma, pad, pad, pad + w, pad + h, 255, r)
+    k = np.linspace(0.0, 1.0, alto, dtype=np.float32)[:, None, None]
+    grad = np.array(PANEL_ALTO, np.float32) * (1 - k) + np.array(PANEL_BAJO, np.float32) * k
+    grad = np.broadcast_to(grad, (alto, ancho, 3)).astype(np.uint8)
+    dentro = forma > 0
+    img[dentro] = grad[dentro]
+    _rounded(img, pad, pad, pad + w, pad + h, BORDER, r, fill=False)
+    cv2.line(img, (pad + r, pad + 1), (pad + w - r, pad + 1), BRILLO, 1, cv2.LINE_AA)
+    mascara = dentro | (sombra > 2)
+    mascara[pad - 1 : pad + h + 2, pad - 1 : pad + w + 2] |= True  # el borde antialiasado
+    return img, mascara.astype(np.uint8) * 255
+
+
+def _fondo_panel(canvas, x, y, w, h) -> None:
+    img, mascara = _panel_bitmap(int(w), int(h))
+    pad = SOMBRA_PAD
+    x0, y0 = x - pad, y - pad
+    cx0, cy0 = max(0, x0), max(0, y0)
+    cx1, cy1 = min(canvas.shape[1], x0 + img.shape[1]), min(canvas.shape[0], y0 + img.shape[0])
+    if cx1 <= cx0 or cy1 <= cy0:
+        return
+    sub = img[cy0 - y0 : cy1 - y0, cx0 - x0 : cx1 - x0]
+    m = mascara[cy0 - y0 : cy1 - y0, cx0 - x0 : cx1 - x0]
+    roi = canvas[cy0:cy1, cx0:cx1]
+    cv2.copyTo(sub, m, roi)  # copia nativa con máscara: ~1 ms por pantalla
+
+
 def _panel(canvas, x, y, w, h, title, texts: Texts, note: str | None = None):
-    _rounded(canvas, x, y, x + w, y + h, PANEL, 14)
-    _rounded(canvas, x, y, x + w, y + h, BORDER, 14, fill=False)
+    _fondo_panel(canvas, x, y, w, h)
     if title:
         texts.add(title.upper(), (x + 18, y + 14), 13, MUTED, True)
     if note:
@@ -640,6 +687,8 @@ def render_stand(st: StandState) -> np.ndarray:
     cv2.circle(canvas, (W - cw - 32 + 18, 40), 6, color, -1, cv2.LINE_AA)
     texts.add(chip, (W - cw - 32 + 32, 30), 16, INK, True)
     _streams(canvas, st, texts, 470, 24)
+    if st.aceleracion:
+        texts.add(st.aceleracion, (474, 60), 13, FAINT)
     _camera(canvas, st, texts, 24, 80, 1160, 653)
     _depth_panels(canvas, st, texts, 1204, 80, 692, 236)
     _radar(canvas, st, texts, 1204, 330, 692, 403)

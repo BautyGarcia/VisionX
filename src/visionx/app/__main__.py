@@ -400,8 +400,13 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
             target_label=target,
             spoken=catalog.spoken,
             camara=camara_label,
+            aceleracion=aceleracion,
         )
 
+    from visionx.app.aceleracion import describir
+
+    # Una vez: mirar la placa de video cuesta un llamado al sistema.
+    aceleracion = describir(cfg, args.profundidad, args.detector)
     perfil = getattr(args, "perfil_camara", None)
     camara_label = (
         (f"Cámara: {perfil.nombre} · distancias {NIVEL_DICHO[perfil.nivel]}", perfil.nivel)

@@ -134,6 +134,7 @@ class EstadoAlta:
     escala: str = "-"  # separacion | distancia | perfil | salteada
     nivel: str = "sin-estimar"
     mensajes: list[str] = field(default_factory=list)
+    tiempos_ms: dict[str, float] = field(default_factory=dict)  # por paso, para la pantalla
 
 
 class AltaCamara:
@@ -232,13 +233,16 @@ class AltaCamara:
     def _estimar_y_alinear(self) -> list[str]:
         e = self.estado
         e.paso = Paso.ESTIMAR
+        t0 = time.perf_counter()
         est = self.estimador.estimar(self._pares)
+        e.tiempos_ms["estimar"] = (time.perf_counter() - t0) * 1000
         e.estimacion = est
         e.perfil = replace(
             e.perfil, campo_horizontal_deg=est.campo_horizontal_deg, centro_rel=est.centro_rel,
             k1=est.k1, k2=est.k2,
         )  # fmt: skip
         e.paso = Paso.ALINEAR
+        t0 = time.perf_counter()
         calib = calibracion_nominal(e.perfil)
         maps = calib.rectify_maps()
         rect = [calib.rectify(i, d, maps) for i, d in self._pares]
@@ -250,6 +254,7 @@ class AltaCamara:
             der = cv2.remap(der, self.mapas[0], self.mapas[1], cv2.INTER_LINEAR)
         e.filas_despues = medir_filas(rect[medio][0], der)
         self.muestra = (rect[medio][0], rect[medio][1], der)
+        e.tiempos_ms["alinear"] = (time.perf_counter() - t0) * 1000
         e.paso = Paso.ESCALA
         frases = [self._frase_estimacion(est), self._frase_filas()]
         frases.append("¿Cuántos centímetros hay entre los dos lentes? Si no sabés, decí «saltear».")
