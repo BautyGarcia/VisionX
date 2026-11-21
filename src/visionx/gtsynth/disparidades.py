@@ -52,7 +52,17 @@ def calcular(raiz: str | Path, variantes: list[str], salida: str | Path,
     hechas = salteadas = 0
     t0 = time.perf_counter()
     for var in variantes:
-        todas = sorted(vistas(raiz, var), key=lambda v: (v.escena, v.meta["indice"]))
+        # Agrupadas por tamaño: cada tamaño usa sus grafos ONNX y cambiar todo el tiempo obliga a
+        # cargarlos de nuevo (y con varios abiertos se llena la memoria de la placa).
+        todas = sorted(
+            vistas(raiz, var),
+            key=lambda v: (
+                v.geometria_nominal.height,
+                v.geometria_nominal.width,
+                v.escena,
+                v.meta["indice"],
+            ),
+        )
         if limite:
             todas = todas[:limite]
         log(f"{var}: {len(todas)} vistas")

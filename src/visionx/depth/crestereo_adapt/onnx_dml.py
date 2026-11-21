@@ -48,14 +48,23 @@ def nombre(iters: int, alto: int, ancho: int, init: tuple[int, int] | None) -> s
 class CreStereoOnnx:
     """Hace de `nets.Model`: `modelo(izq, der, iters=, flow_init=)` -> tensor (1, 2, H, W)."""
 
-    def __init__(self, carpeta: Path, respaldo: Any) -> None:
+    def __init__(self, carpeta: Path, respaldo: Any, max_sesiones: int = 3) -> None:
         self.carpeta = Path(carpeta)
         self.respaldo = respaldo  # el modelo de PyTorch en CPU, para los tamaños sin grafo
+        # Cada sesión reserva memoria de la placa. Con muchos tamaños abiertos a la vez la memoria
+        # de video se llena y DirectML sigue en la RAM compartida, 30–70 veces más lento (21/11:
+        # 5,5 GB propios + 4,1 GB compartidos en una RX 5700 XT de 8 GB). Se guardan las últimas
+        # `max_sesiones` (las tres de un modo) y se liberan las demás.
+        self.max_sesiones = max_sesiones
         self._sesiones: dict[str, Any] = {}
         self._avisados: set[str] = set()
 
     def _sesion(self, archivo: str):
-        if archivo not in self._sesiones:
+        if archivo in self._sesiones:
+            self._sesiones[archivo] = self._sesiones.pop(archivo)  # la más reciente, al final
+        else:
+            while len(self._sesiones) >= self.max_sesiones:
+                del self._sesiones[next(iter(self._sesiones))]  # la usada hace más tiempo
             path = self.carpeta / archivo
             if not path.is_file():
                 self._sesiones[archivo] = None
