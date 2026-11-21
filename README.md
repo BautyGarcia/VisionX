@@ -14,6 +14,11 @@ Raspberry, batería y las capacidades del roadmap completo.
 | [BITACORA](docs/BITACORA.md) | Saber qué se hizo realmente, qué falló y qué falta; base del informe final |
 | [AGENTS](AGENTS.md) | Trabajar con personas y agentes sin pisarse ni adelantarse al pedido |
 
+> **Bauty, desde el 21/11: empezá por [TAREAS-BAUTY](docs/TAREAS-BAUTY.md).** Lo primero es
+> **bajar a tu disco el Drive `VisionX-Personal/`** (sección 0.1) y avisarle a Tomás qué
+> carpetas bajaste completas. El Drive está lleno (192 de 200 GB): hasta que no lo libere, los
+> datos nuevos de la noche del 20/11 (unos 100 GB) no se pueden subir.
+
 Son documentos internos de aprendizaje y trabajo, no un texto para presentar al jurado.
 Las siglas se explican en TECNICO. La entrega es el **7 de diciembre de 2026** y la presentación final el **12 de diciembre**
 (confirmado por Tomás el 18/11).
