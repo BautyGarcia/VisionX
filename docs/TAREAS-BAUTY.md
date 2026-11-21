@@ -157,6 +157,13 @@ con los parámetros estimados contra los reales (PLUG-AND-PLAY, sección 4).
   de CREStereo (disparidad, pasadas, vertical) le sirven **precalculadas**, decir en qué
   formato y la PC de Tomás las genera en la Radeon y las sube al Drive: la Mac queda solo para
   entrenar.
+- **Disparidades precalculadas** (noche del 21/11, en la PC de Tomás): `gtsynth disparidades`
+  corre CREStereo preciso una vez por vista de `camara-sorteada`, `hssd-camara-sorteada` y
+  `hssd-recorridos-sorteada` y guarda `data/cache-crestereo/<variante>/<escena>/<indice>.npz`
+  (float16: `disparidad`, `vertical`, `mitad`, y `meta` con fx, separación y tamaño). La
+  disparidad real sale de la vista (`fx · separación / Z`). Son ~2,7 MB por vista (~27 GB):
+  no entran en el Drive, Tomás los pasa en disco. Si el formato no te sirve para
+  `inc-entrenar`, decilo y se adapta.
 - **Mandar los checkpoints** (`.pt`) al Drive cuando haya uno para probar: la PC de Tomás los
   evalúa (E2 en las 6 cámaras de la expo, E3, E4) y devuelve la tabla.
 - **E3 y E4** (PLUG-AND-PLAY, sección 8): el flujo completo en cámaras no vistas y la cobertura
