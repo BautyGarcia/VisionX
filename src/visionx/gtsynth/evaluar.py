@@ -159,10 +159,14 @@ def con_escala(depth, escala: float, fb: float):
     """La profundidad multiplicada por `escala` (distancia real / medida del objeto conocido).
 
     Equivale a corregir `f·B`: la disparidad efectiva se divide por `escala`, así disparidad y
-    distancia siguen siendo coherentes con el mismo `fb`.
+    distancia siguen siendo coherentes con el mismo `fb`. La b de la U-Net (px de disparidad) se
+    divide igual, para que el intervalo siga siendo el mismo en distancia relativa.
     """
     d_eff = (depth.disparity_px.astype(np.float32) + np.float32(depth.doffs)) / np.float32(escala)
-    return _con_disparidad(depth, d_eff - np.float32(depth.doffs), fb)
+    out = _con_disparidad(depth, d_eff - np.float32(depth.doffs), fb)
+    if depth.uncertainty is not None:
+        out = dataclasses.replace(out, uncertainty=depth.uncertainty / np.float32(escala))
+    return out
 
 
 def con_corrimiento(depth, delta_px: float, fb: float):

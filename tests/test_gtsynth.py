@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 
 import cv2
@@ -216,6 +217,38 @@ def test_distancia_conocida_por_escala_arregla_otra_camara_y_el_corrimiento_no(t
     assert [f["calibra"] for f in esc] == [True, False, False]
     assert all(abs(f["escala"] - 1.3) < 0.02 and f["distancia_conocida"] == "escala" for f in esc)
     assert all(abs(f["error_rel"]) < 0.01 for f in esc)
+
+
+def test_escala_divide_tambien_la_b_de_la_unet():
+    from visionx.gtsynth.evaluar import con_escala
+    from visionx.shared.contracts import DepthResult, DepthStatus, UncertaintyKind
+
+    d = np.full((4, 6), 10.0, np.float32)
+    base = DepthResult(
+        session_id="s", frame_id=1, model_id="m", geometry_id="g", disparity_px=d,
+        valid_mask=np.ones(d.shape, bool), status=DepthStatus.VALID, inference_ms=1.0,
+        uncertainty=np.full(d.shape, 0.5, np.float32), uncertainty_kind=UncertaintyKind.LAPLACE_B,
+    )  # fmt: skip
+    out = con_escala(base, 2.0, 30.0)
+    assert np.allclose(out.disparity_px, 5.0) and np.allclose(out.uncertainty, 0.25)
+    assert np.allclose(out.depth_m, 6.0)  # 30 / 5: el doble que 30 / 10
+
+
+def test_e3_simulado_suma_la_duda_de_la_camara(tmp_path):
+    """Con focal ±10 %, solo la U-Net (intervalos de ±1 %) cubre poco; sumando σ cubre ~90 %."""
+    from visionx.gtsynth.e3_simulado import LN10, correr
+
+    filas = [{"calibra": "False", "error_rel": "0.0", "b_px": str(0.01 * 20 / LN10),
+              "d_frente_px": "20"} for _ in range(200)]  # fmt: skip
+    with open(tmp_path / "video-x.csv", "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(filas[0]))
+        w.writeheader()
+        w.writerows(filas)
+    r = correr(tmp_path, sorteos=4000)["por_sigma"]
+    assert r["0 %"]["media"]["error_mediano_pct"] == 0.0
+    diez = r["10 %"]["media"]
+    assert diez["cobertura_solo_unet"] < 0.2 and 0.85 < diez["cobertura_con_camara"] < 0.95
+    assert 5.0 < diez["error_mediano_pct"] < 8.0  # mediana de |N(0, 10 %)| ≈ 6,7 %
 
 
 def test_modo_de_distancia_conocida():
