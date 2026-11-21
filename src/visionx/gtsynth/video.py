@@ -87,10 +87,27 @@ def _z(depth, g, w8: int, h8: int, delta_px: float = 0.0) -> np.ndarray:
 
 
 def _limite_delta(g) -> float:
-    """Corrimiento máximo creíble: 2 px con la focal de la ELP en el continuo (~200 px), y más
-    con focales largas, donde el mismo giro de yaw corre más píxeles (la angosta de 60° pide
-    ~3,8 px; con el tope fijo de 2 px se descartaba y el clásico quedaba en 37 % de error)."""
-    return 2.0 * max(1.0, g.fx / 200.0)
+    """Corrimiento máximo creíble: el que produce ~1,2° de yaw con esta focal, y al menos 2 px.
+
+    El yaw corre la imagen fx·tan(yaw) píxeles, así que el tope crece con la focal. Antes era
+    2 px × fx / 200 y quedaba corto: la D455 en hotel_0 pedía −3,7 px en todos los cuadros (tope
+    3,4) y el clásico quedaba en 30 % de error (BITACORA 20/11).
+    """
+    return max(2.0, g.fx * math.tan(math.radians(1.2)))
+
+
+def _delta_de_cuadros(ds: list[float | None], g) -> float:
+    """El corrimiento de un grupo de cuadros: la mediana, si es creíble y los cuadros coinciden.
+
+    Se controla el conjunto y no cada cuadro: un valor grande pero parejo en todos los cuadros es
+    un yaw real; uno que salta de cuadro a cuadro es un objeto que no sirve (se usa 0).
+    """
+    ds = [d for d in ds if d is not None]
+    if not ds:
+        return 0.0
+    med = float(np.median(ds))
+    disperso = len(ds) >= 3 and float(np.percentile(ds, 90) - np.percentile(ds, 10)) > 1.5
+    return med if abs(med) <= _limite_delta(g) and not disperso else 0.0
 
 
 def _delta_conocida(depth, g, z_gt: np.ndarray, mascara: np.ndarray) -> float | None:
@@ -99,7 +116,7 @@ def _delta_conocida(depth, g, z_gt: np.ndarray, mascara: np.ndarray) -> float | 
     Mediana, sobre los píxeles del objeto, de la diferencia entre la disparidad medida y la que
     corresponde a su Z real. (El percentil 80 de la disparidad contra el 20 de Z, como el
     ubicador, daba corrimientos de ~1 px de más: los extremos de las dos distribuciones no son
-    los mismos píxeles.) Si pasa `_limite_delta`, el objeto no sirve y no se aplica.
+    los mismos píxeles.) Sin tope: lo controla `_delta_de_cuadros` sobre todos los cuadros.
     """
     h, w = depth.disparity_px.shape
     m = cv2.resize(mascara.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
@@ -109,8 +126,7 @@ def _delta_conocida(depth, g, z_gt: np.ndarray, mascara: np.ndarray) -> float | 
         return None
     d = depth.disparity_px[ok] + depth.doffs
     d_gt = g.fx * g.baseline_m / np.maximum(zg[ok], 1e-6)
-    delta = float(np.median(d - d_gt))
-    return delta if abs(delta) <= _limite_delta(g) else None
+    return float(np.median(d - d_gt))
 
 
 CALENTAR = 3  # cuadros del modo continuo que se descartan para la distancia conocida
@@ -185,8 +201,7 @@ def preparar_camara(vs: list[Vista], nombre: str, red: str | None, cfg: dict) ->
             continue
         cuadros = range(min(CALENTAR, len(vs) - 1), len(vs))
         ds = [_delta_conocida(prof[k][i], dg, zs[i], insts[i] == apuntado) for i in cuadros]
-        ds = [d for d in ds if d is not None]
-        deltas[k] = float(np.median(ds)) if ds else 0.0
+        deltas[k] = _delta_de_cuadros(ds, dg)
     out: dict[str, Any] = {
         "nombre": nombre, "izq": izqs, "z": zs, "g": g,
         "hfov_deg": math.degrees(2 * math.atan(g.width / (2 * g.fx))),
