@@ -150,3 +150,38 @@ def test_la_pantalla_se_dibuja_en_cada_paso():
     assert render_alta(alta, izq).shape == (H, W, 3)
     alta.saltear_escala()
     assert render_alta(alta, izq).shape == (H, W, 3)
+
+
+def test_la_escala_se_puede_decir():
+    from visionx.app.camara_nueva import interpretar_escala
+
+    assert interpretar_escala("Seis centímetros") == pytest.approx(0.06)
+    assert interpretar_escala("Los lentes están a 9,5 centímetros") == pytest.approx(0.095)
+    assert interpretar_escala("doce centímetros y medio") == pytest.approx(0.125)
+    assert interpretar_escala("sesenta milímetros") == pytest.approx(0.06)
+    assert interpretar_escala("No sé") == "saltear"
+    assert interpretar_escala("hola") is None
+    assert interpretar_escala("150 centímetros") is None  # fuera de rango
+
+
+def test_responder_la_escala_por_voz():
+    t = itertools.count(0.0, 1.0)
+    alta = AltaCamara(
+        cargar_perfiles(), pares_necesarios=2, alinear=_alinear_falso, reloj=lambda: next(t)
+    )
+    alta.conectar("Cámara de prueba", "sbs", (320, 180))
+    alta.agregar_par(*_par(40, dy=2.0))
+    alta.agregar_par(*_par(41, dy=2.0))
+    alta.responder("eh, no sé cuánto")  # «no sé» = saltear
+    assert alta.estado.paso is Paso.LISTO and alta.estado.escala == "salteada"
+    alta2 = AltaCamara(
+        cargar_perfiles(), pares_necesarios=2, alinear=_alinear_falso, reloj=lambda: next(t)
+    )
+    alta2.conectar("Otra", "sbs", (320, 180))
+    alta2.agregar_par(*_par(42, dy=2.0))
+    alta2.agregar_par(*_par(43, dy=2.0))
+    assert alta2.responder("hola")[0].startswith("No entendí")
+    alta2.responder("ocho centímetros")
+    assert alta2.estado.paso is Paso.LISTO and alta2.estado.perfil.separacion_m == pytest.approx(
+        0.08
+    )

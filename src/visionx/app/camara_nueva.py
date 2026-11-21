@@ -110,6 +110,48 @@ def medir_filas(izq: np.ndarray, der: np.ndarray, max_ancho: int = 960) -> Filas
     return Filas(float(np.median(np.abs(dy))), len(pl), dy, pl / esc)
 
 
+_NUMEROS = {
+    "un": 1, "uno": 1, "una": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6,
+    "siete": 7, "ocho": 8, "nueve": 9, "diez": 10, "once": 11, "doce": 12, "trece": 13,
+    "catorce": 14, "quince": 15, "dieciseis": 16, "diecisiete": 17, "dieciocho": 18,
+    "diecinueve": 19, "veinte": 20, "treinta": 30, "cuarenta": 40, "cincuenta": 50,
+    "sesenta": 60, "setenta": 70, "ochenta": 80, "noventa": 90, "cien": 100,
+}  # fmt: skip
+_SALTEAR = ("saltear", "saltea", "salteá", "salta", "no se", "no lo se", "ni idea", "omitir")
+
+
+def interpretar_escala(texto: str) -> float | str | None:
+    """Lo que dijo la persona sobre la separación de los lentes: metros, «saltear» o None.
+
+    «seis centímetros», «6,3 cm», «doce», «12 centímetros y medio», «saltear», «no sé».
+    Sin unidad se entiende centímetros (es lo que se pregunta).
+    """
+    t = unicodedata.normalize("NFKD", texto.lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    t = re.sub(r"[^a-z0-9,. ]+", " ", t)
+    if any(s in t for s in _SALTEAR):
+        return "saltear"
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*(mm|milimetros?|cm|centimetros?|m\b|metros?)?", t)
+    if m:
+        valor = float(m.group(1).replace(",", "."))
+        unidad = m.group(2) or "cm"
+    else:
+        palabras = [w for w in t.split() if w in _NUMEROS]
+        if not palabras:
+            return None
+        valor = float(_NUMEROS[palabras[0]])
+        unidad = "mm" if "milimetro" in t else "m" if re.search(r"\bmetros?\b", t) else "cm"
+    if "y medio" in t:
+        valor += 0.5
+    if unidad.startswith("m") and not unidad.startswith(("mm", "mil")):
+        metros = valor
+    elif unidad.startswith(("mm", "mil")):
+        metros = valor / 1000
+    else:
+        metros = valor / 100
+    return metros if 0.005 <= metros <= 1.0 else None
+
+
 def _slug(texto: str) -> str:
     t = unicodedata.normalize("NFKD", texto.lower())
     t = "".join(c for c in t if not unicodedata.combining(c))
@@ -222,6 +264,17 @@ class AltaCamara:
         if not ok:
             return self._decir("No pude usar ese objeto. Probá con otro, más cerca del centro.")
         return self._terminar("distancia")
+
+    def responder(self, texto: str) -> list[str]:
+        """La respuesta por voz a la pregunta de la escala («seis centímetros», «saltear»)."""
+        if self.estado.paso is not Paso.ESCALA:
+            return []
+        r = interpretar_escala(texto)
+        if r == "saltear":
+            return self.saltear_escala()
+        if r is None:
+            return self._decir("No entendí. Decí los centímetros, por ejemplo «seis», o «saltear».")
+        return self.separacion(float(r))
 
     def saltear_escala(self) -> list[str]:
         if self.estado.paso is not Paso.ESCALA:

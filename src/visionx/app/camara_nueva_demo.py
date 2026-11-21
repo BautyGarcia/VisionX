@@ -8,12 +8,14 @@ Con `sim:<variante>` usa un recorrido de `data/gt-video` como si fuera una cáma
 (el ojo derecho de «otra unidad», como en los videos del stand): sirve para mostrar el flujo
 en la expo sin la cámara. La escala se puede decir por voz o dejar fija con `--escala` (cm).
 
-Teclas: q / Esc = salir, r = empezar de nuevo, s = saltear la escala.
+Teclas: q / Esc = salir, r = empezar de nuevo, s = saltear la escala. Con `--voz`, espacio =
+hablar (apretar, decir «seis centímetros» o «saltear», apretar de nuevo).
 """
 
 from __future__ import annotations
 
 import argparse
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -299,6 +301,9 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
     else:
         raise SystemExit("--fuente: sim:<variante de data/gt-video>, usb o realsense")
     decir = _voz(cfg) if args.voz else print
+    oido = _oido(cfg) if args.voz else None  # (micrófono, voz a texto) para responder la escala
+    oidos: list[str] = []  # textos reconocidos, los consume el lazo principal
+    grabando = False
 
     def nueva() -> AltaCamara:
         alta = AltaCamara(cargar_perfiles(), pares_necesarios=args.pares)
@@ -351,6 +356,24 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
         if key == ord("s"):
             for f in alta.saltear_escala():
                 decir(f)
+        if key == ord(" ") and oido is not None and alta.estado.paso is Paso.ESCALA:
+            mic, stt = oido
+            if not grabando:
+                mic.start()
+                grabando = True
+            else:
+                audio = mic.stop()
+                grabando = False
+
+                def reconocer(audio=audio, stt=stt) -> None:
+                    oidos.append(stt.transcribe(audio).text)
+
+                threading.Thread(target=reconocer, daemon=True).start()
+        while oidos:
+            texto = oidos.pop(0)
+            print(f"  [oído] {texto}")
+            for f in alta.responder(texto):
+                decir(f)
     if ventana:
         cv2.destroyAllWindows()
     salida = getattr(decir, "salida", None)
@@ -364,6 +387,14 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
         print("perfil guardado en", guardar_local(perfil))
         print(f"para usarla: python -m visionx.app ejecutar --fuente usb --camara {perfil.id}")
     return 0
+
+
+def _oido(cfg: dict):
+    """Micrófono con botón (espacio) y voz a texto de la app, para responder la escala."""
+    from visionx.voice.engines import PushToTalk, VoiceSettings, build_transcriber
+
+    s = VoiceSettings.from_config(cfg)
+    return PushToTalk(s.input_device, s.max_record_s), build_transcriber(s)
 
 
 def _voz(cfg: dict):
