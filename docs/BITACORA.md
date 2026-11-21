@@ -40,6 +40,47 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-20 (noche) — T12: CREStereo en la Radeon con ONNX + DirectML (18 veces más rápido)
+
+Autor: Claude, a pedido de Tomás. Rama `b/crestereo-onnx`. **Toca `depth/crestereo_adapt`
+(área de Bauty): el PR queda para que él lo revise.**
+
+**Qué es:** CREStereo exportado a ONNX (opset 17, exportador clásico de PyTorch 2.4.1 en un venv
+aparte) y corrido con `onnxruntime-directml` en la AMD Radeon RX 5700 XT. Como ONNX pide tamaños
+fijos, cada modo usa tres grafos:
+- primera pasada a media resolución, sin flujo previo;
+- segunda pasada con el flujo de la primera;
+- en caliente, con el flujo del cuadro anterior.
+
+Quedan en `outputs/onnx/crestereo/<pesos>/`. `CreStereoOnnx` hace de modelo de PyTorch, así que
+el matcher, las pasadas y el arranque en caliente no cambian. Si falta el grafo de un tamaño,
+ese llamado corre en PyTorch (CPU) y avisa.
+
+**Medido** (mismo par, mismos pesos):
+
+| Modo | PyTorch CPU | Radeon (ONNX + DirectML) | Mac (MPS, referencia) |
+|---|---|---|---|
+| Continuo 640×384, en caliente | 1815 ms | 100–120 ms | ~120 ms |
+| Preciso 1280×736, dos pasadas | 9365 ms | 513 ms | ~617 ms |
+
+- Diferencia con PyTorch: máx. 0,0016 px en continuo y 0,0035 px en preciso, con disparidades
+  de 3 a 13 px. No son iguales bit a bit, pero no cambia ninguna medición.
+- `torch-directml` en cambio se cae dentro de la red (ver la entrada anterior).
+
+**Cómo se usa:**
+1. `uv pip install onnxruntime-directml`. Reemplaza a `onnxruntime` y trae la misma parte de
+   CPU, así que el OCR sigue andando.
+2. Exportar una vez, con un PyTorch que tenga el exportador clásico:
+   `python -m visionx.depth.crestereo_adapt.onnx_dml exportar`.
+3. Con `device: auto` y sin CUDA ni MPS, el estimador usa los grafos solo si están; con
+   `device: directml` los exige. En la Mac no cambia nada: sigue en MPS.
+
+**Límites:**
+- Probado solo en esta PC.
+- Los grafos son uno por tamaño: otra resolución de trabajo pide exportar de nuevo.
+- `onnxruntime-directml` no está en `uv.lock`: un `uv sync` vuelve a `onnxruntime` y CREStereo
+  cae a la CPU sin romperse.
+
 ## 2026-11-20 (noche) — Infra: Habitat dibuja en la Radeon; CREStereo con DirectML no anda
 
 Autor: Claude, a pedido de Tomás. Rama `b/render-gpu`.

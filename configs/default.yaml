@@ -109,7 +109,7 @@ depth:
     port_commit: b6c7a9fe8dc2e9e56ba7b96f4677312309282d15   # ibaiGorordo/CREStereo-Pytorch
     weights: weights/crestereo/crestereo_eth3d.pth
     weights_sha256: 2271ab615015a73edd4759b0f7b25a4d82ffb654270b92d3811237da3d63aa6d
-    device: auto              # auto | mps | cuda | cpu
+    device: auto              # auto | mps | cuda | cpu | directml (auto usa DirectML si hay grafos ONNX: onnx_dml.py)
     max_disp: 256             # el que usa el script de prueba del port; no cambia los pesos
     incertidumbre: ""         # checkpoint de la U-Net de incertidumbre (mejor.pt); vacío = sin b
     # Dos modos. Valores PROVISORIOS hasta cerrar la tabla de latencia M9 (compuerta de T12).
