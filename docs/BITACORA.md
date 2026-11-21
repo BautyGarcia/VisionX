@@ -40,6 +40,43 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-20 (noche) — T12: E1, el clásico contra el oráculo en modo preciso (Radeon)
+
+Autor: Claude, a pedido de Tomás. Corrido en la PC de Tomás con CREStereo en la Radeon (ONNX +
+DirectML, PR #70). Crudos en `outputs/gtsynth/e1/` (fuera de Git); comando en `TAREAS-BAUTY`.
+
+**Qué es:** `gtsynth evaluar` en val (Replica, 4 escenas, 160 vistas), CREStereo preciso
+(1280×720, dos pasadas), con hermanas ×0,25, ×0,5 y ×1 de la ELP. Cada 8 vistas comparten una
+«otra unidad», y la distancia conocida sale del objeto apuntado de la primera vista de cada
+cámara, que no entra al resumen. Error = mediana de |error relativo| por objeto (máscara del
+GT), en %:
+
+| Caso | Objetos | 0,5–4 m | 0,5–1 | 1–2 | 2–3 | 3–4 |
+|---|---:|---:|---:|---:|---:|---:|
+| **Oráculo** (par perfecto) | 3057 | **0,41** | 0,20 | 0,28 | 0,55 | 1,08 |
+| ×0,25 sin corregir | 3057 | 10,62 | 7,38 | 9,54 | 12,07 | 13,07 |
+| ×0,25 clásico + distancia conocida | 2683 | **2,11** | 1,27 | 1,86 | 2,31 | 3,17 |
+| ×0,5 sin corregir | 3055 | 19,87 | 13,91 | 18,09 | 21,63 | 23,68 |
+| ×0,5 clásico + distancia conocida | 2683 | **2,70** | 1,66 | 2,38 | 2,95 | 3,89 |
+| ×1 sin corregir | 3053 | 33,48 | 23,25 | 30,03 | 36,85 | 38,47 |
+| ×1 clásico + distancia conocida | 2683 | **4,40** | 3,18 | 3,95 | 4,81 | 7,04 |
+
+**Lectura:**
+- El clásico con distancia conocida recupera casi todo: con ×1 pasa de 33 % a 4,4 %.
+- Igual queda **un hueco real contra el oráculo**: 4,4 % contra 0,41 % con ×1, unas 10 veces;
+  con ×0,25, 2,1 % contra 0,41 %. Coincide con la tabla de la v2 (5,6 % contra 0,75 % en 6
+  pares de la ELP).
+- Ese hueco es lo que la red de entrada puede cerrar **dentro** de una cámara conocida, además
+  de estimar las cámaras desconocidas (PLUG-AND-PLAY, sección 4). Crece con la distancia: a 3–4
+  m el clásico queda en 7 %.
+
+**Problema:** la corrida `distinta` + distancia conocida se cayó dentro de `gtsynth evaluar`
+(`contracts.py`: «máscara vacía: el status tiene que ser unmeasurable»). Es código de
+`evaluar.py` / contratos (Bauty); no se tocó. Hace falta para la fila «otra cámara supuesta ELP».
+
+**Tiempos:** cada corrida con hermanas tarda ~14 min. La mayor parte es el clásico (SIFT en la
+CPU) y armar las hermanas, no CREStereo (0,5 s por par en la Radeon).
+
 ## 2026-11-20 (noche) — T12: CREStereo en la Radeon con ONNX + DirectML (18 veces más rápido)
 
 Autor: Claude, a pedido de Tomás. Rama `b/crestereo-onnx`. **Toca `depth/crestereo_adapt`
