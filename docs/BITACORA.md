@@ -40,6 +40,24 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-21 (madrugada) — T12: arreglo en `gtsynth evaluar` (código de Bauty, para revisar)
+
+Autor: Claude, con permiso de Tomás para la noche («arreglar código de Bauty con PR y nota»).
+Rama `b/evaluar-vacio`.
+
+**Qué fallaba:** la corrida `distinta` + `--distancia-conocida` de E1 se caía en
+`contracts.py` («máscara vacía: el status tiene que ser unmeasurable»). Con otra cámara
+supuesta ELP, el corrimiento de la distancia conocida es tan grande que `con_corrimiento`
+deja **ningún** píxel con disparidad positiva, pero devolvía el `DepthResult` como `VALID`.
+
+**Arreglo (mínimo):** en ese caso `con_corrimiento` devuelve la profundidad como
+`UNMEASURABLE`, con el motivo «distancia conocida: ningún píxel queda con disparidad
+positiva». No cambia nada cuando quedan píxeles. Test nuevo en `tests/test_gtsynth.py`.
+
+**Para Bauty:** revisar si preferís otra salida (por ejemplo, no aplicar el corrimiento a ese
+grupo). Con el arreglo, la fila `distinta` de E1 se puede correr; la corre esta misma noche la
+PC de Tomás.
+
 ## 2026-11-20 (noche) — T12: E1, el clásico contra el oráculo en modo preciso (Radeon)
 
 Autor: Claude, a pedido de Tomás. Corrido en la PC de Tomás con CREStereo en la Radeon (ONNX +

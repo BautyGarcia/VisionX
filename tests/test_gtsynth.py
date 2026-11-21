@@ -223,3 +223,20 @@ def test_particion_de_hssd_sin_solapamientos():
     assert len(todas) == len(set(todas))
     assert particion_de(h["test"][0]) == "test" and particion_de("room_2") == "test"
     assert "room_1" in escenas_de("val") and h["val"][0] in escenas_de("val")
+
+
+def test_corrimiento_que_no_deja_pixeles_marca_la_profundidad_no_medible():
+    import numpy as np
+
+    from visionx.gtsynth.evaluar import con_corrimiento
+    from visionx.shared.contracts import DepthResult, DepthStatus
+
+    d = np.full((4, 6), 10.0, np.float32)
+    base = DepthResult(
+        session_id="s", frame_id=1, model_id="m", geometry_id="g", disparity_px=d,
+        valid_mask=np.ones(d.shape, bool), status=DepthStatus.VALID, inference_ms=1.0,
+    )  # fmt: skip
+    ok = con_corrimiento(base, 2.0, 30.0)
+    assert ok.status is DepthStatus.VALID and ok.valid_mask.all()
+    nada = con_corrimiento(base, 12.0, 30.0)  # 10 − 12 < 0 en todos los píxeles («distinta»)
+    assert nada.status is DepthStatus.UNMEASURABLE and not nada.valid_mask.any() and nada.reason

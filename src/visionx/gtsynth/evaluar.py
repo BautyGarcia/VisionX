@@ -148,6 +148,15 @@ def con_corrimiento(depth, delta_px: float, fb: float):
     ok = depth.valid_mask & np.isfinite(d_eff) & (d_eff > 0)
     with np.errstate(divide="ignore", invalid="ignore"):
         z = np.where(ok, fb / d_eff, 0.0).astype(np.float32)
+    if not ok.any():
+        # Con un corrimiento grande (otra cámara supuesta ELP) puede no quedar ningún píxel con
+        # disparidad positiva: el contrato pide marcarlo «no medible» con su motivo.
+        from visionx.shared.contracts import DepthStatus
+
+        return dataclasses.replace(
+            depth, disparity_px=d, valid_mask=ok, depth_m=z, status=DepthStatus.UNMEASURABLE,
+            reason="distancia conocida: ningún píxel queda con disparidad positiva",
+        )  # fmt: skip
     return dataclasses.replace(depth, disparity_px=d, valid_mask=ok, depth_m=z)
 
 
