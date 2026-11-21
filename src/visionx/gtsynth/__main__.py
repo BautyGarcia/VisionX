@@ -245,6 +245,11 @@ def main(argv: list[str] | None = None) -> int:
     mo = sub.add_parser("mosaico", help="las 6 cámaras de la expo a la vez (desde los videos)")
     mo.add_argument("carpeta", help="carpeta de `gtsynth video` (data/stand-video)")
     mo.add_argument("--e0", default=str(ROOT / "outputs" / "gtsynth" / "e0.json"))
+    di = sub.add_parser("disparidades", help="CREStereo precalculado sobre el GT (para entrenar)")
+    di.add_argument("raiz")
+    di.add_argument("--variantes", nargs="+", required=True)
+    di.add_argument("--salida", default=str(ROOT / "data" / "cache-crestereo"))
+    di.add_argument("--limite", type=int, default=0, help="solo N vistas por variante")
     de = sub.add_parser("deteccion", help="recall y precisión de detectores contra el GT")
     de.add_argument("raiz")
     de.add_argument("--modelos", nargs="+", required=True, help="nombres en weights/ o rutas .pt")
@@ -279,6 +284,11 @@ def main(argv: list[str] | None = None) -> int:
 
         solo = tuple(args.solo) if args.solo else None
         preparar_video(args.raiz, args.salida, args.red, solo=solo)
+        return 0
+    if args.cmd == "disparidades":
+        from visionx.gtsynth.disparidades import calcular
+
+        print(calcular(args.raiz, args.variantes, args.salida, limite=args.limite))
         return 0
     if args.cmd == "mosaico":
         from visionx.gtsynth.mosaico import armar_todos
