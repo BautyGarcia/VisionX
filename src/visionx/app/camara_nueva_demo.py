@@ -70,7 +70,43 @@ def _icono(canvas: np.ndarray, cx: int, cy: int, estado: str, color) -> None:
         cv2.circle(canvas, (cx, cy), 13, color, 2, cv2.LINE_AA)
 
 
-def render_alta(alta: AltaCamara, izq: np.ndarray | None) -> np.ndarray:
+def _ms(ms: float | None) -> str:
+    if ms is None:
+        return "—"
+    return f"{ms / 1000:.1f} s".replace(".", ",") if ms >= 1000 else f"{ms:.0f} ms"
+
+
+def _metricas(canvas, t, alta: AltaCamara, x: int, y: int, w: int, h: int, fps: float | None):
+    """Rendimiento, alineación y cámara en números (lo que pide el stand)."""
+    from visionx.gtsynth.mosaico import PARAMETROS
+
+    e = alta.estado
+    _panel(canvas, x, y, w, h, "Métricas", t)
+    a, d = e.filas_antes, e.filas_despues
+    puntos = "—" if a is None else f"{a.puntos} → {d.puntos if d else '—'}"
+    desfase = "—"
+    if a is not None and a.mediana_px is not None and d is not None and d.mediana_px is not None:
+        desfase = f"{a.mediana_px:.1f} → {d.mediana_px:.1f} px".replace(".", ",")
+    corr: list[str] = []
+    for p in e.aplica:
+        nombre = PARAMETROS.get(p, p)
+        if nombre not in corr:
+            corr.append(nombre)
+    res = f"{e.perfil.resolucion[0]}×{e.perfil.resolucion[1]}" if e.perfil else "—"
+    filas = [
+        ("Cámara", f"{res} · {fps:.1f} fps".replace(".", ",") if fps else res),
+        ("Puntos emparejados", puntos),
+        ("Desfase de filas", desfase),
+        ("Corrige", " · ".join(corr) if corr else "—"),
+        ("Tiempos", f"estimar {_ms(e.tiempos_ms.get('estimar'))} · "
+                    f"alinear {_ms(e.tiempos_ms.get('alinear'))}"),
+    ]  # fmt: skip
+    for k, (etiqueta, valor) in enumerate(filas):
+        t.add(etiqueta, (x + 22, y + 46 + k * 31), 15, MUTED)
+        t.add(valor, (x + 190, y + 45 + k * 31), 16, INK)
+
+
+def render_alta(alta: AltaCamara, izq: np.ndarray | None, fps: float | None = None) -> np.ndarray:
     """La pantalla completa (1920×1080) para el estado actual del alta."""
     e = alta.estado
     canvas = np.full((H, W, 3), BG, np.uint8)
@@ -145,13 +181,15 @@ def render_alta(alta: AltaCamara, izq: np.ndarray | None) -> np.ndarray:
         t.add(etiqueta, (180, 988), 22, NIVEL_COLOR.get(nivel, MUTED) if e.paso is Paso.LISTO
               else ACCENT, True)  # fmt: skip
 
-    # Lo que dice la voz
-    _panel(canvas, px, 836, pw, 212, "VisionX dice", t)
+    # Lo que dice la voz y las métricas
+    vw = int(pw * 0.55)
+    _panel(canvas, px, 836, vw, 212, "VisionX dice", t)
     lineas: list[str] = []
     for m in e.mensajes[-3:]:
-        lineas += wrap(m, 21, pw - 48)
+        lineas += wrap(m, 19, vw - 48)
     for k, linea in enumerate(lineas[-6:]):
-        t.add(linea, (px + 24, 836 + 46 + k * 27), 21, INK)
+        t.add(linea, (px + 24, 836 + 46 + k * 26), 19, INK)
+    _metricas(canvas, t, alta, px + vw + 16, 836, pw - vw - 16, 212, fps)
     return t.draw(canvas)
 
 
@@ -167,7 +205,10 @@ def _detalle(alta: AltaCamara, paso: Paso) -> str:
             return "Sin red entrenada: valor promedio (90°)"
         return f"{est.campo_horizontal_deg:.0f}° · confianza {est.confianza:.0%}"
     if paso is Paso.ALINEAR and e.filas_despues is not None:
-        aplica = ", ".join(e.aplica) if e.aplica else "nada que corregir"
+        from visionx.gtsynth.mosaico import PARAMETROS
+
+        nombres = list(dict.fromkeys(PARAMETROS.get(p, p) for p in e.aplica))
+        aplica = " · ".join(nombres) if nombres else "nada que corregir"
         return f"Corrige: {aplica}"
     if paso is Paso.ESCALA and e.paso is Paso.ESCALA:
         return "Decí los centímetros entre lentes o «saltear»"
@@ -272,6 +313,8 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
         cv2.namedWindow("VisionX · Cámara nueva", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("VisionX · Cámara nueva", 1600, 900)
     t_escala = None
+    t_prev: float | None = None
+    fps: float | None = None
     while True:
         izq, der = fuente.leer()
         for f in alta.agregar_par(izq, der):
@@ -283,7 +326,15 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
                           else alta.separacion(float(args.escala) / 100.0))  # fmt: skip
                 for f in frases:
                     decir(f)
-        img = render_alta(alta, izq)
+        ahora = time.monotonic()
+        if t_prev is not None:
+            fps = (
+                1 / max(ahora - t_prev, 1e-3)
+                if fps is None
+                else 0.9 * fps + 0.1 / max(ahora - t_prev, 1e-3)
+            )
+        t_prev = ahora
+        img = render_alta(alta, izq, fps)
         if args.captura and alta.estado.paso is Paso.LISTO:
             cv2.imwrite(args.captura, img)
         if not ventana:
