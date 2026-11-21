@@ -40,6 +40,52 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-20 (noche) — T12: clásico contra red en hermanas, por objeto contra el GT sintético; ninguno llega a «útil»
+
+Tarea: T12, T13. Persona/agente: Bauty / Claude Code. Rama: `a/T12-bitacora-gt-val` (solo esta entrada).
+Hecho: tanda de `gtsynth evaluar` en val (4 escenas, 160 vistas), Mac MPS, CREStereo preciso +
+U-Net `v2-s0`; hermanas con 8 vistas por cámara (20 cámaras), alineación con los 8 pares juntos y
+distancia conocida con el objeto apuntado de la primera vista (exacta: optimista). Red: v2 45 ép.
+Resultado (error medio por objeto en %, de 0,5–1 / 1–2 / 2–3 / 3–4 m; entre paréntesis el P95):
+
+| Cámara | Sin corregir + dist. | Clásico + dist. | Red + dist. | Clásico + red + dist. |
+|---|---|---|---|---|
+| ELP calibrada (sin alinear) | 0,7 / 0,9 / 1,2 / 1,6 (2–4) | | | |
+| Hermana ×0,5 | 29 / 39 / 45 / 36 | **2,9 / 4,0 / 4,5 / 6,4** (9–18) | 4,6 / 4,7 / 5,4 / 6,3 (16–21) | 8,6 / 16 / 7,0 / 7,0 |
+| Hermana ×1 | 49 / 170 / 63 / 72 | **4,4 / 7,2 / 7,9 / 12,7** (14–36) | 9,6 / 10 / 13 / 15 (33–44) | 101 / 26 / 15 / 13 |
+
+Objetos con más de 10 % de error: ELP 1,3 %; ×0,5 clásico 12 %, red 13 %; ×1 clásico 27 %, red
+31 %. Medianas: ×1 clásico 3,1–6,8 %, red 4,2–7,2 %.
+Lectura: (1) **la red v2 no le gana al clásico** tampoco contra distancias reales; empata en
+×0,5 a 3–4 m y pierde en el resto. (2) **El clásico tampoco alcanza la vara de «útil»** (≤ 3 %
+medio y P95 ≤ 10 %): en ×1 deja 4–13 % y uno de cada cuatro objetos con más de 10 %. (3) La
+distancia conocida sola casi no arregla nada (el error no es un corrimiento constante); sirve
+recién después de alinear. (4) La red encima del clásico, sin reentrenar, empeora (ya visto).
+(5) La b de la U-Net: en la ELP calibrada duda de más (factor 0,28), con hermanas corregidas se
+queda corta o justa (factor 1,0–1,3): un solo factor no sirve para todos los estados de
+alineación (T13).
+Problema: las dos corridas de la cámara `distinta` fallaron: con un error de escala, restar el
+corrimiento de la distancia conocida deja la disparidad sin valores positivos y el contrato
+rechaza un resultado vacío que no sea `unmeasurable`. Lo arreglé igual que #75 (Tomás/Claude, misma
+noche, ya en main): `con_corrimiento` lo marca no medible; mi copia se descartó y las corridas se
+repitieron con el arreglo. **Resultado de `distinta` con distancia conocida como corrimiento:
+63 / 66 / 113 / 258 % de error medio** (sesgo de −53 % cerca a +23 % a 3–4 m) y 917 de 2589
+objetos sin medir; el clásico da lo mismo (el render es un pinhole perfecto: no hay nada que
+alinear). Confirma que el corrimiento es el modelo equivocado para un error de escala: con otra
+separación u otra focal, la distancia conocida tiene que **corregir la escala** (fx·B), como en
+la entrada de Tomás («por vista», 1,2–3,7 %). Pesa al integrar `calibrar_distancia`.
+Límites: val, una semilla de cada red, rangos de hermanas supuestos, distancia conocida exacta.
+Crudos en `outputs/gtsynth/t12-val/` (fuera de Git). Coincide con el E1 de Tomás en la Radeon
+(×1: clásico 4,4 % de mediana contra 0,41 % del oráculo).
+Cambio de rumbo (21/11): con PLUG-AND-PLAY la red de entrada deja de competir con el clásico
+corrigiendo un campo denso y pasa a estimar la cámara (campo, centro, distorsión, con b). El
+reentrenamiento de la red de campo que había propuesto queda en pausa.
+Revisión del diseño (§4–6) para Tomás en el issue #85: meta de E2 en la focal (≤ 2 %), qué
+importa según la referencia de escala, distorsión sorteada sin pliegue y términos que le faltan
+a la fórmula de incertidumbre.
+Próximo paso: bajar `VisionX-Personal/`, revisar PLUG-AND-PLAY §4–6 y prototipo E2
+(`depth/camara_net/`); distancia conocida por escala para cámaras distintas.
+
 ## 2026-11-21 (madrugada) — T12/T15: E0 con la regla nueva, E1 «distinta» y un error de la regla
 
 Autor: Claude (noche del 20→21/11, con permiso de Tomás). Corrido en la Radeon.
