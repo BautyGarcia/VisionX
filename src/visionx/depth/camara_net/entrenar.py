@@ -43,6 +43,8 @@ ESCALA_REPROY = 0.005  # 0,5 % del ancho ≈ 3 px a 640
 class Params:
     raiz: str = "data/gt-sintetico-elp"
     variantes: tuple[str, ...] = ("camara-sorteada", "hssd-camara-sorteada")
+    # Validación fija entre corridas, aunque cambien las variantes de entrenamiento.
+    variantes_val: tuple[str, ...] = ("camara-sorteada", "hssd-camara-sorteada")
     recorridos: tuple[str, ...] = ("hssd-recorridos-sorteada",)
     cuadros_por_recorrido: int = 6
     epocas: int = 20
@@ -54,6 +56,10 @@ class Params:
     trabajadores: int = 8
     semilla: int = 0
     max_items: int = 0  # 0 = todos (para pruebas rápidas)
+    zoom: tuple[float, float] | None = None  # ver `datos.Aumento.zoom`
+
+    def aumento(self) -> Aumento:
+        return Aumento(zoom=self.zoom)
 
 
 # ---------------------------------------------------------------- pérdida
@@ -257,7 +263,7 @@ def entrenar(p: Params, salida: str | Path, device: str = "auto", continuar: boo
     rng = np.random.default_rng(p.semilla)
 
     tren = items_entrenamiento(p)
-    val = items_de(p.raiz, p.variantes, "val")
+    val = items_de(p.raiz, p.variantes_val, "val")
     if p.max_items:
         tren = [tren[i] for i in rng.choice(len(tren), min(p.max_items, len(tren)), replace=False)]
         val = val[: max(8, p.max_items // 4)]
@@ -268,7 +274,7 @@ def entrenar(p: Params, salida: str | Path, device: str = "auto", continuar: boo
     from visionx.depth.camara_net.datos import sortear_camara
 
     muestra_idx = rng.choice(len(tren), min(2000, len(tren)), replace=False)
-    centro = np.mean([sortear_camara(tren[i], Aumento(), rng).etiqueta() for i in muestra_idx], 0)
+    centro = np.mean([sortear_camara(tren[i], p.aumento(), rng).etiqueta() for i in muestra_idx], 0)
     modelo = RedCamara(preentrenada=not continuar).to(device)
     modelo.fijar_centro(torch.tensor(centro, dtype=torch.float32, device=device))
     tronco = list(modelo.tronco.parameters())
@@ -292,7 +298,7 @@ def entrenar(p: Params, salida: str | Path, device: str = "auto", continuar: boo
         curvas.write_text("epoca,perdida,nll,reproy_pct,val_focal_med,val_focal_p90,"
                           "val_cx_med,val_k1_med,val_reproy_med,val_cob90_f,seg\n")  # fmt: skip
 
-    conj = Conjunto(tren, Aumento())
+    conj = Conjunto(tren, p.aumento())
     lotes = LotesPorAlto(tren, p.lote, p.semilla)
     lotes.epoca = epoca0
     cargador = _cargador(conj, lotes, p.trabajadores, persistente=True)

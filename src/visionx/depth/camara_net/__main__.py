@@ -23,7 +23,9 @@ def _entrenar(a: argparse.Namespace) -> None:
     from visionx.depth.camara_net.entrenar import Params, entrenar
 
     p = Params(raiz=a.raiz, epocas=a.epocas, lote=a.lote, trabajadores=a.trabajadores,
-               semilla=a.semilla, max_items=a.max_items)  # fmt: skip
+               semilla=a.semilla, max_items=a.max_items,
+               zoom=tuple(a.zoom) if a.zoom else None,
+               variantes=tuple(a.variantes))  # fmt: skip
     print(json.dumps(entrenar(p, a.salida, a.device, a.continuar), ensure_ascii=False))
 
 
@@ -62,6 +64,10 @@ def main(argv: list[str] | None = None) -> None:
     en.add_argument("--trabajadores", type=int, default=8)
     en.add_argument("--semilla", type=int, default=0)
     en.add_argument("--max-items", type=int, default=0, help="0 = todos (para pruebas rápidas)")
+    en.add_argument("--zoom", type=float, nargs=2, default=None, metavar=("MIN", "MAX"),
+                    help="recortes con zoom (p. ej. 0.55 1.2); por defecto sin zoom")  # fmt: skip
+    en.add_argument("--variantes", nargs="+", default=["camara-sorteada", "hssd-camara-sorteada"],
+                    help="variantes de una cámara por vista para entrenar (y validar)")  # fmt: skip
     en.add_argument("--device", default="auto")
     en.add_argument("--continuar", action="store_true", help="seguir desde ultimo.pt")
     en.set_defaults(fn=_entrenar)

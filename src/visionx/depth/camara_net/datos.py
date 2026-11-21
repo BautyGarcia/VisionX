@@ -40,6 +40,11 @@ class Aumento:
     k2: tuple[float, float] = (-0.10, 0.10)
     centro: float = 0.03  # corrimiento máximo del centro, fracción del ancho / alto
     fotometrico: bool = True
+    # Zoom: recortar del lienzo una ventana de `zoom` veces la nominal (misma proporción). En un
+    # pinhole eso es exactamente otra cámara, con más (o menos) focal relativa: cada vista vale
+    # por muchas cámaras y la red no puede asociar «esta escena → este campo». None = sin zoom.
+    zoom: tuple[float, float] | None = None
+    hfov_min: float = 35.0  # el zoom no baja de este campo (alcance: 40–140°)
 
     @staticmethod
     def ninguno() -> Aumento:
@@ -83,15 +88,23 @@ def item_de(vista: Any) -> Item:
 
 def sortear_camara(item: Item, aum: Aumento, rng: np.random.Generator) -> Camara:
     """Cámara simulada para este ítem: centro corrido y lente, siempre dentro del lienzo."""
-    w, h = item.nominal
-    base = Camara(w, h, item.fx, *item.centro_nominal)
+    w0, h0 = item.nominal
+    base = Camara(w0, h0, item.fx, *item.centro_nominal)
     for _ in range(30):
+        w, h, cx, cy = w0, h0, base.cx, base.cy
+        if aum.zoom:
+            z = rng.uniform(*aum.zoom)
+            w, h = 2 * round(w0 * z / 2), 2 * round(h0 * z / 2)
+            if math.degrees(2 * math.atan(w / (2 * item.fx))) < aum.hfov_min:
+                continue
+            # Ventana centrada en el centro óptico del render: el centro queda en el medio.
+            cx, cy = base.cx - (w0 - w) / 2, base.cy - (h0 - h) / 2
         dx = rng.uniform(-aum.centro, aum.centro) * w if aum.centro else 0.0
         dy = rng.uniform(-aum.centro, aum.centro) * h if aum.centro else 0.0
         k1 = k2 = 0.0
         if aum.p_lente and rng.random() < aum.p_lente:
             k1, k2 = rng.uniform(*aum.k1), rng.uniform(*aum.k2)
-        cam = Camara(w, h, item.fx, base.cx - dx, base.cy - dy, k1, k2)
+        cam = Camara(w, h, item.fx, cx - dx, cy - dy, k1, k2)
         if cabe(cam, item.lienzo, item.centro_lienzo):
             return cam
     return base

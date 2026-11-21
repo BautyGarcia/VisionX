@@ -167,3 +167,18 @@ def test_modelo_y_perdida_en_cpu():
     total, partes = perdida(out, lote, 0.5)
     total.backward()
     assert math.isfinite(float(total)) and partes["reproy_pct"] > 0
+
+
+def test_zoom_es_otra_camara_con_mas_focal_relativa(tmp_path):
+    it = item_de(_vista_falsa(tmp_path))
+    rng = np.random.default_rng(3)
+    aum = Aumento(p_lente=0.0, centro=0.0, fotometrico=False, zoom=(0.6, 0.6))
+    cam = sortear_camara(it, aum, rng)
+    assert cam.ancho == 192 and cam.alto == 108  # 0,6 × 320 × 180
+    assert cam.etiqueta()[0] == pytest.approx(math.log(250.0 / 192))
+    assert cam.cx == pytest.approx(159.5 - (320 - 192) / 2)  # sigue en el medio
+    m = muestra(it, aum, np.random.default_rng(0))
+    assert m["ojos"].shape == (2, 3, 360, 640)  # misma proporción, mismo lote
+    # Un campo más angosto que `hfov_min` no se sortea: queda la cámara sin zoom.
+    angosto = Aumento(p_lente=0.0, centro=0.0, fotometrico=False, zoom=(0.1, 0.1))
+    assert sortear_camara(it, angosto, rng).ancho == NOMINAL[0]
