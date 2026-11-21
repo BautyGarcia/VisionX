@@ -117,12 +117,13 @@ def medir(
     progreso=None,
     alineador=None,
     vistas_por_camara: int = 1,
-    distancia_conocida: bool = False,
+    distancia_conocida: bool | str = False,
 ):
     """Filas de todos los objetos de las vistas.
 
     Sin `alineador`, con una vista por cámara y sin distancia conocida, es la medición original:
     cada vista sola (y, en las hermanas, cada vista con su propia unidad). Si no, ver `_por_camara`.
+    `distancia_conocida`: False, «corrimiento» (True) o «escala» (ver `MODOS_DISTANCIA`).
     """
     if alineador is None and vistas_por_camara == 1 and not distancia_conocida:
         filas: list[dict] = []
@@ -137,13 +138,45 @@ def medir(
     )  # fmt: skip
 
 
+# Qué corrige un objeto a distancia conocida. Con un solo objeto hay una sola ecuación: se
+# corrige una cosa. «corrimiento» resta un desplazamiento de columnas (yaw o centro óptico mal
+# supuestos: el error que deja una unidad del mismo modelo). «escala» multiplica la distancia
+# (focal × separación mal supuestas: el error de una cámara distinta o estimada, Z = f·B/d).
+MODOS_DISTANCIA = ("corrimiento", "escala")
+
+
+def modo_distancia(valor: bool | str) -> str | None:
+    """None (sin distancia conocida) o uno de `MODOS_DISTANCIA`; True es «corrimiento»."""
+    if valor is False or valor is None or valor == "":
+        return None
+    modo = "corrimiento" if valor is True else str(valor)
+    if modo not in MODOS_DISTANCIA:
+        raise ValueError(f"distancia conocida: {modo!r} no es {' ni '.join(MODOS_DISTANCIA)}")
+    return modo
+
+
+def con_escala(depth, escala: float, fb: float):
+    """La profundidad multiplicada por `escala` (distancia real / medida del objeto conocido).
+
+    Equivale a corregir `f·B`: la disparidad efectiva se divide por `escala`, así disparidad y
+    distancia siguen siendo coherentes con el mismo `fb`.
+    """
+    d_eff = (depth.disparity_px.astype(np.float32) + np.float32(depth.doffs)) / np.float32(escala)
+    return _con_disparidad(depth, d_eff - np.float32(depth.doffs), fb)
+
+
 def con_corrimiento(depth, delta_px: float, fb: float):
     """La profundidad después de restarle un corrimiento constante de disparidad (px).
 
-    Es lo que hace una distancia conocida: el corrimiento constante de columnas (centro óptico,
-    yaw, separación o focal mal supuestas) no se ve en la imagen y se mide con un objeto.
+    Es lo que hace una distancia conocida cuando el error es un corrimiento constante de columnas
+    (centro óptico o yaw mal supuestos), que no se ve en la imagen y se mide con un objeto.
     """
-    d = depth.disparity_px.astype(np.float32) - np.float32(delta_px)
+    return _con_disparidad(depth, depth.disparity_px.astype(np.float32) - np.float32(delta_px), fb)
+
+
+def _con_disparidad(depth, d: np.ndarray, fb: float):
+    """La profundidad con la disparidad `d` corregida; «no medible» si no queda ningún píxel."""
+    d = d.astype(np.float32)
     d_eff = d + depth.doffs
     ok = depth.valid_mask & np.isfinite(d_eff) & (d_eff > 0)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -168,16 +201,18 @@ def _por_camara(
     progreso,
     alineador,
     vistas_por_camara: int,
-    distancia_conocida: bool,
+    distancia_conocida: bool | str,
 ) -> list[dict]:
     """Las vistas de a grupos de `vistas_por_camara`, cada grupo visto por una misma cámara.
 
     Para cada grupo: (1) si es hermana, todas las vistas comparten la unidad (con 1 vista por
     cámara, la de siempre); (2) el alineador corrige todos los pares juntos, como lo haría la
     app acumulando cuadros; (3) con `distancia_conocida`, el objeto apuntado de la primera vista
-    que lo tenga hace de «está a 2 metros»: su error de disparidad se resta en todo el grupo y
-    esa vista queda marcada `calibra` (no entra en el resumen).
+    que lo tenga hace de «está a 2 metros»: según el modo, su error de disparidad se resta en
+    todo el grupo («corrimiento») o su cociente de distancias multiplica todo el grupo
+    («escala»); esa vista queda marcada `calibra` (no entra en el resumen).
     """
+    modo_dc = modo_distancia(distancia_conocida)
     k_cam = max(int(vistas_por_camara), 1)
     dg = m.ubicador.depth_geometry
     fb = dg.fx * dg.baseline_m
@@ -199,25 +234,34 @@ def _por_camara(
             objs = objetos_de(v, min_px=min_px)
             frame = _frame(v, izq, der, m.geometria, g0 + k)
             medidas.append((v, frame, m.estimador.predict(frame) if objs else None, objs))
-        delta, calibra = 0.0, None
-        if distancia_conocida:
+        delta, escala, calibra = 0.0, 1.0, None
+        if modo_dc:
             for k, (v, frame, depth, objs) in enumerate(medidas):
                 apuntado = [o for o in objs if o.apuntado]
                 if depth is None or not apuntado:
                     continue
                 f0 = _filas(m, v, variante, frame, depth, apuntado)[0]
-                if f0["d_frente_px"] is not None:
+                if f0["d_frente_px"] is None:
+                    continue
+                if modo_dc == "corrimiento":
                     delta, calibra = float(f0["d_frente_px"] - f0["d_gt_px"]), k
+                    break
+                medida, real = f0["d_frente_px"] + depth.doffs, f0["d_gt_px"] + depth.doffs
+                if medida > 0 and real > 0:  # Z = fb/d: real/medida en distancia = medida/real
+                    escala, calibra = float(medida / real), k
                     break
         for k, (v, frame, depth, objs) in enumerate(medidas):
             if depth is None:
                 continue
             if delta:
                 depth = con_corrimiento(depth, delta, fb)
+            elif escala != 1.0:
+                depth = con_escala(depth, escala, fb)
             for f in _filas(m, v, variante, frame, depth, objs):
                 f.update({
                     "camara": g0 // k_cam, "alineacion": modo, "aplica": aplica,
-                    "delta_px": round(delta, 3), "calibra": k == calibra,
+                    "distancia_conocida": modo_dc or "", "delta_px": round(delta, 3),
+                    "escala": round(escala, 4), "calibra": k == calibra,
                 })  # fmt: skip
                 filas.append(f)
         if progreso:

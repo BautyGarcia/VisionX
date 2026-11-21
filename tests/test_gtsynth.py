@@ -184,6 +184,49 @@ def test_distancia_conocida_saca_el_corrimiento_en_toda_la_camara(tmp_path):
     assert r["objetos"] == 2 and r["objetos_de_calibracion"] == 1
 
 
+class _Escalado(_Corrido):
+    """Disparidad exacta por un factor: focal × separación mal supuestas (otra cámara)."""
+
+    def __init__(self, vistas_, factor):
+        super().__init__(vistas_, 0.0)
+        self.factor = factor
+
+    def predict(self, frame):
+        from visionx.depth.stereo import build_result
+
+        g = self.geometry
+        z = self.vistas[frame.frame_id].z()
+        d = (self.factor * g.fx * g.baseline_m / z).astype(np.float32)
+        return build_result(frame, "escalado", g, d, np.ones_like(d, bool), 1.0, 0.0)
+
+
+def test_distancia_conocida_por_escala_arregla_otra_camara_y_el_corrimiento_no(tmp_path):
+    """Con f·B 30 % mal, restar un corrimiento solo acierta a la distancia del objeto conocido;
+    multiplicar la escala acierta a todas (BITACORA 21/11, revisión #85)."""
+    from visionx.depth.spatial import build_locator
+    from visionx.gtsynth.evaluar import Medidor, medir
+
+    vs = [_vista(tmp_path, indice=k, z_obj=1.0 + 0.8 * k) for k in range(3)]
+    m = Medidor(_Escalado(vs, 1.3), build_locator({}, vs[0].geometria), vs[0].geometria)
+    corr = medir(m, vs, "elp", None, min_px=100, vistas_por_camara=3,
+                 distancia_conocida="corrimiento")  # fmt: skip
+    esc = medir(m, vs, "elp", None, min_px=100, vistas_por_camara=3, distancia_conocida="escala")
+    otras = [f for f in corr if not f["calibra"]]
+    assert all(abs(f["error_rel"]) > 0.05 for f in otras)
+    assert [f["calibra"] for f in esc] == [True, False, False]
+    assert all(abs(f["escala"] - 1.3) < 0.02 and f["distancia_conocida"] == "escala" for f in esc)
+    assert all(abs(f["error_rel"]) < 0.01 for f in esc)
+
+
+def test_modo_de_distancia_conocida():
+    from visionx.gtsynth.evaluar import modo_distancia
+
+    assert modo_distancia(False) is None and modo_distancia(None) is None
+    assert modo_distancia(True) == "corrimiento" and modo_distancia("escala") == "escala"
+    with pytest.raises(ValueError):
+        modo_distancia("otra")
+
+
 def test_alineador_valida_el_modo_y_sin_alinear_devuelve_el_par():
     from visionx.depth.crestereo_adapt.align_apply import Alineador
     from visionx.shared.errors import InvalidInput

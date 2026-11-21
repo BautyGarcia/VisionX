@@ -55,7 +55,7 @@ En la segunda pantalla (`camaras-ver`): ← → cambian de pantalla, espacio pau
 - **Stand:** «Le preguntás algo y te contesta en voz alta con la distancia medida, y te dice si es
   precisa o aproximada. Arriba ves la cámara que usa y en qué corre cada modelo».
 - **Cámaras:** «La misma app con seis cámaras estéreo distintas. Si el sistema conoce la cámara,
-  el error es del 1 al 5 %; si no la conoce, del 25 al 115 %. Por eso la red de entrada estima
-  la cámara».
+  el error es del 3 al 8 %; si no la conoce, del 33 al 78 %, y lo clásico solo no alcanza. Por
+  eso la red de entrada estima la cámara».
 - **Cámara nueva:** «Enchufás una cámara que nunca vio: la reconoce o la calibra en segundos,
   te pregunta la separación de los lentes y queda lista».
