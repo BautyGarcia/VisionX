@@ -164,6 +164,8 @@ con los parámetros estimados contra los reales (PLUG-AND-PLAY, sección 4).
   disparidad real sale de la vista (`fx · separación / Z`). Son ~2,7 MB por vista (~27 GB):
   no entran en el Drive, Tomás los pasa en disco. Si el formato no te sirve para
   `inc-entrenar`, decilo y se adapta.
+- **Subir al Drive el checkpoint actual de la U-Net de incertidumbre** (`outputs/crestereo_inc/v2-s0/mejor.pt` o el que esté en uso): en la PC de Tomás no está, y
+  sin él no se puede medir cómo se porta la incertidumbre en las 9 cámaras de evaluación.
 - **Mandar los checkpoints** (`.pt`) al Drive cuando haya uno para probar: la PC de Tomás los
   evalúa (E2 en las 6 cámaras de la expo, E3, E4) y devuelve la tabla.
 - **E3 y E4** (PLUG-AND-PLAY, sección 8): el flujo completo en cámaras no vistas y la cobertura
