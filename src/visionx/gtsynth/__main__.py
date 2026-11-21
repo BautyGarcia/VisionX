@@ -236,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     vi.add_argument("--salida", default=str(ROOT / "data" / "stand-video"))
     vi.add_argument("--red", default=None, help="checkpoint de la red de alineación (v3)")
     vi.add_argument("--solo", nargs="+", default=None, help="rehacer solo estas variantes")
+    vi.add_argument("--escenas", nargs="+", default=None, help="solo estas escenas")
     sc = sub.add_parser("sin-calibrar", help="E0: cámaras distintas suponiendo que son la ELP")
     sc.add_argument("raiz", help="carpeta con las variantes video-*")
     sc.add_argument("--salida", default=str(ROOT / "outputs" / "gtsynth" / "e0.json"))
@@ -283,7 +284,8 @@ def main(argv: list[str] | None = None) -> int:
         from visionx.gtsynth.video import preparar as preparar_video
 
         solo = tuple(args.solo) if args.solo else None
-        preparar_video(args.raiz, args.salida, args.red, solo=solo)
+        escenas = tuple(args.escenas) if args.escenas else None
+        preparar_video(args.raiz, args.salida, args.red, solo=solo, solo_escenas=escenas)
         return 0
     if args.cmd == "disparidades":
         from visionx.gtsynth.disparidades import calcular

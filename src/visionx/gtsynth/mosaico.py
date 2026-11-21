@@ -159,7 +159,7 @@ def celda(lamina: np.ndarray | None, nombre: str, fila: dict, sin_calibrar: floa
         t.add("ALINEACIÓN", (26, yb + 12), 12, MUTED, True)
         t.add("corrige " + (" · ".join(corr) if corr else "nada"), (150, yb + 10), 15, INK)
         ms = float(fila.get("ms_por_cuadro", 0))
-        placa = (gpu or "GPU") if 0 < ms < 400 else "CPU"
+        placa = fila.get("placa") or ((gpu or "GPU") if 0 < ms < 400 else "CPU")
         t.add("RENDIMIENTO", (26, yb + 42), 12, MUTED, True)
         rend = f"CREStereo {ms:.0f} ms por cuadro · {_coma(1000 / ms)} fps · {placa}" if ms else "—"
         t.add(rend, (150, yb + 40), 15, INK)
