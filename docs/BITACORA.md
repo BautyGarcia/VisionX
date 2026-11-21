@@ -40,6 +40,34 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-21 (madrugada) — T12/T15: E0 con la regla nueva, E1 «distinta» y un error de la regla
+
+Autor: Claude (noche del 20→21/11, con permiso de Tomás). Corrido en la Radeon.
+
+**E0 con la distancia conocida de #71** (`outputs/gtsynth/e0.json`, hotel_0 / office_2). La
+D455 en hotel_0 mejoró, de 5,2 % a 1,7 %, pero **el gran angular de 130° en hotel_0 empeoró, de
+5,3 % a 41 %**. En ese recorrido la mayoría de los cuadros pide −1,8 px y dos cuadros, donde el
+objeto llena la imagen, dan 0 px. La regla de #71 exigía que todos coincidieran (p90 − p10 ≤
+1,5 px) y descartaba la corrección. **Arreglo (#78):** basta con que la mitad de los cuadros
+esté a ±0,75 px de la mediana. Los videos de la expo y el E0 de todas las escenas se rehacen
+con #78.
+
+**E1 «distinta» + distancia conocida** (`outputs/gtsynth/e1/distinta-dc.csv`; antes se caía, ver
+#75). Es otra cámara supuesta ELP:
+
+| | Objetos | 0,5–4 m | 0,5–1 | 1–2 | 2–3 | 3–4 |
+|---|---:|---:|---:|---:|---:|---:|
+| distinta + distancia conocida | 1860 de 2938 | 43,7 % | 53,4 | 48,5 | 38,1 | 27,4 |
+
+En 824 objetos la profundidad quedó sin píxeles válidos después del corrimiento. Con la
+cámara equivocada, la distancia conocida sola no alcanza: lo mismo que mostró E0.
+
+**Infraestructura:** el corte por memoria de las 23:35 detuvo el supervisor de la cola vieja
+(`cola_gpu2.sh`), pero su script siguió vivo y a las 0:42 lanzó un E0 sobre todo `gt-video`
+(incluidas casas a medio renderizar), en paralelo con las disparidades. Se cerró a las 0:51;
+`e0.json` de la fase A quedó intacto. Desde entonces, cada cola usa un worktree fijo
+(`D:/VisionX-wt/cola*`) y espera a la anterior por su línea en el log.
+
 ## 2026-11-21 (madrugada) — T12: arreglo en `gtsynth evaluar` (código de Bauty, para revisar)
 
 Autor: Claude, con permiso de Tomás para la noche («arreglar código de Bauty con PR y nota»).
