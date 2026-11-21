@@ -97,17 +97,22 @@ def _limite_delta(g) -> float:
 
 
 def _delta_de_cuadros(ds: list[float | None], g) -> float:
-    """El corrimiento de un grupo de cuadros: la mediana, si es creíble y los cuadros coinciden.
+    """El corrimiento de un grupo de cuadros: la mediana, si es creíble y la mayoría coincide.
 
-    Se controla el conjunto y no cada cuadro: un valor grande pero parejo en todos los cuadros es
-    un yaw real; uno que salta de cuadro a cuadro es un objeto que no sirve (se usa 0).
+    Se controla el conjunto y no cada cuadro: un valor grande pero parejo es un yaw real (la D455
+    pedía −3,7 px en todos los cuadros). Basta con que **la mitad** de los cuadros esté a ±0,75 px
+    de la mediana: con el gran angular en hotel_0, dos cuadros donde el objeto llena la imagen
+    daban 0 px y el resto −1,8; exigir que todos coincidan descartaba la corrección (41 % de
+    error). Si los cuadros saltan de verdad, no hay mayoría y se usa 0.
     """
     ds = [d for d in ds if d is not None]
     if not ds:
         return 0.0
     med = float(np.median(ds))
-    disperso = len(ds) >= 3 and float(np.percentile(ds, 90) - np.percentile(ds, 10)) > 1.5
-    return med if abs(med) <= _limite_delta(g) and not disperso else 0.0
+    if abs(med) > _limite_delta(g):
+        return 0.0
+    cerca = float(np.mean([abs(d - med) <= 0.75 for d in ds]))
+    return med if len(ds) < 3 or cerca >= 0.5 else 0.0
 
 
 def _delta_conocida(depth, g, z_gt: np.ndarray, mascara: np.ndarray) -> float | None:

@@ -102,6 +102,9 @@ def test_distancia_conocida_se_controla_sobre_todos_los_cuadros():
     # −3,7 px en todos los cuadros: un yaw real, aunque pase el tope viejo (3,4 px).
     assert _delta_de_cuadros([-3.7, -3.6, -3.85, None, -3.65], d455) == pytest.approx(-3.675)
     assert _delta_de_cuadros([-3.0, 1.0, 4.0, -2.0], d455) == 0.0  # salta: no sirve
+    # Gran angular en hotel_0: la mayoría en −1,8 y dos cuadros raros; se aplica igual.
+    ga = [-1.64, -1.95, -2.01, -2.02, -2.13, -2.16, -1.43, 0.08, -0.33, -1.26, -1.78]
+    assert _delta_de_cuadros(ga, SimpleNamespace(fx=149.0)) == pytest.approx(-1.78)
     assert _delta_de_cuadros([None, None], d455) == 0.0
     assert _delta_de_cuadros([9.0, 9.1, 9.0], d455) == 0.0  # más que el tope de esa focal
     assert _limite_delta(SimpleNamespace(fx=50.0)) == 2.0  # mínimo
