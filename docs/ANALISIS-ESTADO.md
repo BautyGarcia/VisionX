@@ -12,7 +12,7 @@ en [TAREAS-BAUTY](TAREAS-BAUTY.md).
    lo abierto.
 2. **El aporte del TP quedó definido y medido**: plug and play con cualquier cámara estéreo de un
    cuerpo más incertidumbre honesta. La línea de base (E0) muestra el problema con números:
-   conociendo la cámara el error es 1–5 %; sin conocerla, 25–115 %.
+   conociendo la cámara el error es 3–8 %; sin conocerla, 33–78 % (E0 en 8 escenas, 21/11).
 3. **Lo que falta es la red de entrada** (estimar la cámara), que es la pieza central y todavía
    no está entrenada. Los datos para entrenarla y evaluarla ya están.
 4. **La PC de Tomás pasó a ser un equipo de cómputo de verdad**: CREStereo en la Radeon con ONNX +
@@ -39,13 +39,25 @@ en [TAREAS-BAUTY](TAREAS-BAUTY.md).
 
 ## 3. Números clave
 
-**E0, enchufar sin calibrar** (CREStereo continuo, 2 escenas, otra unidad ×1). Error mediano de
-Z:
+**E0, enchufar sin calibrar** (CREStereo continuo, **8 escenas de val**, 21/11; antes 2).
+Error mediano de Z, promedio de las 8 escenas:
 
-| | Calibrada | Sin calibrar (supone ELP) | Sin calibrar + clásico + distancia conocida |
+| Cámara | Calibrada | Sin calibrar (supone ELP) | Sin calibrar + clásico + distancia conocida |
 |---|---|---|---|
-| ELP (control) | 1,4–2,0 % | 25–39 % | 1,5–2,1 % |
-| Las otras 8 cámaras | 0,9–5,5 % | 27–115 % | 9–79 % |
+| ELP (control) | 6,3 % | 39,6 % | 6,1 % |
+| ZED 2 | 2,7 % | 57,0 % | 56,0 % |
+| ZED Mini | 3,5 % | 32,7 % | 21,7 % |
+| OAK-D | 3,5 % | 61,2 % | 59,8 % |
+| RealSense D435 | 3,8 % | 44,7 % | 31,3 % |
+| RealSense D455 | 7,0 % | 61,9 % | 60,8 % |
+| Angosta 60° | 6,7 % | 65,2 % | 61,0 % |
+| Gran angular 130° | 8,4 % | 76,1 % | 22,5 % |
+| Base larga 20 cm | 5,0 % | 78,1 % | 77,4 % |
+
+Con 8 escenas la calibrada sube (las casas de HSSD tienen paredes lejanas y poca textura). El
+clásico solo rescata las cámaras parecidas a la ELP; con la ZED 2, la OAK-D, la D455, la de 60° y
+la de 20 cm no corrige nada en ninguna escena: el corrimiento que haría falta pasa el tope de
+seguridad, porque el error es de escala y no de unos píxeles.
 
 **E1, el clásico dentro de una cámara conocida** (modo preciso, val, 3057 objetos):
 
@@ -56,7 +68,7 @@ Z:
 | ×1 | 33,5 % | 4,4 % | 0,41 % |
 
 **Lectura conjunta:** el mayor valor de la red está en **estimar cámaras desconocidas**
-(E0: de 25–115 % a lo que logre la red). Dentro de una cámara conocida queda un margen menor pero
+(E0: de 33–78 % a lo que logre la red). Dentro de una cámara conocida queda un margen menor pero
 real (4,4 % contra 0,41 %, que a 3–4 m llega al 7 %).
 
 ## 4. Datos disponibles

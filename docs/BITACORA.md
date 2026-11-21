@@ -40,6 +40,35 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-21 (tarde) — T12/T15: E0 en 8 escenas, distancia conocida por escala y revisión #85 al diseño
+
+Tarea: T12, T15. Persona/agente: Tomás / Claude Code. PC de escritorio, Radeon con ONNX.
+Hecho: (1) E0 en las 8 escenas de val (Replica `hotel_0`, `office_2`, `frl_apartment_3`,
+`room_1` y 4 casas HSSD) × 9 cámaras, CREStereo continuo, 15 cuadros por recorrido
+(`outputs/gtsynth/e0-todas.json`, 72 filas). (2) Los 18 videos de la expo rehechos con la ficha
+nueva, la portada y los mosaicos (`data/stand-video/`, Drive `stand-video`). (3) Disparidades de
+CREStereo precalculadas de las 4 variantes de entrenamiento (21.208 vistas, `data/cache-crestereo`).
+(4) `gtsynth evaluar --distancia-conocida escala|corrimiento`. (5) PLUG-AND-PLAY con los 5
+puntos de la revisión de Bauty (#85).
+Resultado E0 (promedio de las 8 escenas): calibrada 2,7–8,4 %; sin calibrar (supone ELP)
+33–78 %; sin calibrar + clásico + distancia conocida 22–77 % (sin contar la ELP). Tabla por
+cámara en [ANALISIS-ESTADO](ANALISIS-ESTADO.md). Con 2 escenas era 0,9–5,5 / 25–115 / 9–79 %.
+Lectura: el clásico rescata solo las cámaras parecidas a la ELP (ZED Mini 21,7 %, D435 31,3 %,
+gran angular 22,5 %); con ZED 2, OAK-D, D455, 60° y 20 cm no corrige nada en ninguna de las 8
+escenas, porque el corrimiento que haría falta pasa el tope de seguridad. Es el hueco que tiene
+que llenar la red de entrada.
+Distancia conocida por escala: con un objeto hay una ecuación y se corrige una cosa. Restar un
+corrimiento sirve para otra unidad de la misma cámara (yaw o centro corridos, E1); con una
+cámara distinta o estimada el error es de `f·B` y hay que multiplicar la distancia (lo midió
+Bauty: `distinta` con corrimiento da 63–258 %). Test nuevo: con `f·B` 30 % mal, la escala deja
+< 1 % en todas las vistas y el corrimiento falla fuera de la distancia del objeto.
+Revisión #85 aceptada entera: meta de E2 en la focal (mediana ≤ 2 %), E3 con una fila por
+referencia de escala, distorsión sorteada sin pliegue, una sola cámara para los dos ojos por
+ahora, y la fórmula de incertidumbre con el término del corrimiento, `σ = √2·b`, errores de
+cámara que no se promedian entre píxeles y el factor de `b` por nivel de calibración.
+Pendiente: `calibrar_distancia` del estimador (Bauty) con escala cuando la cámara no es
+«precisa»; repetir E0 corrigiendo la escala en vez del corrimiento, para ver cuánto rescata sin red.
+
 ## 2026-11-20 (noche) — T12: clásico contra red en hermanas, por objeto contra el GT sintético; ninguno llega a «útil»
 
 Tarea: T12, T13. Persona/agente: Bauty / Claude Code. Rama: `a/T12-bitacora-gt-val` (solo esta entrada).

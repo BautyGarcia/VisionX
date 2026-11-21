@@ -66,9 +66,15 @@ conocida). **Ahora:** estimar los parámetros que el clásico no puede ver.
 
 - **Entrada:** N pares (por ejemplo 8) de la cámara, a resolución fija (640 px de ancho, con
   el campo de visión intacto: se escala, no se recorta). Más el ancho y alto originales.
-- **Salida, por ojo:** campo de visión horizontal (o `log f` relativo al ancho), centro
-  `(cx, cy)` relativo, distorsión radial `k1, k2`. Cada uno **con su incertidumbre** (media y
-  `b` de una Laplace, igual que la U-Net).
+- **Salida, una sola cámara para los dos ojos** (revisión #85, punto 4): `log(fx / ancho)`,
+  centro `(cx/ancho − 0,5, cy/alto − 0,5)` y distorsión radial `k1, k2`. Cada uno **con su
+  incertidumbre** (media y `b` de una Laplace, igual que la U-Net). En una cámara de un solo
+  cuerpo los dos lentes son del mismo modelo, y lo que difiere entre ojos (focal relativa,
+  giros) ya lo estima el clásico. La salida por ojo vuelve cuando existan los renders con
+  «ojos levemente distintos» (7.2).
+- **Campo de visión = el del pinhole sin distorsión.** Si no, campo y `k1` se confunden (un
+  barril fuerte «agranda» el campo aparente). El campo se calcula de la focal solo para
+  mostrarlo en pantalla; lo que se mide es la focal (sección 8, E2).
 - **Arquitectura sugerida:** un codificador por cuadro (CNN chica o un ViT preentrenado),
   promedio con atención sobre los N cuadros, cabeza que regresa los parámetros. Los dos ojos
   comparten pesos. Modelos publicados que estiman focal y distorsión desde una foto (por
@@ -77,6 +83,10 @@ conocida). **Ahora:** estimar los parámetros que el clásico no puede ver.
 - **Pérdida:** NLL de Laplace sobre cada parámetro **más** una pérdida geométrica: el error de
   reproyección de una grilla de puntos con los parámetros estimados contra los reales (así, un
   error de focal que no cambia la imagen no se castiga de más).
+- **Por qué la meta va en la focal y no en el campo:** con `f = W / (2·tan(h/2))`, un error en
+  el campo pasa a la focal como `df/f ≈ dh / sin(h)`. Un 3 % de error en el campo es ~3,6 % de
+  focal a 60°, ~4,7 % a 90° y ~7,5 % a 130°, y con la separación conocida ese error pasa casi
+  entero a la distancia.
 - **Cómo se usa con el clásico:** la red da el punto de partida; el clásico ajusta. Si el
   clásico encontró suficientes puntos y alineó bien las filas (residuo vertical < 0,5 px),
   manda el clásico en lo que él estima (giros, focal relativa); la red manda en lo que el
@@ -90,7 +100,7 @@ Ninguna red la puede sacar de las imágenes. Opciones, de más a menos precisa:
 | Referencia | Cómo | Nivel |
 |---|---|---|
 | Separación conocida | Perfil de la cámara, hoja de datos, o la escribe quien la instala | precisa |
-| Objeto a distancia conocida | Lo de hoy (`calibrar_distancia`): fija el corrimiento de columnas | precisa |
+| Objeto a distancia conocida | `calibrar_distancia`: con un objeto hay **una** ecuación, así que corrige **una** cosa (ver abajo) | precisa |
 | Dos objetos a distancias distintas | Fija la escala **y** el corrimiento a la vez | precisa |
 | Objeto de tamaño conocido | Hoja A4, tarjeta (85,6 mm) | aproximada a precisa (a medir) |
 | Piso a la altura del pecho | La altura se mide una vez; el plano del piso da la escala | a medir |
@@ -99,6 +109,27 @@ Ninguna red la puede sacar de las imágenes. Opciones, de más a menos precisa:
 «Sin tocar nada» funciona con distancias **aproximadas**; cualquier paso extra las vuelve
 **precisas**. Encaja con los tres niveles de la voz.
 
+**Qué corrige el objeto a distancia conocida** (revisión #85 y BITACORA 21/11). En un par
+rectificado `Z = f·B / d`:
+
+- **Escala** (multiplicar la distancia, es decir, corregir `f·B`): cuando la cámara es
+  **distinta o estimada** y lo que puede estar mal es la focal o la separación. Es lo que hace
+  falta en el plug and play. Restar un corrimiento en ese caso solo acierta a la distancia del
+  objeto: con la cámara `distinta` da 63–258 % de error.
+- **Corrimiento** (restar unos píxeles de disparidad): cuando la cámara es **conocida** y lo que
+  se corre es el yaw o el centro óptico de una unidad (hermanas). Es lo que mide E1.
+
+Con dos objetos a distancias distintas se corrigen las dos. `gtsynth evaluar
+--distancia-conocida escala|corrimiento` mide cada una; el `calibrar_distancia` del estimador
+(Bauty) tiene que elegir escala cuando la cámara no está «precisa».
+
+**Qué parte de la red importa según la referencia** (revisión #85, punto 2):
+
+| Referencia | Qué tiene que acertar la red de entrada |
+|---|---|
+| Separación conocida (perfil, hoja de datos) | **La focal absoluta**: su error pasa directo a la distancia |
+| Objeto a distancia conocida | Distorsión y centro, y un buen punto de partida para el clásico: el objeto fija `f·B` y un error de la focal sola casi no cambia la distancia |
+
 ## 6. Red de incertidumbre: sumar la duda de la calibración
 
 Hoy la U-Net estima `b` por píxel (el error de disparidad). Con una cámara estimada hay un
@@ -106,16 +137,27 @@ segundo error, el mismo para toda la imagen: la escala (focal × separación) y 
 Para una distancia `Z`:
 
 ```
-(σ_Z / Z)² ≈ (Z · σ_d / (f·B))²  +  σ_escala²
+(σ_Z / Z)² ≈ (Z · σ_d / (f·B))²  +  (Z · σ_Δ / (f·B))²  +  σ_escala²
 ```
 
-- `σ_d` sale de la U-Net (`b`), como ahora.
+- `σ_d` sale de la U-Net, como ahora. Con una Laplace, **`σ = √2 · b`** (no mezclar `b` con
+  `σ`).
+- `σ_Δ` es la duda del corrimiento de columnas, en px (lo que el clásico no pudo fijar). Crece
+  con la distancia igual que el término de la U-Net.
 - `σ_escala` sale de la red de entrada y de la referencia usada (sección 5): casi 0 con la
-  separación conocida; el que dé la red monocular si es «aproximada».
+  separación conocida o con un objeto a distancia conocida corrigiendo la escala; el que dé la
+  red monocular si es «aproximada».
+- **`σ_Δ` y `σ_escala` son el mismo error para todos los píxeles de una cámara**: no bajan al
+  juntar muchos píxeles de un objeto ni muchos cuadros (el término de la U-Net sí). Por eso una
+  cámara «aproximada» no dice «precisa» aunque el objeto sea grande; la app ya pone ese tope
+  (`camara_nivel`).
 - Los niveles de la voz (precisa ≤ 10 %, aproximada ≤ 25 %, no segura) se calculan con el
   total. Una cámara mal estimada nunca dice «precisa».
 - La U-Net hay que **reentrenarla con cámaras variadas** (hoy vio solo la geometría de la ELP)
-  y recalibrar el factor de `b` (hoy 0,281).
+  y recalibrar el factor de `b` **por nivel de calibración**: con la ELP calibrada duda de más
+  (factor 0,28) y con hermanas corregidas por el clásico se queda justa (1,0–1,3), así que un
+  solo factor no sirve (BITACORA 20/11, noche). La alternativa es darle a la U-Net el residuo
+  vertical del clásico como entrada.
 
 ## 7. Datos
 
@@ -140,7 +182,7 @@ muchos efectos distintos y no gasta disco.
 
 | Al entrenar (aumento) | Para qué |
 |---|---|
-| Distorsión radial `k1, k2` sorteada, aplicada sobre el lienzo con margen | Lentes reales sin renderizar cada una |
+| Distorsión radial `k1, k2` sorteada, aplicada sobre el lienzo con margen, **sin pliegue**: se descartan las combinaciones con `d/dr [r·(1 + k1·r² + k2·r⁴)] ≤ 0` hasta el radio de la esquina más un margen (a 130°, con `k1 = −0,35` el modelo se pliega en `r ≈ 1`, dentro de la imagen) | Lentes reales sin renderizar cada una |
 | Ruido, desenfoque de movimiento, compresión JPEG, viñeteo | Sensores reales |
 | Exposición y color distintos entre ojos; escala de grises (RealSense, OAK-D) | Cámaras con sensores infrarrojos o monocromo |
 
@@ -161,10 +203,10 @@ Partición por casa, como siempre (`hssd_particion.json`); el test sigue congela
 
 | Id | Qué | Para qué |
 |---|---|---|
-| **E0** ✔ | Cámaras distintas **arrancando desde la calibración de la ELP** (como quien enchufa sin calibrar), con y sin clásico, con distancia conocida | Hecho el 20/11 (BITACORA): calibrada 0,9–5,5 %, sin calibrar 25–115 %, sin calibrar + clásico 9–79 % |
-| E1 | Clásico + distancia conocida contra el oráculo, **modo preciso**, muchas hermanas, val | Cuánto hueco queda dentro de una misma cámara (hoy: 5,6 % contra 0,75 %) |
-| E2 | Red de entrada sola: error de campo de visión, centro y distorsión en cámaras **que no vio** | ¿Se puede estimar una cámara? Meta: campo ±3 % |
-| E3 | Flujo completo (red + clásico + cada referencia de escala) en cámaras no vistas | El resultado del TP |
+| **E0** ✔ | Cámaras distintas **arrancando desde la calibración de la ELP** (como quien enchufa sin calibrar), con y sin clásico, con distancia conocida | 21/11, 8 escenas de val × 9 cámaras: calibrada 2,7–8,4 %, sin calibrar 33–78 %, sin calibrar + clásico 22–77 % (sin contar la ELP). El clásico solo rescata las cámaras parecidas a la ELP (ZED Mini, D435, gran angular); con ZED 2, OAK-D, D455, 60° y 20 cm no corrige nada en ninguna escena |
+| **E1** ✔ | Clásico + distancia conocida contra el oráculo, **modo preciso**, muchas hermanas, val | 21/11: oráculo 0,41 %; clásico + distancia conocida 2,1 / 2,7 / 4,4 % (×0,25 / ×0,5 / ×1); por objeto (Bauty, Mac): ×1 deja 4–13 % medio y uno de cada cuatro objetos con más de 10 % |
+| E2 | Red de entrada sola en cámaras **que no vio**: error de **focal** (`log f`, en %), centro (px) y `k1`, más la cobertura del intervalo del 90 % | ¿Se puede estimar una cámara? **Meta: error mediano de la focal ≤ 2 %** (revisión #85) |
+| E3 | Flujo completo (red + clásico + cada referencia de escala) en cámaras no vistas, **con una fila por referencia**: separación conocida y objeto a distancia conocida (corrigiendo la escala) | El resultado del TP; separado, para que no se diluya el aporte de la red |
 | E4 | Cobertura de los intervalos de la incertidumbre total; cuántas veces dice «no segura» cuando corresponde | Que la confianza sea honesta |
 | E5 | D435i real con cinta métrica | La prueba de verdad |
 

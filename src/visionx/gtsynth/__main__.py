@@ -6,7 +6,7 @@ uv run python -m visionx.gtsynth verificar data/gt-sintetico-elp [--max 20]
 uv run --extra ml python -m visionx.gtsynth evaluar data/gt-sintetico-elp --particion val \
     --variante elp --profundidad crestereo-preciso --csv outputs/gtsynth/val-elp.csv
     [--alinear clasico|red|clasico+red --red mejor.pt] [--vistas-por-camara 8]
-    [--distancia-conocida]
+    [--distancia-conocida [corrimiento|escala]]
 
 Variantes de `evaluar`: elp, hermana-0.5, hermana-1 (sobre las vistas elp) y distinta.
 """
@@ -214,8 +214,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     ev.add_argument(
         "--distancia-conocida",
-        action="store_true",
-        help="el objeto apuntado de la primera vista de cada cámara corrige la escala",
+        nargs="?",
+        const="corrimiento",
+        default=None,
+        choices=["corrimiento", "escala"],
+        help="el objeto apuntado de la primera vista de cada cámara corrige un corrimiento de "
+        "columnas (por defecto, misma cámara) o la escala f·B (cámara distinta o estimada)",
     )
     ca = sub.add_parser("camaras", help="precalcular la demo de cámaras distintas del stand")
     ca.add_argument("raiz")
