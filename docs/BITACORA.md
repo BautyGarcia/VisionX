@@ -40,6 +40,39 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-21 (noche) — T13: la U-Net v2-s0 en las 9 cámaras de evaluación, cámara conocida
+
+Tarea: T13 (E4 preliminar). Persona/agente: Tomás / Claude Code. PC de escritorio, CREStereo
+preciso en la Radeon (ONNX) + U-Net `v2-s0` (checkpoint de Bauty, sha256 verificado).
+Hecho: `gtsynth evaluar --geometria vista --cada 6` sobre `gt-video` (8 escenas de val, 15
+cuadros por recorrido, ~120 vistas por cámara), **cada cámara con su propia geometría**: es el
+caso «cámara conocida / bien calibrada». Objetos con su máscara exacta, como en la tanda de
+Bauty. Crudos en `outputs/gtsynth/inc/` (fuera de Git). ~4,5 min por cámara.
+
+| Cámara | f·B (px·m) | Objetos | Error mediano | P95 | Cobertura del 90 % con la b tal cual | Factor de b para 90 % |
+|---|---:|---:|---:|---:|---:|---:|
+| ELP | 35,9 | 1886 | 0,51 % | 5,3 % | 97,4 % | 0,31 |
+| RealSense D435 | 33,7 | 1403 | 0,32 % | 3,4 % | 97,9 % | 0,24 |
+| RealSense D455 | 65,2 | 1390 | 0,23 % | 4,2 % | 95,5 % | 0,41 |
+| ZED 2 | 80,7 | 1801 | 0,33 % | 4,9 % | 95,1 % | 0,41 |
+| ZED Mini | 49,0 | 1707 | 0,39 % | 3,9 % | 97,2 % | 0,30 |
+| OAK-D | 57,2 | 1333 | 0,25 % | 3,9 % | 95,6 % | 0,35 |
+| Angosta 60° | 66,5 | 1042 | 0,19 % | 3,0 % | 96,6 % | 0,39 |
+| Gran angular 130° | 26,9 | 2066 | 0,68 % | 6,7 % | 97,2 % | 0,31 |
+| Base larga 20 cm | 161,1 | 1683 | 0,24 % | 5,5 % | 93,0 % | 0,70 |
+
+Lectura: (1) **la U-Net nunca se confía de más** en ninguna de las 9 cámaras: con la b tal cual,
+el intervalo del 90 % contiene la distancia real entre el 93 y el 98 % de las veces. Es seguro
+para la voz (no dice «precisa» cuando no lo es), pero duda de más. (2) **El factor que haría
+falta cambia con la cámara y crece con `f·B`**: 0,24–0,31 con `f·B` ≤ 50 (como la ELP), ~0,4 entre
+57 y 81, 0,70 con 20 cm de separación. Lectura probable: la U-Net vio solo disparidades del
+rango de la ELP; con más `f·B` las disparidades son más grandes y su error en px también. Un
+factor único de 0,28 (el de la ELP) dejaría a la base larga en menos del 90 %: confirma el
+punto 5 del #85 y que hay que reentrenarla con cámaras variadas (`cache-crestereo`, ya en el
+Drive) o normalizar `b` por `f·B`. (3) Con la cámara conocida, el error por objeto es chico en
+todas (mediana < 0,7 %, P95 ≤ 6,7 %; el peor, el gran angular). Ojo: es el caso fácil; falta
+medir la U-Net con cámaras **desconocidas** corregidas por el clásico (nivel «aproximada»).
+
 ## 2026-11-21 (tarde) — T12/T15: E0 en 8 escenas, distancia conocida por escala y revisión #85 al diseño
 
 Tarea: T12, T15. Persona/agente: Tomás / Claude Code. PC de escritorio, Radeon con ONNX.

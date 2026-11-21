@@ -187,6 +187,38 @@ class Vista:
         return self.meta["instancias"].get(str(idx), "otro")
 
 
+@dataclass(frozen=True)
+class VistaNominal(Vista):
+    """La misma vista vista por la cámara nominal: imágenes, Z e instancias recortadas.
+
+    Para medir una cámara con margen (`gt-video`, perfiles) con su propia geometría: la
+    profundidad y el ubicador trabajan sobre el recorte, como lo haría la cámara real.
+    """
+
+    @property
+    def geometria(self) -> StereoGeometry:
+        return Vista(self.carpeta).geometria_nominal
+
+    @property
+    def nominal(self) -> dict | None:
+        return None
+
+    def _recorte(self, img: np.ndarray) -> np.ndarray:
+        return Vista(self.carpeta).recortar(img)
+
+    def izq(self) -> np.ndarray:
+        return np.ascontiguousarray(self._recorte(super().izq()))
+
+    def der(self) -> np.ndarray:
+        return np.ascontiguousarray(self._recorte(super().der()))
+
+    def z(self) -> np.ndarray:
+        return np.ascontiguousarray(self._recorte(super().z()))
+
+    def instancias(self) -> np.ndarray:
+        return np.ascontiguousarray(self._recorte(super().instancias()))
+
+
 def _leer_bgr(path: Path) -> np.ndarray:
     import cv2
 
