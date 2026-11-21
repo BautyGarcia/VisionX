@@ -226,7 +226,76 @@ def preparar_camara(vs: list[Vista], nombre: str, red: str | None, cfg: dict) ->
     }  # fmt: skip
     for k, ds in prof.items():
         out["versiones"][k] = [_z(d, dg, w8, h8, deltas[k]) for d in ds]
+    out["medianas"] = {}
+    for k, zs_k in out["versiones"].items():
+        errs = [
+            e for e in (_error(z, zg)[2] for z, zg in zip(zs_k, zs, strict=True)) if e is not None
+        ]
+        out["medianas"][k] = float(np.median(errs)) if errs else None
+    out["escena"], out["variante"] = v0.escena, v0.variante
+    out["sin_calibrar"] = _e0_sin_calibrar(v0.escena, v0.variante)
     return out
+
+
+def _e0_sin_calibrar(escena: str, variante: str) -> float | None:
+    """El error «sin calibrar» de E0 para esa cámara y escena, si ya se corrió."""
+    from visionx.shared.config import ROOT
+
+    for nombre in ("e0-todas.json", "e0.json"):
+        path = ROOT / "outputs" / "gtsynth" / nombre
+        if path.is_file():
+            for f in json.loads(path.read_text(encoding="utf-8")):
+                if f["escena"] == escena and f["variante"] == variante:
+                    return f.get("error_sin calibrar_pct")
+    return None
+
+
+def _ficha(canvas, texts, c: dict[str, Any], x: int, y: int, w: int, h: int) -> None:
+    """La ficha de análisis de la cámara: datos, errores de la escena, alineación y rendimiento."""
+    from visionx.app.stand import FAINT, INK, LEVEL_COLOR, MUTED, _panel, text_width
+    from visionx.gtsynth.mosaico import (
+        PARAMETROS,
+        PERFIL_DE,
+        _barra,
+        _color_error,
+        _pastilla,
+        _perfiles,
+    )
+
+    _panel(canvas, x, y, w, h, "Ficha de la cámara", texts)
+    datos = [f"{c['hfov_deg']:.0f}°", f"{c['base_cm']:.1f} cm entre lentes".replace(".", ",")]
+    perfil = _perfiles().get(PERFIL_DE.get(c.get("variante", ""), ""))
+    if perfil is not None:
+        datos.append(f"{perfil.resolucion[0]}×{perfil.resolucion[1]}")
+        origen = "ChArUco" if perfil.calibracion else (
+            "de fábrica" if perfil.formato == "realsense" else "hoja de datos")  # fmt: skip
+        datos.append(f"calibración: {origen}")
+    px, py = x + 18, y + 40
+    for d in datos:
+        if px + text_width(d, 13) + 20 > x + w - 18:
+            px, py = x + 18, py + 30
+        px = _pastilla(canvas, texts, px, py, d)
+    med = c.get("medianas") or {}
+    by = py + 44
+    texts.add("ERROR DE DISTANCIA · mediana de la escena", (x + 18, by), 12, MUTED, True)
+    filas = [("Calibración perfecta", med.get("ideal")),
+             ("VisionX (clásico)", med.get("clásico")),
+             ("Otra unidad, sin corregir", med.get("sin corregir")),
+             ("Sin calibrar (creyendo ELP)", c.get("sin_calibrar"))]  # fmt: skip
+    colores = [None, None, LEVEL_COLOR["aproximada"], LEVEL_COLOR["no-segura"]]
+    for k, ((etiqueta, pct), color) in enumerate(zip(filas, colores, strict=True)):
+        if color is None:
+            color = _color_error(pct) if pct is not None else FAINT
+        _barra(canvas, texts, x + 18, by + 26 + k * 44, w - 36, etiqueta, pct, color)
+    yy = by + 26 + 4 * 44 + 6
+    corr = list(dict.fromkeys(PARAMETROS.get(p, p) for p in c.get("clasico_aplica", [])))
+    texts.add("Corrige: " + (" · ".join(corr) if corr else "nada"), (x + 18, yy), 14, INK)
+    ms = float(c.get("ms_por_cuadro") or 0)
+    if ms > 0:
+        placa = c.get("placa") or ("GPU" if ms < 400 else "CPU")
+        fps = f"{1000 / ms:.1f}".replace(".", ",")
+        texts.add(f"CREStereo {ms:.0f} ms/cuadro · {fps} fps · {placa}", (x + 18, yy + 24), 14,
+                  MUTED)  # fmt: skip
 
 
 # --- lámina de cada cuadro -------------------------------------------------------------------
@@ -246,7 +315,6 @@ def lamina(c: dict[str, Any], i: int, escena: str) -> np.ndarray:
         _panel,
         _place,
         text_width,
-        wrap,
     )
 
     canvas = np.full((H, W, 3), BG, np.uint8)
@@ -279,25 +347,7 @@ def lamina(c: dict[str, Any], i: int, escena: str) -> np.ndarray:
     _place(canvas, _color_z(np.nan_to_num(z_gt), ok_gt, lo, hi), 36 + pw + 14, y0 + 36,
            pw - 24, ph - 48)  # fmt: skip
     ix = 24 + 2 * (pw + 14)
-    _panel(canvas, ix, y0, W - ix - 24, ph, "Qué se compara", texts)
-    lineas = [
-        ("Ideal", "el par perfecto: el techo"),
-        ("Sin corregir", "otra unidad del mismo modelo: ojo derecho un poco girado, otra lente"),
-        ("Clásico", "lo que usa hoy VisionX (alineación + distancia conocida)"),
-        (
-            "Red de entrada",
-            "estima la cámara desconocida (campo, centro y lente); en entrenamiento",
-        ),
-    ]
-    yy = y0 + 46
-    for a, b in lineas:
-        texts.add(a, (ix + 18, yy), 17, INK, True)
-        for linea in wrap(b, 14, W - ix - 24 - 36):
-            yy += 22
-            texts.add(linea, (ix + 18, yy), 14, MUTED)
-        yy += 36
-    texts.add("Error: verde < 3 %  ·  ámbar < 10 %  ·  coral más", (ix + 18, y0 + ph - 40), 13,
-              FAINT)  # fmt: skip
+    _ficha(canvas, texts, c, ix, y0, W - ix - 24, ph)
 
     # Abajo: por versión, la distancia que calcula y su error.
     vw, vh = (W - 48 - 3 * 14) // 4, 280
@@ -323,8 +373,9 @@ def lamina(c: dict[str, Any], i: int, escena: str) -> np.ndarray:
                vw - 20, vh - 46)  # fmt: skip
         _panel(canvas, x, y + vh + 14, vw, vh, f"Error · {nombre}", texts)
         _place(canvas, _color_error(rel, ok), x + 10, y + vh + 50, vw - 20, vh - 46)
-    pie = (f"Escena {escena} · CREStereo continuo (el modo de la app) · render con la verdad "
-           "exacta: la cámara real agrega ruido y desenfoque.")  # fmt: skip
+    pie = (f"Escena {escena} · CREStereo continuo · Ideal: el par perfecto · Sin corregir: otra "
+           "unidad del mismo modelo · Clásico: lo que usa VisionX (alineación + distancia conocida)"
+           " · Error: verde < 3 %, ámbar < 10 %, coral más")  # fmt: skip
     texts.add(pie, (24, H - 30), 14, FAINT)
     return texts.draw(canvas)
 
