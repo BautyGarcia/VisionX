@@ -1,5 +1,16 @@
 # Tareas de Bauty: plug and play (desde el 20/11)
 
+> **Primer paso, antes que nada (21/11):**
+> 1. `git pull` de `main`.
+> 2. **Bajá a tu disco todo lo que puedas del Drive `VisionX-Personal/`**, en el orden de la
+>    [sección 0.1](#01-bajar-el-drive-a-tu-disco-importante). Cuánto, lo decidís vos según tu
+>    espacio.
+> 3. **Avisale a Tomás qué carpetas bajaste completas.** Él las borra del Drive y sube lo nuevo
+>    (la tanda de entrenamiento de la noche, las disparidades de CREStereo y las escenas de
+>    evaluación nuevas). El Drive está en 192 de 200 GB: sin este paso no entra nada más.
+>
+> Después seguí con las tareas en orden (sección 1 en adelante).
+
 Para Bauty y su Claude. Se puede usar tal cual como pedido:
 
 > «Leé `docs/PLUG-AND-PLAY.md` y `docs/TAREAS-BAUTY.md`, y hacé las tareas en orden. La Mac
@@ -69,10 +80,19 @@ Orden sugerido (tamaños aproximados):
 |---|---|---:|---|
 | 1 | `gt-sintetico-elp/elp`, `camara-sorteada`, `hssd-camara-sorteada` | 39 | E1 y E2 |
 | 2 | `gt-video` (6 cámaras de la expo + 3 genéricas) | 15 | Evaluar E2 en cámaras no vistas |
-| 2 | `gt-sintetico-elp/hssd-recorridos-sorteada` (sube la noche del 20/11) | 17 | E2 con varios cuadros, reentrenar la U-Net |
+| 2 | `gt-sintetico-elp/hssd-recorridos-sorteada` (ya subido) | 16 | E2 con varios cuadros, reentrenar la U-Net |
 | 3 | `camara-sorteada-ojo`, `elp-margen`, `elp-margen-ojo`, `distinta` | 39 | Ojo corrido, lentes con margen, escala |
 | 4 | `secuencias`, perfiles fijos (`media-90`, `gran-angular-130`, `cuatro-tercios-90`, `base-larga-20`, `base-corta-3`, `angosta-60`), poses (`elp-arriba-*`, `elp-adelante-2`, `pose-*`), `ojo-de-pez` | 26 | Casos difíciles y otras evaluaciones |
-| — | `pesos/`, `stand-camaras/`, `stand-video/` | < 1 | Pesos de YOLOE y demos del stand |
+| — | `pesos/`, `stand-camaras/`, `stand-video/` | < 1 | Pesos de YOLOE y demos del stand (`stand-video` se reemplaza el 21/11 por los videos con la ficha nueva: bajalo de nuevo después) |
+
+**Lo que todavía no está en el Drive** (generado la noche del 20/11, en el disco de Tomás). Llega
+por disco externo o por el Drive a medida que lo liberes; avisá qué preferís:
+
+| Carpeta | Qué es | GB | Para qué |
+|---|---|---:|---|
+| `gt-sintetico-elp/hssd-recorridos-sorteada-b` | 10.980 vistas, 122 casas de HSSD (train), 3 recorridos por casa con una cámara sorteada cada uno (verificada) | 37 | Más cámaras distintas para E2 y la U-Net |
+| `cache-crestereo/` | Disparidades de CREStereo precalculadas (ver «Disparidades precalculadas» más abajo); la parte de `-b` termina el 21/11 | ~55 | Entrenar la U-Net sin correr CREStereo en la Mac |
+| `gt-video/` (escenas nuevas) | Las 9 cámaras de evaluación en 6 escenas más (`frl_apartment_3`, `room_1` y 4 casas HSSD de val), además de `hotel_0` y `office_2` | — | Evaluar E2, E3 y E4 en más casas |
 
 ## 1. Revisar el diseño (antes de entrenar)
 
