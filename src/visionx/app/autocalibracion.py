@@ -280,20 +280,25 @@ def lente_por_movimiento(
     min_pares: int = 6,
     remuestreos: int = 20,
     semilla: int = 0,
+    rapido: bool = False,
 ) -> FocalMedida:
     """Focal y k1 (px de la imagen original) que mejor explican el movimiento entre los cuadros.
+
+    `rapido` (la pantalla «Cámara nueva»): la mitad de puntos por par y una grilla más gruesa;
+    tarda unas 3 veces menos.
 
     Como `focal_por_movimiento`, pero sin suponer pinhole: sirve para cámaras con lente (gran
     angular baratas). La duda de log f sale de remuestrear los pares (×`FACTOR_SIGMA`).
     """
     if len(cuadros) < max(saltos) + 2:
         return FocalMedida(None, None, 0, "muy pocos cuadros")
-    pares, q = emparejar(cuadros, saltos)
+    pares, q = emparejar(cuadros, saltos, max_puntos=150 if rapido else 300)
     if len(pares) < min_pares:
         return FocalMedida(None, None, len(pares), "poco movimiento o poca textura")
     pts = _Puntos(pares)
     cxq, cyq, f0q = cx * q, cy * q, f_inicial * q
-    f, k1 = _mejor_lente(pts, cxq, cyq, f0q, rango, rango_k1)
+    nf, nk = (25, 9) if rapido else (41, 13)
+    f, k1 = _mejor_lente(pts, cxq, cyq, f0q, rango, rango_k1, nf=nf, nk=nk)
     rng = np.random.default_rng(semilla)
     logs = []
     for _ in range(remuestreos):
