@@ -172,7 +172,7 @@ def render_alta(alta: AltaCamara, izq: np.ndarray | None, fps: float | None = No
         filas = [
             ("Nombre", p.nombre),
             ("Campo horizontal", f"{p.campo_horizontal_deg:.0f}°"),
-            ("Separación entre lentes", f"{100 * p.separacion_m:.1f} cm".replace(".", ",")),
+            ("Separación entre lentes", _separacion_texto(e, p)),
             ("Escala", {"separacion": "separación dicha", "distancia": "objeto a distancia",
                         "perfil": "del perfil", "salteada": "sin escala"}.get(e.escala, "—")),
         ]  # fmt: skip
@@ -195,6 +195,18 @@ def render_alta(alta: AltaCamara, izq: np.ndarray | None, fps: float | None = No
         t.add(linea, (px + 24, 836 + 46 + k * 26), 19, INK)
     _metricas(canvas, t, alta, px + vw + 16, 836, pw - vw - 16, 212, fps)
     return t.draw(canvas)
+
+
+def _separacion_texto(e, p) -> str:
+    """La separación del perfil o, en el paso de la escala, lo que se está tipeando o eligiendo."""
+    if e.paso is Paso.ESCALA:
+        if e.modelo is not None:
+            cm = f"{100 * e.modelo.separacion_m:.1f}".replace(".", ",")
+            return f"{e.modelo.nombre}: {cm} cm"
+        if e.entrada:
+            return f"{e.entrada}▏" + ("" if e.entrada.endswith("m") else " cm")
+        return "▏ cm   (Tab: modelo)"
+    return f"{100 * p.separacion_m:.1f} cm".replace(".", ",")
 
 
 def _detalle(alta: AltaCamara, paso: Paso) -> str:
@@ -228,7 +240,7 @@ def _detalle(alta: AltaCamara, paso: Paso) -> str:
         aplica = " · ".join(nombres) if nombres else "nada que corregir"
         return f"Corrige: {aplica}"
     if paso is Paso.ESCALA and e.paso is Paso.ESCALA:
-        return "Centímetros entre lentes, «está a N metros» o «saltear»"
+        return "Tipeá los cm + Enter · «2m» = objeto · Tab = modelo · «s» saltear"
     return ""
 
 
@@ -383,6 +395,16 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
             break
         if key == ord("r"):
             alta, t_escala = nueva(), None
+        if alta.estado.paso is Paso.ESCALA:  # tipear la separación o elegir el modelo
+            if key in (13, 10):
+                for f in alta.confirmar():
+                    decir(f)
+            elif key == 9:
+                alta.siguiente_modelo()
+            elif key == 8:
+                alta.borrar()
+            elif 0 < key < 128 and (chr(key).isdigit() or chr(key) in ",.m"):
+                alta.tipear(chr(key))
         if key == ord("s"):
             for f in alta.saltear_escala():
                 decir(f)

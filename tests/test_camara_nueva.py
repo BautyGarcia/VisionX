@@ -294,3 +294,41 @@ def test_alineacion_en_vivo_alinea_al_arrancar_y_se_realinea_si_se_golpea():
     assert viva.estado == "alineada" and viva.ultimo_desfase_px < 0.75
     eventos = [h["evento"] for h in viva.historial]
     assert eventos.count("alineada") == 2 and "desalineada" in eventos
+
+
+def test_la_separacion_se_tipea_o_se_elige_el_modelo():
+    def lista():
+        t = itertools.count(0.0, 1.0)
+        alta = AltaCamara(
+            cargar_perfiles(), estimador=_Red(), pares_necesarios=2, alinear=_alinear_falso,
+            reloj=lambda: next(t),
+        )  # fmt: skip
+        alta.conectar("Cámara de prueba", "sbs", (320, 180))
+        alta.agregar_par(*_par(70, dy=2.0))
+        alta.agregar_par(*_par(71, dy=2.0))
+        assert alta.estado.paso is Paso.ESCALA
+        return alta
+
+    a = lista()  # tipear «6,3» + Enter
+    for c in "6.3":
+        a.tipear(c)
+    a.tipear(".")  # una sola coma
+    assert a.estado.entrada == "6,3"
+    a.borrar()
+    a.tipear("5")
+    a.confirmar()
+    assert a.estado.paso is Paso.LISTO and a.estado.perfil.separacion_m == pytest.approx(0.065)
+
+    b = lista()  # Tab hasta un modelo + Enter
+    modelos = b.modelos()
+    assert len(modelos) >= 2 and all(m.separacion_m > 0 for m in modelos)
+    b.siguiente_modelo()
+    b.siguiente_modelo()
+    elegido = b.estado.modelo
+    frases = b.confirmar()
+    assert b.estado.paso is Paso.LISTO
+    assert b.estado.perfil.separacion_m == pytest.approx(elegido.separacion_m)
+    assert b.estado.perfil.extra["modelo"] == elegido.id and elegido.nombre in frases[0]
+
+    c = lista()  # vacío: explica qué tipear y sigue en la escala
+    assert "Tab" in c.confirmar()[0] and c.estado.paso is Paso.ESCALA
