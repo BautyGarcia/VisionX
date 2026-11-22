@@ -3,9 +3,12 @@
 > **Desde el 22/11 manda [PLAN-CIERRE](PLAN-CIERRE.md)**: evaluación del proyecto, qué hace
 > cada uno y calendario hasta la entrega. Tus tareas están en su sección 4 («Bauty»):
 > 1. **A:** plug and play real con la ELP (guía en la sección 6 de PLAN-CIERRE).
-> 2. **D:** entrenar la v3 con las etiquetas de la geometría ([RED-ENTRADA](RED-ENTRADA.md)).
+> 2. **D:** entrenar la v3 con las etiquetas de la geometría: **comandos exactos en
+>    [RED-ENTRADA](RED-ENTRADA.md#entrenar-la-v3-auto-bauty-en-la-mac-comandos-exactos)** (tres
+>    corridas de ~1 h; el código ya está en `main`).
 > 3. Video real girando la ELP para la v3.
-> 4. U-Net con cámaras variadas y el factor de b en el checkpoint de la red de entrada.
+> 4. El factor de b en el checkpoint de la red de entrada (snippet en RED-ENTRADA) y la U-Net
+>    con cámaras variadas: hay un camino rápido sin reentrenar (b × 0,046·(f·B)^0,51).
 > 5. Todas las pruebas con cámara (B, C y G de Tomás, D435i, prueba con personas).
 > 6. Ensayo de la expo en la Mac.
 >

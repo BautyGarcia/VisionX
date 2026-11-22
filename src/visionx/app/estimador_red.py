@@ -21,14 +21,21 @@ import numpy as np
 from visionx.app.camara_nueva import EstimacionCamara
 
 FACTOR_B = 1.79 * 2
+FUERA_DE_VAL = 2.0  # lo que falta además del factor de val en cámaras/escenas no vistas
 MAX_PARES = 8
 
 
 class EstimadorRed:
     def __init__(self, checkpoint: str | Path, device: str = "cpu") -> None:
+        import torch
+
         from visionx.depth.camara_net.entrenar import cargar
 
         self.modelo, _, self.device = cargar(checkpoint, device)
+        # Si el checkpoint trae su factor de b medido en val (`factor_b`), se usa ese.
+        ck = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        fb = ck.get("factor_b")
+        self.factor_b = float(fb) * FUERA_DE_VAL if fb else FACTOR_B
         self.origen = f"red de entrada ({Path(checkpoint).parent.name})"
 
     def _entrada(self, izq: np.ndarray, der: np.ndarray):
@@ -60,7 +67,7 @@ class EstimadorRed:
                 mus.append(out["mu"][0].cpu().numpy())
                 bs.append(b_en_unidades(out["log_b"], self.modelo.escala)[0].cpu().numpy())
         mu, b = combinar(np.stack(mus), np.stack(bs))
-        s = math.sqrt(2) * FACTOR_B * b  # σ de cada etiqueta (Laplace: σ = √2·b)
+        s = math.sqrt(2) * self.factor_b * b  # σ de cada etiqueta (Laplace: σ = √2·b)
         k1 = float(mu[3]) if abs(mu[3]) > 1.645 * s[3] else 0.0
         k2 = float(mu[4]) if k1 and abs(mu[4]) > 1.645 * s[4] else 0.0
         campo = math.degrees(2 * math.atan(0.5 / math.exp(float(mu[0]))))

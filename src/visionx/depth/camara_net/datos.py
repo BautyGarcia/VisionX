@@ -67,6 +67,9 @@ class Item:
     centro_nominal: tuple[float, float]
     fx: float
     grupo: str  # cámara (para juntar cuadros de un recorrido) o la vista misma
+    # Etiqueta de la geometría (autocalibración por movimiento, `gtsynth autoetiquetas`): solo
+    # la focal es medida; centro y lente no, así que la pérdida mira solo log f.
+    solo_focal: bool = False
 
     @property
     def alto_red(self) -> int:
@@ -166,12 +169,17 @@ def muestra(item: Item, aum: Aumento, rng: np.random.Generator) -> dict[str, Any
             img = _ruido_sensor(img, rng, gris)
         ojos.append(((img - MEDIA) / DESVIO).transpose(2, 0, 1))
     rayos, pix = grilla_rayos(cam)
+    mascara = np.ones(5, np.float32)
+    if item.solo_focal:
+        mascara[1:] = 0
     return {
         "ojos": np.stack(ojos).astype(np.float32),
         "y": cam.etiqueta(),
         "rayos": rayos,
         "pix": pix / np.float32(cam.ancho),  # en anchos de imagen
         "aspecto": np.float32(cam.alto / cam.ancho),
+        "mascara": mascara,  # qué etiquetas entran en la pérdida
+        "reproy": np.float32(0.0 if item.solo_focal else 1.0),  # la reproyección usa las cinco
     }
 
 
@@ -235,8 +243,9 @@ def juntar(muestras: list[dict[str, Any]]) -> dict[str, Any]:
     import torch
 
     out = {}
-    for k in ("ojos", "y", "rayos", "pix"):
+    for k in ("ojos", "y", "rayos", "pix", "mascara"):
         out[k] = torch.from_numpy(np.stack([m[k] for m in muestras]))
+    out["reproy"] = torch.tensor([float(m["reproy"]) for m in muestras])
     out["aspecto"] = torch.tensor([float(m["aspecto"]) for m in muestras])
     out["indice"] = torch.tensor([m["indice"] for m in muestras])
     return out

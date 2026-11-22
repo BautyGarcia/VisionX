@@ -31,6 +31,20 @@ tienen juntas:
 | **Sistema completo: red + 15 s girando + separación + objeto (E3)** | **5,4 % (mediana 3,4 %): +0,2 puntos sobre la calibrada.** Con la focal de la red sola, 13,5 % |
 | Pantalla «Cámara nueva» con todo integrado | ZED 2 simulada: midió 109 ° (real 110 °), alineó los ojos de 6,8 a 0,2 px y quedó «precisa» |
 
+### Qué se puede afirmar hoy (y qué no)
+
+- **Sí, en simulación:** con 15 s girando la cámara, la separación de la hoja de datos y un
+  objeto a distancia conocida, una cámara estéreo desconocida mide con el mismo error que una
+  calibrada con tablero (+0,2 puntos; 9 cámaras × 8 escenas).
+- **Sí:** el error que queda es casi todo de CREStereo, que la calibrada también tiene. En modo
+  preciso y por objeto (lo que usa la voz), con cámara conocida, fue 0,2–0,7 % de mediana.
+- **Todavía no:** «funciona con cámaras reales». Falta la prueba A con la ELP. La autocalibración
+  aún no busca la distorsión (G), y las cámaras baratas la tienen.
+- **Todavía no:** el error por objeto en modo preciso **con la cámara estimada**. Es una medición
+  de la PC (`gtsynth evaluar` con la geometría de red + movimiento); conviene hacerla antes del
+  informe.
+- **No:** «sin hacer nada». Hacen falta los mini-setups: girar, la separación o un objeto.
+
 ## 2. Críticas, de la más grave a la menos grave
 
 1. **Casi todo está medido en simulación.** La prueba real (E5) está en 0. Plug and play, red,

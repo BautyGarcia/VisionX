@@ -57,6 +57,13 @@ class Params:
     semilla: int = 0
     max_items: int = 0  # 0 = todos (para pruebas rápidas)
     zoom: tuple[float, float] | None = None  # ver `datos.Aumento.zoom`
+    # v3-auto (docs/RED-ENTRADA.md): etiquetas de la geometría por cuadro (`b-vistas.csv` de
+    # `gtsynth autoetiquetas`), sumadas a lo de siempre. `etiqueta_real` = el control (la focal
+    # real en los mismos cuadros). `desde` = checkpoint de partida (p. ej. la v2).
+    etiquetas: str | None = None
+    sigma_max: float = 0.03
+    etiqueta_real: bool = False
+    desde: str | None = None
 
     def aumento(self) -> Aumento:
         return Aumento(zoom=self.zoom)
@@ -81,11 +88,13 @@ def perdida(out: dict, lote: dict, peso_reproy: float) -> tuple[Any, dict[str, f
 
     escala = torch.as_tensor(ESCALA, device=out["mu"].device)
     r = (lote["y"] - out["mu"]) / escala
-    nll = (r.abs() * torch.exp(-out["log_b"]) + out["log_b"]).mean()
+    termino = r.abs() * torch.exp(-out["log_b"]) + out["log_b"]
+    m = lote.get("mascara")  # cuadros con etiqueta de la geometría: solo log f
+    nll = termino.mean() if m is None else (termino * m).sum() / m.sum().clamp(min=1)
     # `pix` ya viene en anchos de imagen (u y v divididos por el ancho).
-    reproy = (
-        (proyectar(out["mu"], lote["rayos"], lote["aspecto"]) - lote["pix"]).norm(dim=-1).mean()
-    )
+    err = (proyectar(out["mu"], lote["rayos"], lote["aspecto"]) - lote["pix"]).norm(dim=-1)
+    w = lote.get("reproy")
+    reproy = err.mean() if w is None else (err.mean(-1) * w).sum() / w.sum().clamp(min=1)
     total = nll + peso_reproy * reproy / ESCALA_REPROY
     return total, {"nll": nll.item(), "reproy_pct": reproy.item() * 100}
 
@@ -103,10 +112,36 @@ def items_de(raiz: str | Path, variantes: Sequence[str], particion: str | None,
     return out
 
 
+def items_etiquetas(raiz: str | Path, csv_path: str | Path, sigma_max: float = 0.03,
+                    real: bool = False) -> list[Item]:  # fmt: skip
+    """Cuadros con la focal que midió la geometría (o la real, para el control).
+
+    El centro es el medio de la imagen: el movimiento no lo mide, y así no se usa nada que una
+    cámara real no daría. Solo la focal entra en la pérdida (`Item.solo_focal`).
+    """
+    import dataclasses
+
+    from visionx.gtsynth.dataset import Vista
+
+    out = []
+    with open(csv_path, encoding="utf-8", newline="") as fh:
+        for f in csv.DictReader(fh):
+            if float(f["sigma_log_f"]) > sigma_max:
+                continue
+            it = item_de(Vista(Path(raiz) / f["vista"]))
+            w, h = it.nominal
+            fx = float(f["fx_real"]) if real else math.exp(float(f["log_f"])) * w
+            out.append(dataclasses.replace(it, fx=fx, centro_nominal=((w - 1) / 2, (h - 1) / 2),
+                                           grupo=f["recorrido"], solo_focal=True))  # fmt: skip
+    return out
+
+
 def items_entrenamiento(p: Params) -> list[Item]:
     items = items_de(p.raiz, p.variantes, "train")
     rec = items_de(p.raiz, p.recorridos, "train")
     items += submuestra_recorridos(rec, p.cuadros_por_recorrido, p.semilla)
+    if p.etiquetas:
+        items += items_etiquetas(p.raiz, p.etiquetas, p.sigma_max, p.etiqueta_real)
     return items
 
 
@@ -275,7 +310,12 @@ def entrenar(p: Params, salida: str | Path, device: str = "auto", continuar: boo
 
     muestra_idx = rng.choice(len(tren), min(2000, len(tren)), replace=False)
     centro = np.mean([sortear_camara(tren[i], p.aumento(), rng).etiqueta() for i in muestra_idx], 0)
-    modelo = RedCamara(preentrenada=not continuar).to(device)
+    modelo = RedCamara(preentrenada=not (continuar or p.desde)).to(device)
+    if p.desde:  # ajustar una red ya entrenada: se queda con su centro (predice desvíos de él)
+        ck0 = torch.load(p.desde, map_location=device, weights_only=False)
+        modelo.load_state_dict(ck0["modelo"])
+        centro = np.array(ck0["centro"], np.float32)
+        print(f"parte de {p.desde} (época {ck0.get('epoca')})", flush=True)
     modelo.fijar_centro(torch.tensor(centro, dtype=torch.float32, device=device))
     tronco = list(modelo.tronco.parameters())
     resto = [q for n, q in modelo.named_parameters() if not n.startswith("tronco.")]

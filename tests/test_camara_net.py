@@ -182,3 +182,49 @@ def test_zoom_es_otra_camara_con_mas_focal_relativa(tmp_path):
     # Un campo más angosto que `hfov_min` no se sortea: queda la cámara sin zoom.
     angosto = Aumento(p_lente=0.0, centro=0.0, fotometrico=False, zoom=(0.1, 0.1))
     assert sortear_camara(it, angosto, rng).ancho == NOMINAL[0]
+
+
+def test_etiquetas_de_la_geometria_solo_entrenan_la_focal(tmp_path):
+    """v3-auto: el cuadro toma la focal de la etiqueta, el centro en el medio y solo log f pesa."""
+    import csv
+
+    from visionx.depth.camara_net.entrenar import items_etiquetas
+
+    _vista_falsa(tmp_path)
+    with open(tmp_path / "b-vistas.csv", "w", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["vista", "recorrido", "ancho", "log_f", "sigma_log_f", "fx_etiqueta",
+                    "fx_real"])  # fmt: skip
+        w.writerow(["camara-sorteada/room_0/0000", "x/r0", NOMINAL[0], math.log(260 / NOMINAL[0]),
+                    0.02, 260.0, 250.0])  # fmt: skip
+        w.writerow(["camara-sorteada/room_0/0000", "x/r1", NOMINAL[0], 0.0, 0.2, 320.0, 250.0])
+    its = items_etiquetas(tmp_path, tmp_path / "b-vistas.csv", sigma_max=0.03)
+    assert len(its) == 1  # la de duda 0,2 no entra
+    it = its[0]
+    assert it.solo_focal and it.fx == pytest.approx(260.0) and it.grupo == "x/r0"
+    assert it.centro_nominal == ((NOMINAL[0] - 1) / 2, (NOMINAL[1] - 1) / 2)
+    real = items_etiquetas(tmp_path, tmp_path / "b-vistas.csv", real=True)[0]
+    assert real.fx == pytest.approx(250.0)  # el control
+    m = muestra(it, Aumento.ninguno(), np.random.default_rng(0))
+    assert m["mascara"].tolist() == [1, 0, 0, 0, 0] and m["reproy"] == 0
+    assert m["y"][0] == pytest.approx(math.log(260 / NOMINAL[0]), abs=1e-5)
+
+
+def test_la_perdida_ignora_lo_que_no_se_midio():
+    torch = pytest.importorskip("torch")
+    from visionx.depth.camara_net.entrenar import perdida
+
+    out = {"mu": torch.zeros(2, 5), "log_b": torch.zeros(2, 5)}
+    rayos = torch.zeros(2, 4, 2)
+    lote = {"y": torch.zeros(2, 5), "rayos": rayos, "pix": torch.zeros(2, 4, 2),
+            "aspecto": torch.tensor([0.5, 0.5]),
+            "mascara": torch.tensor([[1.0, 0, 0, 0, 0], [1, 1, 1, 1, 1]]),
+            "reproy": torch.tensor([0.0, 1.0])}  # fmt: skip
+    base, _ = perdida(out, lote, 0.5)
+    lote2 = {**lote, "y": lote["y"].clone(), "pix": lote["pix"].clone()}
+    lote2["y"][0, 1:] = 3.0  # centro y lente «mal» en el cuadro de la geometría: no importa
+    lote2["pix"][0] = 9.0
+    otra, _ = perdida(out, lote2, 0.5)
+    assert float(otra) == pytest.approx(float(base))
+    lote2["y"][0, 0] = 0.5  # la focal sí
+    assert float(perdida(out, lote2, 0.5)[0]) > float(base)
