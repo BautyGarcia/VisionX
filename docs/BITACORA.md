@@ -40,6 +40,106 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-22 — T12: E2, la red que estima la cámara: 5–14 % de focal, lejos del 2 %
+
+Tarea: T12 (E2 de [PLUG-AND-PLAY](PLUG-AND-PLAY.md)). Persona/agente: Bauty / Claude Code. Mac,
+MPS. Rama `a/T12-camara-net`. Crudos en `outputs/camara_net/e2-v1/` y `e2-v2/` (fuera de Git):
+`curvas.csv`, `meta.json`, `eval/resumen.json` y un CSV por conjunto. Pesos en el Drive
+`VisionX-Personal/pesos/camara-net/` (sha256 de `mejor.pt`: v1 `b07d0f54…`, v2 `0fde2f26…`).
+
+Objetivo: la red de entrada del plug and play. Mira los dos ojos de una cámara desconocida y da
+focal, centro y distorsión (`log(fx/ancho)`, `cx`, `cy`, `k1`, `k2`), cada uno con su b de Laplace.
+Meta E2: focal ≤ 2 % de mediana y cobertura del 90 %.
+
+Hecho (`src/visionx/depth/camara_net/`, 10 tests en `tests/test_camara_net.py`):
+- ResNet-18 de ImageNet compartida por los dos ojos, con dos canales de coordenadas. Rasgos en
+  3×4 zonas, promedio de los ojos y una cabeza de media y log b (11,4 M de parámetros).
+- Pérdida: NLL de Laplace más la reproyección de una grilla de rayos de 7×5.
+- Cada muestra es una cámara nueva sacada del lienzo con margen de `gt-sintetico-elp`:
+  - lente radial sorteada en el 80 % de los casos (k1 ∈ [−0,35; 0,10], k2 ∈ [±0,10]);
+  - centro corrido hasta 3 %;
+  - ruido de sensor;
+  - en la v2, además, zoom (recortes de 0,55 a 1,2 de la ventana nominal, que son otra cámara
+    con más focal relativa).
+- Se descartan las lentes que se pliegan o no caben en el lienzo.
+- v1: `camara-sorteada` + `hssd-camara-sorteada` + 6 cuadros por recorrido de HSSD (5598 vistas).
+  v2: lo mismo + `camara-sorteada-ojo` (7998 vistas) + zoom.
+- Ambas con 40 épocas, lote 12 y AdamW (3e-4 la cabeza, 1e-4 el tronco); 2,2 h y 2,9 h.
+- Val fija para las dos: 840 vistas de val de Replica y HSSD. Test sin tocar. Nada de
+  `gt-video` en el entrenamiento.
+
+Evidencia, en val (mediana / P90; «constante» = responder siempre la cámara media del
+entrenamiento):
+
+| | Focal % | Campo ° | cx px | k1 | Cobertura f |
+|---|---:|---:|---:|---:|---:|
+| v1, pinhole | 9,9 / 27,2 | 5,3 | 6,0 | 0,017 | 0,51 |
+| v1, con lente | 9,7 / 27,6 | 5,2 | 14,0 | 0,041 | 0,53 |
+| v2, pinhole | **9,0** / 27,6 | 4,9 | 5,8 | 0,025 | 0,66 |
+| v2, con lente | 9,1 / 28,5 | 4,9 | 13,4 | 0,051 | 0,69 |
+| constante, con lente | 31–33 | 18 | 20 | 0,033–0,048 | — |
+
+Las 9 cámaras de `gt-video` (Replica `hotel_0` y `office_2`, 90 cuadros cada una), error mediano
+de focal en %:
+
+| Cámara (campo) | v1, un cuadro | v1, de a 8 | v1, todos (hotel, office) | v2, un cuadro | v2, de a 8 | v2, todos | Constante v1 / v2 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 60° | 14,5 | 14,1 | 16,6 / 13,2 | 13,4 | 13,6 | 13,8 / 7,7 | 47 / 33 |
+| base larga 20 cm (100°) | 7,7 | 6,8 | 1,9 / 14,9 | 5,0 | 4,4 | 0,9 / 5,1 | 10 / 38 |
+| ELP completa (116°) | 5,2 | 4,8 | 3,0 / 13,3 | 7,7 | 7,1 | 9,8 / 9,9 | 47 / 85 |
+| 130° | 10,4 | 11,4 | 11,7 / 16,7 | 14,0 | 13,2 | 16,4 / 14,8 | 97 / 148 |
+| OAK-D (80°) | 7,1 | 6,4 | 6,3 / 8,4 | 8,4 | 8,6 | 8,2 / 0,3 | 23 / 3 |
+| D435 (87°) | 6,1 | 6,1 | 3,1 / 11,9 | 8,2 | 8,3 | 6,2 / 0,6 | 13 / 10 |
+| D455 (86°) | 6,3 | 6,3 | 4,0 / 11,6 | 8,2 | 9,0 | 6,6 / 1,1 | 14 / 8 |
+| ZED 2 (110°) | 5,8 | 7,3 | 2,7 / 13,8 | 6,2 | 6,1 | 6,0 / 6,8 | 31 / 65 |
+| ZED Mini (102°) | 7,7 | 6,6 | 2,7 / 14,8 | 5,9 | 5,7 | 2,4 / 4,4 | 14 / 43 |
+
+Lectura:
+1. **La meta E2 no se alcanza.** Por cuadro, la red da 5–14 % de focal. Es 3–10 veces mejor que
+   la constante en el promedio, pero no llega al 2 %.
+2. **Juntar cuadros casi no ayuda.** «De a 8» queda igual que «un cuadro». Con todos los cuadros
+   de un recorrido, el error depende de la escena: en la v1, `office_2` da 12–17 % en todas las
+   cámaras y `hotel_0` 2–4 %. Es un sesgo por escena (la red lee el contenido del cuarto), no
+   ruido que se promedia.
+3. **La v2 mejora val** (9,0 contra 9,9 %) y las cámaras de campo ancho con base distinta (base
+   larga, ZED). **Empeora las de ~85°** (OAK-D, RealSense). En esas, la constante de la v2 (que el
+   zoom corrió hacia focales largas) acierta mejor que la red. En el promedio de las 9 cámaras,
+   la v1 da 7,9 % y la v2 8,6 %. Elijo por val, no por `gt-video`: queda la v2.
+4. **Centro y distorsión casi no se aprenden.** Con lente, el centro pasa de 20 a 13 px; k1 queda
+   igual o peor que la constante. La reproyección de la grilla baja de 132 a 44 px de mediana.
+5. **La b sale demasiado confiada** (cobertura 0,5–0,7). **Esto se arregla con un factor medido
+   en val:** multiplicar b por 2,64 (v1) o 1,79 (v2) lleva val a 0,90. Con ese mismo factor, sin
+   tocar nada más, `gt-video` queda en 0,86–0,98 (v1) y 0,81–0,99 (v2; la más baja es la de 60°).
+   Por la entrada de Tomás de anoche (E3 simulado), una focal de ±5–10 % con su duda bien sumada
+   deja 3,6–7 % de error mediano en distancia y 91–93 % de cobertura. La red ya da una duda
+   honesta, aunque todavía no la precisión pedida.
+
+Problemas/cambios:
+- Encadené la evaluación de la v1 detrás del entrenamiento con un `pgrep` que se encontraba a sí
+  mismo, y quedó esperando para siempre. Se perdieron unas horas de la noche. Ahora la cadena va
+  en un script en serie.
+- MPS no hace el promedio adaptativo cuando el mapa no se divide en 3×4 (la OAK-D, 1280×800, da
+  13×20). Ese caso pasa por la CPU, con el mismo resultado.
+- Barriles fuertes con campo ancho no entran en el margen de 12,5 % del lienzo, así que la red casi
+  no ve k1 < −0,25 por encima de 100°.
+
+Límites:
+- Una semilla por versión.
+- `gt-video` son solo 2 escenas (el sesgo por escena pesa mucho con n = 2).
+- El factor de b se midió en val y se aplicó fuera; no quedó incorporado al código.
+- No se evaluó en la PC ni con la ELP real.
+- No se probó la red dentro del clásico (E3 real).
+
+Próximo paso:
+- (Bauty) Guardar el factor de b en el checkpoint y medir E3 de verdad: la focal de la red como
+  punto de partida del clásico + escala por objeto, en el `gtsynth evaluar` de Tomás. Su
+  entrada dice que el clásico alinea mal partiendo de una focal equivocada; falta ver cuánto
+  arregla partir de 5–14 %.
+- (Bauty) Para la precisión, el sesgo por escena apunta a más escenas (hoy 131), no a más
+  épocas.
+- (Tomás) Probar `mejor.pt` en la PC con
+  `python -m visionx.depth.camara_net evaluar … --device cpu` (LEEME en el Drive).
+
 ## 2026-11-21 (noche) — T12/T13: E3 con red simulada, E0 corrigiendo la escala y la U-Net con cámara supuesta
 
 Tarea: T12, T13. Persona/agente: Tomás / Claude Code. PC de escritorio, Radeon. Código en #89.
