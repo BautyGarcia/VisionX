@@ -101,6 +101,7 @@ def _metricas(canvas, t, alta: AltaCamara, x: int, y: int, w: int, h: int, fps: 
         ("Desfase de filas", desfase),
         ("Corrige", " · ".join(corr) if corr else "—"),
         ("Tiempos", f"estimar {_ms(e.tiempos_ms.get('estimar'))} · "
+                    f"medir {_ms(e.tiempos_ms.get('medir'))} · "
                     f"alinear {_ms(e.tiempos_ms.get('alinear'))}"),
     ]  # fmt: skip
     for k, (etiqueta, valor) in enumerate(filas):
