@@ -319,9 +319,10 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         const="corrimiento",
         default=None,
-        choices=["corrimiento", "escala"],
+        choices=["corrimiento", "escala", "ambas"],
         help="el objeto apuntado de la primera vista de cada cámara corrige un corrimiento de "
-        "columnas (por defecto, misma cámara) o la escala f·B (cámara distinta o estimada)",
+        "columnas (por defecto, misma cámara), la escala f·B (cámara distinta o estimada) o "
+        "ambas (el mismo objeto a varias distancias, al principio del recorrido)",
     )
     ca = sub.add_parser("camaras", help="precalcular la demo de cámaras distintas del stand")
     ca.add_argument("raiz")

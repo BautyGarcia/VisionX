@@ -142,7 +142,28 @@ def medir(
 # corrige una cosa. «corrimiento» resta un desplazamiento de columnas (yaw o centro óptico mal
 # supuestos: el error que deja una unidad del mismo modelo). «escala» multiplica la distancia
 # (focal × separación mal supuestas: el error de una cámara distinta o estimada, Z = f·B/d).
-MODOS_DISTANCIA = ("corrimiento", "escala")
+MODOS_DISTANCIA = ("corrimiento", "escala", "ambas")
+CALIBRAN_AMBAS = 4  # vistas del principio del recorrido que miden el objeto (a varias distancias)
+RAZON_MIN = 1.25  # «ambas» pide distancias distintas: la mayor ≥ 1,25 × la menor
+
+
+def ajustar_ambas(medidas_d: list[float], reales_d: list[float]) -> tuple[float, float] | None:
+    """Escala y corrimiento de la disparidad efectiva con un objeto a varias distancias.
+
+    El objeto a distancias conocidas da pares (medida, real) de disparidad efectiva (con doffs).
+    Si la cámara supuesta tiene mal `f·B` (escala) y la unidad un corrimiento de columnas, vale
+    `medida = escala · real + corrimiento`: dos distancias distintas alcanzan para las dos cosas
+    (con una sola, una u otra). Mínimos cuadrados; None si las distancias son casi iguales.
+    """
+    m, r = np.asarray(medidas_d, float), np.asarray(reales_d, float)
+    ok = (m > 0) & (r > 0)
+    m, r = m[ok], r[ok]
+    if len(r) < 2 or r.max() < RAZON_MIN * r.min():
+        return None
+    escala, corrimiento = np.polyfit(r, m, 1)
+    if escala <= 0:
+        return None
+    return float(escala), float(corrimiento)
 
 
 def modo_distancia(valor: bool | str) -> str | None:
@@ -239,7 +260,26 @@ def _por_camara(
             frame = _frame(v, izq, der, m.geometria, g0 + k)
             medidas.append((v, frame, m.estimador.predict(frame) if objs else None, objs))
         delta, escala, calibra = 0.0, 1.0, None
-        if modo_dc:
+        calibran: set[int] = set()
+        if modo_dc == "ambas":  # el mismo objeto visto a varias distancias (la persona se mueve)
+            ms, rs, ks = [], [], []
+            for k, (v, frame, depth, objs) in enumerate(medidas):
+                apuntado = [o for o in objs if o.apuntado]
+                if depth is None or not apuntado or len(ks) >= CALIBRAN_AMBAS:
+                    continue
+                f0 = _filas(m, v, variante, frame, depth, apuntado)[0]
+                if f0["d_frente_px"] is None:
+                    continue
+                ms.append(f0["d_frente_px"] + depth.doffs)
+                rs.append(f0["d_gt_px"] + depth.doffs)
+                ks.append(k)
+            ajuste = ajustar_ambas(ms, rs)
+            calibran = set(ks)
+            if ajuste is not None:
+                escala, delta = ajuste
+            elif ms:  # todas a la misma distancia: solo el corrimiento, como con un objeto
+                delta = float(np.median(np.subtract(ms, rs)))
+        elif modo_dc:
             for k, (v, frame, depth, objs) in enumerate(medidas):
                 apuntado = [o for o in objs if o.apuntado]
                 if depth is None or not apuntado:
@@ -257,7 +297,12 @@ def _por_camara(
         for k, (v, frame, depth, objs) in enumerate(medidas):
             if depth is None:
                 continue
-            if delta:
+            if modo_dc == "ambas":  # d_real = (d − corrimiento) / escala
+                if delta:
+                    depth = con_corrimiento(depth, delta, fb)
+                if escala != 1.0:
+                    depth = con_escala(depth, escala, fb)
+            elif delta:
                 depth = con_corrimiento(depth, delta, fb)
             elif escala != 1.0:
                 depth = con_escala(depth, escala, fb)
@@ -265,7 +310,7 @@ def _por_camara(
                 f.update({
                     "camara": g0 // k_cam, "alineacion": modo, "aplica": aplica,
                     "distancia_conocida": modo_dc or "", "delta_px": round(delta, 3),
-                    "escala": round(escala, 4), "calibra": k == calibra,
+                    "escala": round(escala, 4), "calibra": k == calibra or k in calibran,
                 })  # fmt: skip
                 filas.append(f)
         if progreso:

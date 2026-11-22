@@ -395,3 +395,14 @@ def test_autocalibracion_encuentra_la_focal_con_puntos_sinteticos():
     assert abs(math.exp(lf) / 500 - 1) < 0.01 and s < 0.01
     lf, s = combinar(math.log(550.0), 0.10, FocalMedida(None, None, 0, "poco movimiento"))
     assert lf == math.log(550.0) and s == 0.10
+
+
+def test_dos_distancias_corrigen_escala_y_corrimiento():
+    from visionx.gtsynth.evaluar import ajustar_ambas
+
+    reales = [10.0, 15.0, 20.0, 30.0]  # el mismo objeto a 4 distancias (disparidad real)
+    medidas = [1.04 * r + 0.8 for r in reales]  # f·B 4 % corrido y la unidad 0,8 px corrida
+    escala, corr = ajustar_ambas(medidas, reales)
+    assert escala == pytest.approx(1.04) and corr == pytest.approx(0.8)
+    assert ajustar_ambas([10.4, 10.5], [10.0, 10.1]) is None  # casi la misma distancia
+    assert ajustar_ambas([10.4], [10.0]) is None
