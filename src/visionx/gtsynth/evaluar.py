@@ -144,26 +144,42 @@ def medir(
 # (focal × separación mal supuestas: el error de una cámara distinta o estimada, Z = f·B/d).
 MODOS_DISTANCIA = ("corrimiento", "escala", "ambas")
 CALIBRAN_AMBAS = 4  # vistas del principio del recorrido que miden el objeto (a varias distancias)
-RAZON_MIN = 1.25  # «ambas» pide distancias distintas: la mayor ≥ 1,25 × la menor
+RAZON_MIN = 1.25  # sin duda de la escala, «ambas» pide la mayor distancia ≥ 1,25 × la menor
+SIGMA_D_PX = 0.3  # ruido de la disparidad mediana de un objeto (px)
+SIGMA_ESCALA = 0.02  # duda de la escala si la focal se midió con el movimiento (≈ 1–2 %)
 
 
-def ajustar_ambas(medidas_d: list[float], reales_d: list[float]) -> tuple[float, float] | None:
+def ajustar_ambas(medidas_d: list[float], reales_d: list[float], sigma_d: float | None = None,
+                  sigma_escala: float | None = None) -> tuple[float, float] | None:  # fmt: skip
     """Escala y corrimiento de la disparidad efectiva con un objeto a varias distancias.
 
     El objeto a distancias conocidas da pares (medida, real) de disparidad efectiva (con doffs).
     Si la cámara supuesta tiene mal `f·B` (escala) y la unidad un corrimiento de columnas, vale
     `medida = escala · real + corrimiento`: dos distancias distintas alcanzan para las dos cosas
-    (con una sola, una u otra). Mínimos cuadrados; None si las distancias son casi iguales.
+    (con una sola, una u otra).
+
+    - Sin `sigma_escala`: mínimos cuadrados; None si las distancias son casi iguales.
+    - Con `sigma_escala` (la duda de la focal medida con el movimiento): la escala tiene un
+      previo N(1, σ). Con medidas buenas y distancias distintas corrige las dos cosas; con medidas
+      ruidosas o distancias parecidas se queda cerca de 1 y corrige solo el corrimiento. Así un
+      objeto malo no arruina una focal que ya estaba bien medida.
     """
     m, r = np.asarray(medidas_d, float), np.asarray(reales_d, float)
     ok = (m > 0) & (r > 0)
     m, r = m[ok], r[ok]
-    if len(r) < 2 or r.max() < RAZON_MIN * r.min():
+    if sigma_escala is None:
+        if len(r) < 2 or r.max() < RAZON_MIN * r.min():
+            return None
+        escala, corrimiento = np.polyfit(r, m, 1)
+        return (float(escala), float(corrimiento)) if escala > 0 else None
+    if len(r) < 1:
         return None
-    escala, corrimiento = np.polyfit(r, m, 1)
-    if escala <= 0:
-        return None
-    return float(escala), float(corrimiento)
+    w = 1.0 / (sigma_d or SIGMA_D_PX) ** 2
+    p = 1.0 / sigma_escala**2
+    a = np.array([[w * (r * r).sum() + p, w * r.sum()], [w * r.sum(), w * len(r)]])
+    b = np.array([w * (r * m).sum() + p, w * m.sum()])
+    escala, corrimiento = np.linalg.solve(a, b)
+    return (float(escala), float(corrimiento)) if escala > 0 else None
 
 
 def modo_distancia(valor: bool | str) -> str | None:
@@ -273,7 +289,7 @@ def _por_camara(
                 ms.append(f0["d_frente_px"] + depth.doffs)
                 rs.append(f0["d_gt_px"] + depth.doffs)
                 ks.append(k)
-            ajuste = ajustar_ambas(ms, rs)
+            ajuste = ajustar_ambas(ms, rs, SIGMA_D_PX, SIGMA_ESCALA)
             calibran = set(ks)
             if ajuste is not None:
                 escala, delta = ajuste

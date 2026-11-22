@@ -40,13 +40,25 @@ class CorreccionDistancia:
 
     modo: str = ""  # "" | "corrimiento" | "ambas"
 
-    def agregar(self, medida_rel: float, real_rel: float) -> str:
-        """Suma una observación y vuelve a ajustar. Devuelve el modo: corrimiento o ambas."""
+    sigma_escala: float | None = None  # duda de la focal (movimiento); None = sin previo
+
+    def agregar(self, medida_rel: float, real_rel: float, sigma_rel: float | None = None) -> str:
+        """Suma una observación y vuelve a ajustar. Devuelve el modo: corrimiento o ambas.
+
+        Con `sigma_escala` (focal medida con el movimiento) la escala tiene un previo cerca de 1:
+        un objeto ruidoso no la arruina (`gtsynth.evaluar.ajustar_ambas`).
+        """
         from visionx.gtsynth.evaluar import ajustar_ambas
 
         self.observaciones.append((float(medida_rel), float(real_rel)))
         ms, rs = zip(*self.observaciones, strict=True)
-        ajuste = ajustar_ambas(list(ms), list(rs))
+        ajuste = None
+        if len(self.observaciones) >= 2:
+            ajuste = ajustar_ambas(list(ms), list(rs), sigma_rel, self.sigma_escala)
+            if self.sigma_escala is not None and ajuste is not None:
+                rango = max(rs) / max(min(rs), 1e-9)
+                if rango < 1.15:  # misma distancia: con el previo es casi solo corrimiento
+                    ajuste = None
         if ajuste is not None:
             self.escala, self.corrimiento_rel = ajuste
             self.modo = "ambas"
@@ -127,7 +139,9 @@ class ProfundidadCorregida:
             return False
         medida = float(np.median(d[ok]))
         real = self._fb() / float(z_m)
-        self.correccion.agregar(medida / w, real / w)
+        from visionx.gtsynth.evaluar import SIGMA_D_PX
+
+        self.correccion.agregar(medida / w, real / w, SIGMA_D_PX / w)
         if self._al_cambiar is not None:
             self._al_cambiar(self.correccion)
         return True
@@ -150,6 +164,8 @@ def envolver(depth: Any, precisa: Any, perfil: Any = None, guardar: bool = True)
     """
     extra = dict(getattr(perfil, "extra", None) or {})
     corr = CorreccionDistancia.de_dict(extra.get("correccion_distancia"))
+    if extra.get("sigma_focal"):  # la focal se midió con el movimiento: previo para la escala
+        corr.sigma_escala = max(float(extra["sigma_focal"]), 0.01)
 
     def al_cambiar(c: CorreccionDistancia) -> None:
         if perfil is None or not guardar or not extra.get("escala"):
