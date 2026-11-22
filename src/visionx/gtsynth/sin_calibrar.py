@@ -17,6 +17,9 @@ recorrido:
     red + clásico + separación   separación conocida (la de la hoja de datos), sin objeto: la
                                  escala queda en manos de la focal de la red
     red + escala                 sin clásico, para ver cuánto aporta alinear
+    red + sep. + corrimiento     separación conocida y, como la escala ya está (focal medida con
+                                 el movimiento), el objeto corrige el corrimiento de la otra
+                                 unidad: lo mismo que la calibrada, con la cámara estimada
 
 Es la línea de base del plug and play: cuánto se pierde cuando no se sabe qué cámara es.
 
@@ -58,7 +61,8 @@ def geometria_elp(g):
 
 VERSIONES = ("calibrada", "sin calibrar", "sin calibrar + clásico", "sin calibrar + escala",
              "sin calibrar + clásico + escala", "red + clásico + escala",
-             "red + clásico + separación", "red + escala")  # fmt: skip
+             "red + clásico + separación", "red + escala",
+             "red + separación + clásico + corrimiento")  # fmt: skip
 
 
 def leer_red(carpeta: str | Path) -> dict[str, dict]:
@@ -197,7 +201,9 @@ def evaluar(
         out["red_cuadros"] = cam["cuadros"]
         corridas += [("red + clásico + escala", g_red, True, "escala"),
                      ("red + clásico + separación", g_sep, True, None),
-                     ("red + escala", g_red, False, "escala")]  # fmt: skip
+                     ("red + escala", g_red, False, "escala"),
+                     ("red + separación + clásico + corrimiento", g_sep, True,
+                      "corrimiento")]  # fmt: skip
     elif red:
         out["red_falta"] = True
     for nombre, geo, clas, ref in corridas:
