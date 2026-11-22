@@ -36,13 +36,14 @@ tienen juntas:
 - **Sí, en simulación:** con 15 s girando la cámara, la separación de la hoja de datos y un
   objeto a distancia conocida, una cámara estéreo desconocida mide con el mismo error que una
   calibrada con tablero (+0,2 puntos; 9 cámaras × 8 escenas).
-- **Sí:** el error que queda es casi todo de CREStereo, que la calibrada también tiene. En modo
-  preciso y por objeto (lo que usa la voz), con cámara conocida, fue 0,2–0,7 % de mediana.
+- **Sí:** en modo continuo y por píxel, el error que queda es casi todo de CREStereo.
+- **Sí, con matiz, en modo preciso y por objeto** (lo que usa la voz):
+  - la cámara estimada da **0,83 % de mediana** contra 0,34 % de la calibrada (9 cámaras);
+  - los objetos con más de 10 % de error pasan de 2 a 4 %;
+  - la diferencia es el resto de la focal (~1 %): a 2 m son ±2 cm.
+  - BITACORA 22/11 (noche).
 - **Todavía no:** «funciona con cámaras reales». Falta la prueba A con la ELP. La autocalibración
   aún no busca la distorsión (G), y las cámaras baratas la tienen.
-- **Todavía no:** el error por objeto en modo preciso **con la cámara estimada**. Es una medición
-  de la PC (`gtsynth evaluar` con la geometría de red + movimiento); conviene hacerla antes del
-  informe.
 - **No:** «sin hacer nada». Hacen falta los mini-setups: girar, la separación o un objeto.
 
 ## 2. Críticas, de la más grave a la menos grave
@@ -153,9 +154,12 @@ prueba real (A, E5) → prueba con personas (E) → la geometría entrena a la r
    Cinta con 10–15 objetos entre 0,5 y 4 m (modo preciso), igual que M9. Anotar también qué
    nivel dice la voz: con la **duda total (B)**, una cámara dada de alta no debería decir
    «precisa» si no lo es.
-5. **Probar C:** con la app andando, golpear o torcer un poco la cámara y ver que vuelva a
+5. **Distancia conocida en la app:** con la app andando, apuntar a algo y decir «calibrá, está a
+   N metros»; después alejarse o acercarse un paso y repetirlo con la nueva distancia. La
+   primera corrige el corrimiento; la segunda, escala y corrimiento. Se guarda en el perfil.
+6. **Probar C:** con la app andando, golpear o torcer un poco la cámara y ver que vuelva a
    alinearse sola (mensaje en la terminal; `historial` de `FuenteAlineada`).
-6. Todo a la BITACORA con tabla. Si la focal sale muy distinta de la del tablero, sospechar de
+7. Todo a la BITACORA con tabla. Si la focal sale muy distinta de la del tablero, sospechar de
    la distorsión (G).
 
 ## 7. Calendario

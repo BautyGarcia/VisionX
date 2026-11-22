@@ -40,6 +40,68 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-22 (noche) — T12/T13: por objeto en modo preciso con la cámara estimada, y el objeto a dos distancias
+
+Tarea: T12, T13. Persona/agente: Tomás / Claude Code. PC de escritorio, CREStereo preciso en la
+Radeon + U-Net `v2-s0`. Crudos en `outputs/gtsynth/inc-estimada/` (fuera de Git).
+
+**Qué se midió.** Lo mismo que la tabla de la U-Net del 21/11 (por objeto, modo preciso, las 9
+cámaras × 8 escenas de val, 1 de cada 6 cuadros), pero **con la cámara que estima el sistema**
+(`gtsynth evaluar --geometria estimada`):
+- focal de red + movimiento;
+- centro de la red;
+- separación conocida;
+- clásico con los 15 pares del recorrido (un recorrido = una cámara, como en la app).
+
+Dos formas de usar el objeto a distancia conocida:
+- **un objeto**: el apuntado de la primera vista corrige el corrimiento;
+- **varias distancias**: el mismo objeto en las 4 primeras vistas, a distancias distintas
+  porque la persona se mueve, corrige escala y corrimiento a la vez.
+
+En «varias distancias», la escala tiene un previo N(1, 2 %), la duda de la focal medida
+(`ajustar_ambas`). Sin el previo, un objeto ruidoso (la casa de paredes lisas) daba escala 0,84
+y arruinaba la escena. Error relativo por objeto, mediana / P95 en %:
+
+| Cámara | Conocida | Estimada + un objeto | Estimada + varias distancias |
+|---|---:|---:|---:|
+| ELP | 0,51 / 5,2 | 1,09 / 11,2 | 1,00 / 5,7 |
+| D435 | 0,32 / 3,4 | 0,55 / 4,6 | 0,56 / 5,3 |
+| D455 | 0,23 / 4,1 | 0,57 / 7,2 | 0,57 / 7,8 |
+| ZED 2 | 0,33 / 4,9 | 1,03 / 5,5 | 0,76 / 5,6 |
+| ZED Mini | 0,39 / 3,9 | 1,07 / 9,2 | 1,11 / 7,2 |
+| OAK-D | 0,25 / 3,9 | 0,78 / 6,5 | 0,67 / 4,6 |
+| 60° | 0,19 / 3,0 | 0,87 / 29,9 | 0,99 / 23,5 |
+| 130° | 0,68 / 6,7 | 1,24 / 9,2 | 1,29 / 8,0 |
+| 20 cm | 0,24 / 5,5 | 0,68 / 13,6 | 0,65 / 13,3 |
+| **Todas** (mediana / P95 / objetos > 10 %) | **0,34 / 4,8 / 2,1** | 0,86 / 9,7 / 4,8 | **0,83 / 8,6 / 4,2** |
+
+Lectura:
+- **Por objeto y en modo preciso, una cámara desconocida mide con menos de 1 % de mediana en
+  las 9 cámaras** (a 2 m, ±2 cm). No es igual a la calibrada: la mediana pasa de 0,34 a 0,83 %
+  y los objetos mal medidos de 2 a 4 %. La diferencia es el resto de la focal (~1 %). En modo
+  continuo y por píxel no se veía (+0,2 puntos), porque ahí manda el error de CREStereo.
+- Las varias distancias ayudan poco en promedio (0,86 → 0,83 %, 4,8 → 4,2 %): con el previo,
+  la escala casi no se mueve y lo que suma es medir el objeto varias veces. Su valor principal es
+  la robustez: un objeto malo no rompe una focal bien medida.
+- La angosta de 60° tiene la cola más larga (P95 24–30 %): con focal larga, un error chico de
+  centro pesa más. Queda como límite conocido.
+
+**Hueco que se tapó.** «Calibrá, está a 2 metros» no corregía nada en la app: ningún estimador
+tenía `calibrar_distancia`. Ahora `app/distancia_viva.py`:
+- envuelve los estimadores continuo y preciso;
+- un objeto corrige el corrimiento;
+- un segundo a otra distancia ajusta las dos cosas, con el previo de la focal de «Cámara nueva»;
+- se guarda en el perfil;
+- la voz pide «alejate o acercate un paso y decime de nuevo la distancia».
+
+Límites:
+- Simulación, renders pinhole.
+- El ruido del objeto (0,3 px) y el previo (2 %) son supuestos razonables, no medidos.
+- Una semilla.
+
+Próximo paso: la prueba A con la ELP real (Bauty), que ya puede usar «calibrá, está a N metros»
+dos veces.
+
 ## 2026-11-22 (tarde) — T12/T13: autocalibración por movimiento, E3 real y etiquetas de la geometría
 
 Tarea: T12, T13. Persona/agente: Tomás / Claude Code. PC de escritorio. CREStereo continuo en
