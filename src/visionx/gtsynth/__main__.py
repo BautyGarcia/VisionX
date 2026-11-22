@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import dataclasses
+import json
 import sys
 from collections import Counter
 from itertools import islice
@@ -275,6 +276,37 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--cada", type=int, default=6, help="un cuadro de cada N")
     sc.add_argument("--escenas", nargs="+", default=None, help="solo estas escenas")
     sc.add_argument("--versiones", nargs="+", default=None, help="solo estas versiones (nombres)")
+    sc.add_argument(
+        "--red-camara",
+        default=None,
+        metavar="CARPETA",
+        help="E3: CSV de `camara_net evaluar`; agrega las versiones «red …»",
+    )
+    sc.add_argument(
+        "--focal-movimiento",
+        default=None,
+        metavar="JSON",
+        help="E3 con la focal de `gtsynth autocalib` (red + movimiento)",
+    )
+    sc.add_argument(
+        "--cuadros-red",
+        type=int,
+        default=8,
+        help="cuántos cuadros del principio del recorrido mira la red",
+    )
+    ae = sub.add_parser("autoetiquetas", help="etiquetas red + movimiento para reentrenar la red")
+    ae.add_argument("raiz", help="carpeta con las variantes (gt-sintetico-elp)")
+    ae.add_argument("--variante", default="hssd-recorridos-sorteada-b")
+    ae.add_argument("--red", default=str(ROOT / "outputs" / "camara_net" / "e2-v2" / "mejor.pt"))
+    ae.add_argument("--salida", default=str(ROOT / "outputs" / "autoetiquetas" / "b.csv"))
+    ae.add_argument("--limite", type=int, default=0, help="solo los primeros N recorridos")
+    ac = sub.add_parser("autocalib", help="autocalibración por movimiento contra la cámara real")
+    ac.add_argument("raiz", help="carpeta con las variantes video-*")
+    ac.add_argument("--salida", default=str(ROOT / "outputs" / "gtsynth" / "autocalib.json"))
+    ac.add_argument("--red-camara", default=None, metavar="CARPETA", help="CSV de la red")
+    ac.add_argument("--variantes", nargs="+", default=None)
+    ac.add_argument("--cuadros", type=int, default=60)
+    ac.add_argument("--saltos", type=int, nargs="+", default=[3, 6, 12])
     e3 = sub.add_parser("e3-simulado", help="E3 con una red de entrada simulada (focal ± σ)")
     e3.add_argument("carpeta", help="CSV por cámara de `evaluar --geometria vista`")
     e3.add_argument("--salida", default=str(ROOT / "outputs" / "gtsynth" / "e3-simulado.json"))
@@ -339,7 +371,22 @@ def main(argv: list[str] | None = None) -> int:
         from visionx.gtsynth.sin_calibrar import correr_todo
 
         correr_todo(args.raiz, args.salida, args.variantes, cada=args.cada,
-                    escenas=args.escenas, versiones=args.versiones)  # fmt: skip
+                    escenas=args.escenas, versiones=args.versiones, red=args.red_camara,
+                    cuadros_red=args.cuadros_red, focal_mov=args.focal_movimiento)  # fmt: skip
+        return 0
+    if args.cmd == "autoetiquetas":
+        from visionx.gtsynth.autoetiquetas import correr as autoetiquetas
+
+        q = autoetiquetas(args.raiz, args.variante, args.red, args.salida,
+                          limite=args.limite)  # fmt: skip
+        print(json.dumps(q, ensure_ascii=False))
+        return 0
+    if args.cmd == "autocalib":
+        from visionx.gtsynth.autocalib import correr_todo as autocalib
+
+        r = autocalib(args.raiz, args.salida, args.red_camara, args.variantes, args.cuadros,
+                      tuple(args.saltos))  # fmt: skip
+        print(json.dumps(r["resumen"], ensure_ascii=False))
         return 0
     if args.cmd == "e3-simulado":
         from visionx.gtsynth.e3_simulado import correr

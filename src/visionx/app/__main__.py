@@ -82,6 +82,7 @@ def perfil_de_camara(args: argparse.Namespace, cfg: dict[str, Any]):
         raise InvalidInput(f"--camara {nombre!r}: no hay perfil; hay {sorted(perfiles)}")
     perfil = perfiles[nombre]
     cfg.setdefault("modes", {})["camara_nivel"] = perfil.nivel
+    cfg["modes"]["camara_sigma_rel"] = perfil.sigma_rel()
     args.perfil_camara = perfil  # para el encabezado del stand
     print(f"cámara: {perfil.nombre} (perfil {perfil.id}, distancias {NIVEL_DICHO[perfil.nivel]})")
     return perfil
@@ -137,6 +138,16 @@ def build_source(args: argparse.Namespace, cfg: dict[str, Any]):
     else:
         raw = ReplaySource(args.fuente)
     source = RectifiedSource(raw, calibration)
+    # Cámaras dadas de alta con «Cámara nueva» (sin calibración propia): alinear los ojos en
+    # vivo y volver a alinear si se golpea (PLAN-CIERRE, mejora C). --alinear-en-vivo lo fuerza.
+    viva = getattr(args, "alinear_en_vivo", None)
+    if viva is None:
+        viva = perfil is not None and not perfil.calibracion and bool(perfil.extra.get("escala"))
+    if viva:
+        from visionx.app.alineacion_viva import FuenteAlineada
+
+        source = FuenteAlineada(source)
+        print("alineación en vivo: alinea al arrancar y vigila el desfase entre ojos")
     return source, source.geometry, None
 
 
@@ -709,6 +720,13 @@ def main(argv: list[str] | None = None) -> int:
         "--camara",
         default=None,
         help="perfil de configs/camaras (o locales, de «camara-nueva»): calibración y nivel",
+    )
+    p.add_argument(
+        "--alinear-en-vivo",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="alinear los ojos al arrancar y si la cámara se golpea (por defecto, con perfiles "
+        "de «camara-nueva»)",
     )
     p.add_argument("--sin-ventana", action="store_true")
     p.add_argument("--voz", action="store_true", help="Piper + micrófono con espacio")

@@ -1,15 +1,16 @@
 # Tareas de Bauty: plug and play (desde el 20/11)
 
-> **Primer paso, antes que nada (21/11):**
-> 1. `git pull` de `main`.
-> 2. **Bajá a tu disco todo lo que puedas del Drive `VisionX-Personal/`**, en el orden de la
->    [sección 0.1](#01-bajar-el-drive-a-tu-disco-importante). Cuánto, lo decidís vos según tu
->    espacio.
-> 3. **Avisale a Tomás qué carpetas bajaste completas.** Él las borra del Drive y sube lo nuevo
->    (la tanda de entrenamiento de la noche, las disparidades de CREStereo y las escenas de
->    evaluación nuevas). El Drive está en 192 de 200 GB: sin este paso no entra nada más.
+> **Desde el 22/11 manda [PLAN-CIERRE](PLAN-CIERRE.md)**: evaluación del proyecto, qué hace
+> cada uno y calendario hasta la entrega. Tus tareas están en su sección 4 («Bauty»):
+> 1. **A:** plug and play real con la ELP (guía en la sección 6 de PLAN-CIERRE).
+> 2. **D:** entrenar la v3 con las etiquetas de la geometría ([RED-ENTRADA](RED-ENTRADA.md)).
+> 3. Video real girando la ELP para la v3.
+> 4. U-Net con cámaras variadas y el factor de b en el checkpoint de la red de entrada.
+> 5. Todas las pruebas con cámara (B, C y G de Tomás, D435i, prueba con personas).
+> 6. Ensayo de la expo en la Mac.
 >
-> Después seguí con las tareas en orden (sección 1 en adelante).
+> Lo de abajo queda como referencia (el Drive ya se bajó el 21/11; la red de entrada v1/v2 se
+> integró en #90).
 
 Para Bauty y su Claude. Se puede usar tal cual como pedido:
 

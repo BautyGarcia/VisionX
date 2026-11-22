@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 
 import cv2
 import numpy as np
@@ -251,6 +252,40 @@ def test_e3_simulado_suma_la_duda_de_la_camara(tmp_path):
     assert 5.0 < diez["error_mediano_pct"] < 8.0  # mediana de |N(0, 10 %)| ≈ 6,7 %
 
 
+def test_e3_lee_la_red_y_arma_la_camara_que_supone_el_sistema(tmp_path):
+    """La red da log f, cx y cy por cuadro; el sistema combina los primeros y arma su geometría."""
+    import math
+
+    from visionx.gtsynth.sin_calibrar import camara_de_la_red, geometria_red, leer_red
+    from visionx.shared.geometry import StereoGeometry
+
+    class V:
+        def __init__(self, c):
+            self.carpeta = c
+
+    vs = [V(tmp_path / f"c{i}") for i in range(10)]
+    campos = ["carpeta", "grupo", "ancho", "alto"] + [
+        f"{p}_{n}" for p in ("y", "mu", "b") for n in ("log_f", "cx", "cy", "k1", "k2")
+    ]
+    with open(tmp_path / "video-x.csv", "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=campos)
+        w.writeheader()
+        for i, v in enumerate(vs):  # los 8 primeros dicen f = 0,5·ancho; los demás, otra cosa
+            lf = math.log(0.5) if i < 8 else 0.0
+            w.writerow({"carpeta": str(v.carpeta), "grupo": "g", "ancho": 640, "alto": 400,
+                        **{f"{p}_{n}": 0.0 for p in ("y", "mu") for n in ("cx", "cy", "k1", "k2")},
+                        "y_log_f": 0.0, "mu_log_f": lf,
+                        **{f"b_{n}": 0.01 for n in ("log_f", "cx", "cy", "k1", "k2")}})  # fmt: skip
+    cam = camara_de_la_red(vs, leer_red(tmp_path), cuadros=8)
+    assert cam["cuadros"] == 8 and math.isclose(cam["fx"], 320.0, rel_tol=1e-6)
+    assert math.isclose(cam["cx"], 320.0) and math.isclose(cam["cy"], 200.0)
+    assert math.isclose(cam["b_log_f"], 0.01 / math.sqrt(8), rel_tol=1e-6)
+    g = StereoGeometry(320, 200, 999.0, 999.0, 1.0, 1.0, 0.2)  # mitad de resolución
+    gr = geometria_red(g, cam, 0.06)
+    assert (gr.fx, gr.cx, gr.cy, gr.baseline_m) == (160.0, 160.0, 100.0, 0.06)
+    assert camara_de_la_red([V(tmp_path / "otra")], leer_red(tmp_path)) is None
+
+
 def test_modo_de_distancia_conocida():
     from visionx.gtsynth.evaluar import modo_distancia
 
@@ -332,3 +367,31 @@ def test_corrimiento_que_no_deja_pixeles_marca_la_profundidad_no_medible():
     assert ok.status is DepthStatus.VALID and ok.valid_mask.all()
     nada = con_corrimiento(base, 12.0, 30.0)  # 10 − 12 < 0 en todos los píxeles («distinta»)
     assert nada.status is DepthStatus.UNMEASURABLE and not nada.valid_mask.any() and nada.reason
+
+
+def test_autocalibracion_encuentra_la_focal_con_puntos_sinteticos():
+    """F de cuadros que giran y avanzan: el costo de Mendonça-Cipolla es mínimo en la focal real."""
+    import cv2
+
+    from visionx.app.autocalibracion import FocalMedida, _mejor_focal, combinar
+
+    rng = np.random.default_rng(0)
+    f, cx, cy = 500.0, 320.0, 240.0
+    k = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+    pts = rng.uniform([-3, -2, 2], [3, 2, 8], (300, 3))
+    fs = []
+    for j in range(8):
+        r, _ = cv2.Rodrigues(np.array([0.02 * j, 0.15 + 0.05 * j, 0.01]))
+        t = np.array([0.1, 0.0, 0.3 + 0.05 * j])
+        p1 = (k @ pts.T).T
+        p2 = (k @ (r @ pts.T + t[:, None])).T
+        p1, p2 = p1[:, :2] / p1[:, 2:], p2[:, :2] / p2[:, 2:]
+        m, _ = cv2.findFundamentalMat(p1, p2, cv2.FM_8POINT)
+        fs.append(m / np.linalg.norm(m))
+    for inicio in (0.8, 1.25):
+        assert abs(_mejor_focal(cx, cy, fs, f * inicio, 2.0) / f - 1) < 0.01
+    # Combinar: la medida (σ 1 %) pesa mucho más que la red (σ 10 %).
+    lf, s = combinar(math.log(550.0), 0.10, FocalMedida(500.0, 0.01, 8))
+    assert abs(math.exp(lf) / 500 - 1) < 0.01 and s < 0.01
+    lf, s = combinar(math.log(550.0), 0.10, FocalMedida(None, None, 0, "poco movimiento"))
+    assert lf == math.log(550.0) and s == 0.10

@@ -38,6 +38,10 @@ FORMATOS = ("sbs", "realsense", "dos-dispositivos")
 # precisa: calibración propia o de fábrica. aproximada: hoja de datos o estimada con buena
 # confianza. sin-estimar: valores por defecto, todavía no se estimó la cámara.
 NIVELES = ("precisa", "aproximada", "sin-estimar")
+# Duda de la escala de una cámara dada de alta (ver `PerfilCamara.sigma_rel`).
+SIGMA_ESCALA_OBJETO = 0.03
+SIGMA_SEPARACION = 0.01
+SIGMA_FOCAL_SIN_MEDIR = 0.10  # focal solo de la red (o por defecto), sin movimiento
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +63,24 @@ class PerfilCamara:
     k1: float = 0.0
     k2: float = 0.0
     extra: dict[str, Any] = field(default_factory=dict)  # lo que agregue la pantalla de alta
+
+    def sigma_rel(self) -> float:
+        """Duda relativa (1 σ) que agrega la cámara a cada distancia, aparte de la U-Net.
+
+        Calibrada (tablero o fábrica): 0. Dada de alta con «Cámara nueva»: con la separación
+        dicha, la escala depende de la focal medida (`extra.sigma_focal`) y de la separación
+        (±1 %, hoja de datos o regla); con un objeto a distancia conocida, la escala la fija el
+        objeto (±3 %: lo que varió entre recorridos en la simulación, BITACORA 21/11).
+        """
+        e = self.extra or {}
+        escala = e.get("escala")
+        if escala not in ("separacion", "distancia"):
+            return 0.0
+        if escala == "distancia":
+            return SIGMA_ESCALA_OBJETO
+        f = e.get("sigma_focal")
+        f = SIGMA_FOCAL_SIN_MEDIR if f is None else float(f)
+        return math.hypot(f, SIGMA_SEPARACION)
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", self.id):

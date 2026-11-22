@@ -107,6 +107,10 @@ class ModeSettings:
     # Nivel de la calibración de la cámara (perfil, `--camara`; PLUG-AND-PLAY sección 6):
     # «aproximada» nunca deja decir «precisa»; «sin-estimar» (sin escala) no deja decir metros.
     camara_nivel: str = "precisa"
+    # Duda relativa (1 σ) de la cámara y su escala, aparte de la de la U-Net (PLUG-AND-PLAY,
+    # sección 6): la de la focal medida con el movimiento y la de la escala (separación dicha u
+    # objeto). Se suma en cuadratura al intervalo antes de elegir el nivel. 0 = cámara calibrada.
+    camara_sigma_rel: float = 0.0
     arrive_m: float = 0.6  # al frente y a esta distancia o menos: "llegaste"
     # La búsqueda termina cuando la persona lo dice («la encontré», «terminá»), no sola: al
     # llegar avisa y se queda callada; si se aleja más de arrive_m + leave_margin_m, vuelve a
@@ -425,10 +429,14 @@ def measure(obj: SpatialObject | None, s: ModeSettings) -> Measure:
         return Measure(None, "sin-medida")
     if s.camara_nivel == "sin-estimar":  # cámara sin escala: ningún número
         return Measure(None, "sin-escala")
-    if obj.z_bajo_m is not None:
+    camara = 1.645 * s.camara_sigma_rel  # medio ancho del 90 % que agrega la cámara
+    if obj.z_bajo_m is not None or camara > 0:
         from visionx.shared.uncertainty import relative_width
 
-        width = relative_width(obj.z_m, obj.z_bajo_m, obj.z_alto_m)
+        width = 0.0
+        if obj.z_bajo_m is not None:
+            width = relative_width(obj.z_m, obj.z_bajo_m, obj.z_alto_m)
+        width = math.hypot(width, camara)  # U-Net y cámara son independientes
         if width > s.approx_rel:
             return Measure(None, "no-segura")
         certainty = "aproximada" if width > s.precise_rel else "precisa"

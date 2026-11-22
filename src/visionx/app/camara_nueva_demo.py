@@ -101,6 +101,7 @@ def _metricas(canvas, t, alta: AltaCamara, x: int, y: int, w: int, h: int, fps: 
         ("Desfase de filas", desfase),
         ("Corrige", " · ".join(corr) if corr else "—"),
         ("Tiempos", f"estimar {_ms(e.tiempos_ms.get('estimar'))} · "
+                    f"medir {_ms(e.tiempos_ms.get('medir'))} · "
                     f"alinear {_ms(e.tiempos_ms.get('alinear'))}"),
     ]  # fmt: skip
     for k, (etiqueta, valor) in enumerate(filas):
@@ -125,7 +126,8 @@ def render_alta(alta: AltaCamara, izq: np.ndarray | None, fps: float | None = No
     actual = ORDEN.index(e.paso)
     yy = y + 56
     for k, paso in enumerate(ORDEN):
-        if e.conocida and paso in (Paso.MIRAR, Paso.ESTIMAR, Paso.ALINEAR, Paso.ESCALA):
+        salteables = (Paso.MIRAR, Paso.ESTIMAR, Paso.MEDIR, Paso.ALINEAR, Paso.ESCALA)
+        if e.conocida and paso in salteables:
             estado, color = "salteado", FAINT
         elif k < actual or e.paso is Paso.LISTO:
             estado, color = "hecho", OK
@@ -138,7 +140,7 @@ def render_alta(alta: AltaCamara, izq: np.ndarray | None, fps: float | None = No
         detalle = _detalle(alta, paso)
         if detalle:
             t.add(detalle, (x + 64, yy + 32), 16, MUTED)
-        yy += 78
+        yy += 70
 
     # Imagen en vivo y antes / después
     px, pw = 584, W - 584 - 32
@@ -200,11 +202,24 @@ def _detalle(alta: AltaCamara, paso: Paso) -> str:
     if paso is Paso.RECONOCER and e.dispositivo:
         return "Conocida: perfil cargado" if e.conocida else "No está en los perfiles"
     if paso is Paso.MIRAR and not e.conocida:
+        if e.cuadros_mov_necesarios:
+            pct = min(100, round(100 * e.cuadros_mov / e.cuadros_mov_necesarios))
+            return f"{pct} % del giro · {e.pares} de {e.pares_necesarios} vistas"
         return f"{e.pares} de {e.pares_necesarios} vistas distintas"
+    if paso is Paso.MEDIR:
+        if e.cuadros_mov_necesarios == 0:
+            return "Sin autocalibración"
+        if e.sigma_focal is not None:
+            m = e.medida
+            fuente = "red + movimiento" if m is not None and m.ok else "solo la red"
+            return f"Focal ±{100 * 1.645 * e.sigma_focal:.0f} % · {fuente}".replace(".", ",")
     if paso is Paso.ESTIMAR and e.estimacion is not None:
         est = e.estimacion
         if est.confianza <= 0:
             return "Sin red entrenada: valor promedio (90°)"
+        if est.sigma_log_f:
+            margen = f"{100 * 1.645 * est.sigma_log_f:.0f}"
+            return f"Red: {est.campo_horizontal_deg:.0f}° ± {margen} %"
         return f"{est.campo_horizontal_deg:.0f}° · confianza {est.confianza:.0%}"
     if paso is Paso.ALINEAR and e.filas_despues is not None:
         from visionx.gtsynth.mosaico import PARAMETROS
@@ -213,7 +228,7 @@ def _detalle(alta: AltaCamara, paso: Paso) -> str:
         aplica = " · ".join(nombres) if nombres else "nada que corregir"
         return f"Corrige: {aplica}"
     if paso is Paso.ESCALA and e.paso is Paso.ESCALA:
-        return "Decí los centímetros entre lentes o «saltear»"
+        return "Centímetros entre lentes, «está a N metros» o «saltear»"
     return ""
 
 
@@ -305,8 +320,21 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
     oidos: list[str] = []  # textos reconocidos, los consume el lazo principal
     grabando = False
 
+    estimador = _estimador(args.red)
+    autocalibrar = None
+    if not args.sin_movimiento:
+        from visionx.app.autocalibracion import focal_por_movimiento
+
+        autocalibrar = focal_por_movimiento
+    # Los recorridos simulados ya vienen espaciados: cada cuadro cuenta.
+    intervalo = 0.0 if isinstance(fuente, FuenteSimulada) else 0.1
+
     def nueva() -> AltaCamara:
-        alta = AltaCamara(cargar_perfiles(), pares_necesarios=args.pares)
+        alta = AltaCamara(
+            cargar_perfiles(), estimador=estimador, pares_necesarios=args.pares,
+            autocalibrar=autocalibrar, cuadros_movimiento=args.cuadros_movimiento,
+            intervalo_movimiento_s=intervalo,
+        )  # fmt: skip
         formato = "realsense" if isinstance(fuente, FuenteRealSense) else "sbs"
         for f in alta.conectar(args.dispositivo or fuente.nombre, formato, fuente.resolucion):
             decir(f)
@@ -327,8 +355,10 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
         if alta.estado.paso is Paso.ESCALA and args.escala is not None:
             t_escala = t_escala or time.monotonic()
             if time.monotonic() - t_escala > 4.0:  # dejar ver el antes/después
-                frases = (alta.saltear_escala() if args.escala == "saltear"
-                          else alta.separacion(float(args.escala) / 100.0))  # fmt: skip
+                try:  # «6» = centímetros entre lentes; si no, como si se dijera
+                    frases = alta.separacion(float(args.escala.replace(",", ".")) / 100.0)
+                except ValueError:
+                    frases = alta.responder(args.escala)
                 for f in frases:
                     decir(f)
         ahora = time.monotonic()
@@ -389,6 +419,23 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
     return 0
 
 
+def _estimador(red: str | None):
+    """La red de entrada si hay checkpoint (y su código); si no, el valor por defecto."""
+    if red == "ninguna":
+        return None
+    from visionx.app.estimador_red import EstimadorRed, buscar_checkpoint
+
+    ruta = Path(red) if red else buscar_checkpoint()
+    if ruta is None or not ruta.exists():
+        print("  sin checkpoint de la red de entrada: uso el valor por defecto (90°)")
+        return None
+    try:
+        return EstimadorRed(ruta)
+    except ImportError as exc:  # falta `depth.camara_net` (#90) o torch
+        print(f"  no pude cargar la red de entrada ({exc}): uso el valor por defecto")
+        return None
+
+
 def _oido(cfg: dict):
     """Micrófono con botón (espacio) y voz a texto de la app, para responder la escala."""
     from visionx.voice.engines import PushToTalk, VoiceSettings, build_transcriber
@@ -432,7 +479,15 @@ def register(sub) -> None:
     p.add_argument("--raiz", default=None, help="carpeta gt-video (por defecto data/gt-video)")
     p.add_argument("--dispositivo", default=None, help="nombre a reconocer (por defecto, el real)")
     p.add_argument("--pares", type=int, default=8, help="vistas distintas que junta")
-    p.add_argument("--escala", default=None, help="centímetros entre lentes, o «saltear»")
+    p.add_argument("--escala", default=None,
+                   help="centímetros entre lentes, «está a 2 metros» o «saltear»")  # fmt: skip
+    p.add_argument("--red", default=None,
+                   help="checkpoint de la red de entrada (por defecto outputs/camara_net/e2-v2; "
+                   "«ninguna» = valor por defecto)")  # fmt: skip
+    p.add_argument("--sin-movimiento", action="store_true",
+                   help="no medir la lente con el movimiento (solo la red)")  # fmt: skip
+    p.add_argument("--cuadros-movimiento", type=int, default=60,
+                   help="cuadros del giro para medir la lente")  # fmt: skip
     p.add_argument("--voz", action="store_true", help="decir los pasos en voz alta")
     p.add_argument("--sin-ventana", action="store_true")
     p.add_argument("--captura", help="PNG de la pantalla al terminar")
