@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import cv2
 import numpy as np
@@ -166,7 +166,10 @@ def combinar(log_f_red: float, sigma_red: float, medida: FocalMedida) -> tuple[f
 # par de cuadros por mínimos cuadrados (8 puntos, lineal) y se mide cuán esencial es. La
 # respuesta es el (f, k1) que deja todas las E más esenciales.
 
-K1_RANGO = (-0.45, 0.15)
+K1_RANGO = (-0.45, 0.02)  # barril (las baratas); cojín casi nunca y se confunde con la focal
+# Con una k1 más chica que esto la lente no se nota: la focal pinhole (F por RANSAC) es más precisa
+# que la conjunta (gtsynth autocalib-lente: 0,6 % contra 1,8 % de mediana en cámaras sin lente).
+K1_SIN_LENTE = -0.03
 
 
 def emparejar(
@@ -260,13 +263,17 @@ def _mejor_lente(pts: _Puntos, cx: float, cy: float, f0: float, rango_f: float,
     lf0, lr = math.log(f0), math.log(rango_f)
     lfs = np.linspace(lf0 - lr, lf0 + lr, nf)
     k1s = np.linspace(rango_k1[0], rango_k1[1], nk)
+    mejor = (math.inf, lf0, 0.0)
     for _ in range(vueltas):
         cs = np.array([[costo_lente(math.exp(lf), k, pts, cx, cy) for k in k1s] for lf in lfs])
         i, j = np.unravel_index(int(np.argmin(cs)), cs.shape)
+        if cs[i, j] <= mejor[0]:
+            mejor = (float(cs[i, j]), float(lfs[i]), float(k1s[j]))
         dlf, dk = (lfs[1] - lfs[0]), (k1s[1] - k1s[0])
         lfs = np.linspace(lfs[i] - dlf, lfs[i] + dlf, 9)
-        k1s = np.linspace(k1s[j] - dk, k1s[j] + dk, 9)
-    return math.exp(float(lfs[4])), float(k1s[4])
+        # sin salirse del rango de k1 (antes el refinamiento llegaba a +0,21)
+        k1s = np.linspace(max(k1s[j] - dk, rango_k1[0]), min(k1s[j] + dk, rango_k1[1]), 9)
+    return math.exp(mejor[1]), mejor[2]
 
 
 def lente_por_movimiento(
@@ -303,10 +310,24 @@ def lente_por_movimiento(
     logs = []
     for _ in range(remuestreos):
         sub = pts.subconjunto(rng.integers(0, len(pares), len(pares)))
-        fb, _ = _mejor_lente(sub, cxq, cyq, f, 1.1, (k1 - 0.06, k1 + 0.06), nf=9, nk=7,
-                             vueltas=2)  # fmt: skip
+        rk = (max(k1 - 0.06, rango_k1[0]), min(k1 + 0.06, rango_k1[1]))
+        fb, _ = _mejor_lente(sub, cxq, cyq, f, 1.1, rk, nf=9, nk=7, vueltas=2)
         logs.append(math.log(fb))
     sigma = FACTOR_SIGMA * float(np.std(logs)) if logs else None
     if abs(math.log(f / f0q)) > 0.98 * math.log(rango):
         return FocalMedida(None, sigma, len(pares), "la focal cae en el borde de la búsqueda")
+    if k1 > K1_SIN_LENTE:  # sin lente que se note: mejor la focal pinhole (y k1 = 0 exacta)
+        m = focal_por_movimiento(
+            cuadros,
+            cx,
+            cy,
+            f_inicial,
+            saltos=saltos,
+            rango=rango,
+            min_pares=min_pares,
+            remuestreos=remuestreos,
+            semilla=semilla,
+        )
+        if m.ok:
+            return replace(m, k1=0.0)
     return FocalMedida(f / q, sigma, len(pares), k1=k1)

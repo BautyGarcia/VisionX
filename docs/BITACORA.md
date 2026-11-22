@@ -40,6 +40,76 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-22 (madrugada del 23) — T12 (G): la autocalibración por movimiento mide también la lente
+
+Tarea: T12, mejora G de PLAN-CIERRE. Persona/agente: Tomás / Claude Code. PC de escritorio
+(CPU), red de entrada `e2-v2`. Crudos en `outputs/gtsynth/autocalib/lente*.json` (fuera de Git).
+
+**El problema.** La autocalibración por movimiento suponía una cámara pinhole. Las cámaras
+baratas tienen distorsión de barril. Sin modelarla, la focal sale mal:
+- k1 = −0,2 en la D435 de office_2: +54,7 %;
+- k1 = −0,12 a −0,2: entre 20 y 36 %.
+
+**El método.** `lente_por_movimiento` (`app/autocalibracion.py`) busca focal y k1 juntas.
+- Para cada candidato (f, k1), los puntos emparejados se llevan a coordenadas sin distorsión.
+- Para cada par de cuadros, E sale por 8 puntos lineal.
+- El costo es cuán poco «esencial» es cada E, (σ1−σ2)/σ1, igual que en la versión pinhole.
+- Se usa una grilla en (log f, k1) con refinamientos.
+- La duda sale de remuestrear pares.
+
+**La prueba.** `gtsynth autocalib-lente`:
+- las 9 cámaras × 8 escenas de `gt-video` (60 cuadros por recorrido);
+- cada recorrido visto con una lente simulada (el mismo remuestreo que usa la red para
+  entrenar), k1 entre 0 y −0,3, la más fuerte que entra en el lienzo;
+- ambos métodos parten de lo que dice la red mirando los cuadros distorsionados.
+
+**Primera corrida: dos fallas.**
+
+1. En 11 de 71 recorridos el método se inventó una lente **de cojín** (k1 positiva, hasta
+   +0,21), y la focal salió 10–69 % mal.
+   - Era un bug: el refinamiento de la grilla se salía del rango de k1.
+   - Además, el cojín casi no existe en cámaras baratas y se confunde con la focal.
+   - Arreglo: k1 entre −0,45 y +0,02, y el refinamiento no sale de ahí.
+2. En cámaras **sin** lente, el método conjunto (1,8 %) era peor que el pinhole (0,6 %).
+   - Arreglo: si la k1 medida es más débil que −0,03, se usa la focal pinhole y k1 = 0.
+
+**Resultado** (error de focal; la primera corrida con los 10 recorridos que fallaban
+repetidos con los arreglos):
+
+| Recorridos | n | Pinhole (antes) | Con lente (ahora) |
+|---|---|---|---|
+| Todos | 71 | 7,1 % (P90 20,8) | **1,1 %** (P90 4,5) |
+| Lente fuerte (k1 ≤ −0,1) | 11 | 23,5 % | **1,4 %** |
+| Lente leve (k1 = −0,05) | 32 | 8,2 % | **1,5 %** |
+| Sin lente | 28 | 0,64 % | 0,64 % |
+
+- La k1 medida erra 0,006 de mediana.
+- Quedan 7 de 71 por encima de 5 %. Los dos peores:
+  - la cámara de 60° en frl_apartment_3: 35 %, k1 pegada al borde +0,02;
+  - la OAK-D en 102343992: 60 %, poco movimiento útil; la duda informada sí es grande, 12 %.
+- **Cobertura de la duda: 72 %** (la meta es 90 %). La duda informada es optimista. Un
+  recorrido malo puede pasar como bueno, y la app debería ser más prudente.
+- Hay una corrida completa con el código final en curso (`lente-v2.json`). Los números de
+  arriba se reemplazan cuando termine.
+
+**En la app.** «Cámara nueva» ya usa `lente_por_movimiento`.
+- Al terminar el giro dice «Listo el giro. Estoy midiendo la lente: tarda unos segundos.» y
+  mide en el cuadro siguiente, para que la voz no quede trabada.
+- Guarda la k1 medida en el perfil.
+- Usa el modo `rapido`: la mitad de puntos y una grilla más gruesa, unas 3 veces menos tiempo.
+- `camara_nueva_demo --lente -0.2` simula una cámara con lente.
+- Pruebas end-to-end en simulación (antes de los dos arreglos):
+  - ZED Mini con −0,2: 102° medidos, el valor real es 102°;
+  - D435 hotel_0 con −0,15: la k1 exacta, pero la focal ~6 % corrida y la duda 6,9 %, así que
+    la app dijo «aproximadas». El modo rápido pierde precisión: falta ajustarlo.
+
+**Qué falta.**
+- Probar G en la ELP real (Bauty, PLAN-CIERRE §6). Comparar la focal y la k1 con las del
+  tablero.
+- Ajustar la cobertura de la duda.
+- Ajustar el modo rápido.
+- Solo se mide k1 (k2 = 0). El centro sigue saliendo de la red.
+
 ## 2026-11-22 (noche) — T12/T13: por objeto en modo preciso con la cámara estimada, y el objeto a dos distancias
 
 Tarea: T12, T13. Persona/agente: Tomás / Claude Code. PC de escritorio, CREStereo preciso en la
