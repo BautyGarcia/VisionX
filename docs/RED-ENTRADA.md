@@ -77,3 +77,47 @@ red así acierta sin necesidad de moverse justo donde hoy falla.
    etiquetados por el movimiento, sin tablero.
 
 Cada paso entra en la tabla de versiones con el mismo protocolo.
+
+### Etiquetas generadas (22/11, PC de Tomás)
+
+`gtsynth autoetiquetas` sobre los 366 recorridos de `hssd-recorridos-sorteada-b` (30 cuadros
+cada uno, cámara sorteada, casas de train). La red v2 da el punto de partida; el movimiento mide
+la focal; nunca se mira la cámara real (que se guarda al lado solo para medir):
+
+| | Recorridos | Cuadros | Error de la etiqueta (mediana / P90) | La red sola, en esos mismos |
+|---|---:|---:|---:|---:|
+| Todas | 366 | 10 980 | 3,5 % / 20 % | 10,1 % |
+| **Duda ≤ 3 %** | **97** | **2910** | **0,7 % / 2,6 %** | 9,7 % |
+| Duda ≤ 5 % | 166 | 4980 | 1,2 % / 5,5 % | 9,5 % |
+
+La duda separa bien: las aceptadas tienen 14 veces menos error que la red, y el filtro no se
+queda solo con las fáciles (la red erraba lo mismo en esas). Solo pasa el 26 % porque estos
+recorridos tienen 30 cuadros, la mitad de lo que usa la autocalibración en la app.
+
+Archivos en el Drive `VisionX-Personal/autoetiquetas/`:
+- `b-vistas.csv` (duda ≤ 3 %) y `b-vistas-5pct.csv` (≤ 5 %): una fila por cuadro.
+  - `vista`: ruta relativa a `gt-sintetico-elp/`.
+  - `log_f`: la etiqueta, igual que `camara_net`: `log(fx / ancho)` de la imagen nominal.
+  - `sigma_log_f`.
+  - `fx_real`: solo para el control.
+- `b.csv` / `b.json`: por recorrido, con la calidad.
+
+### Receta para la v3-auto (Bauty, en la Mac)
+
+1. **Partir de la v2** (`e2-v2/mejor.pt`), con un learning rate bajo: 1e-4 la cabeza y 3e-5 el
+   tronco. Unas 10 épocas.
+2. **Datos:**
+   - los de la v2, para que no olvide;
+   - los cuadros de `b-vistas.csv`, con la etiqueta de la geometría.
+   - En `camara_net.datos.Item`, `fx = exp(log_f) · ancho` en vez del `fx` del render.
+   - Centro = el medio de la imagen, porque el movimiento no lo mide. En la simulación es el
+     real, pero así no se usa nada que no daría una cámara real.
+   - Con eso, el zoom y la lente sorteada de siempre generan etiquetas coherentes solas.
+3. **Pérdida:**
+   - en esos cuadros, solo la de la focal (NLL de Laplace de `log_f`), porque centro y lente
+     no se midieron;
+   - en el resto, la de siempre.
+4. **Control:** lo mismo con `fx_real` como etiqueta (el techo).
+5. **Evaluar** (Tomás, en la PC): `camara_net evaluar` con las 8 escenas, 9 cámaras y val, más
+   la E3. Si la v3-auto llega cerca del control y baja de la v2 en HSSD, queda demostrado que la
+   geometría le enseña a la red sin calibrar nada.

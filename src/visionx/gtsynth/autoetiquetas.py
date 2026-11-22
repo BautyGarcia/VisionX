@@ -81,6 +81,34 @@ def calidad(filas: list[dict], sigma_max: float = 0.03) -> dict:
     return out
 
 
+VISTAS = ("vista", "recorrido", "ancho", "log_f", "sigma_log_f", "fx_etiqueta", "fx_real")
+
+
+def exportar(csv_recorridos, raiz, salida, sigma_max: float = 0.03) -> int:
+    """Una fila por cuadro, con la ruta relativa a `raiz`, para entrenar en otra máquina.
+
+    `log_f` = log(fx / ancho) de la imagen nominal, la misma etiqueta que `camara_net`. Solo
+    los recorridos con duda ≤ `sigma_max`. `fx_real` va para el control (no para entrenar).
+    """
+    raiz = Path(raiz)
+    with open(csv_recorridos, encoding="utf-8", newline="") as fh:
+        filas = [f for f in csv.DictReader(fh) if float(f["sigma_comb"]) <= sigma_max]
+    n = 0
+    with open(salida, "w", encoding="utf-8", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=VISTAS)
+        w.writeheader()
+        for f in filas:
+            ancho, fx = int(f["ancho"]), float(f["fx_comb"])
+            clave = f"{f['variante']}/{f['escena']}/r{f['recorrido']}"
+            for c in f["carpetas"].split(";"):
+                w.writerow({"vista": Path(c).relative_to(raiz).as_posix(), "recorrido": clave,
+                            "ancho": ancho, "log_f": round(math.log(fx / ancho), 6),
+                            "sigma_log_f": f["sigma_comb"], "fx_etiqueta": f["fx_comb"],
+                            "fx_real": f["fx_real"]})  # fmt: skip
+                n += 1
+    return n
+
+
 def correr(raiz, variante: str, red: str, salida, particion: str | None = "train",
            limite: int = 0) -> dict:  # fmt: skip
     from visionx.app.estimador_red import EstimadorRed
@@ -112,5 +140,6 @@ def correr(raiz, variante: str, red: str, salida, particion: str | None = "train
             if k % 10 == 0:
                 print(f"{k + 1}/{len(claves)} ({time.time() - t0:.0f} s)", flush=True)
     q = calidad(filas)
+    q["vistas_exportadas"] = exportar(salida, raiz, salida.with_name(salida.stem + "-vistas.csv"))
     salida.with_suffix(".json").write_text(json.dumps(q, indent=1, ensure_ascii=False), "utf-8")
     return q
