@@ -240,3 +240,57 @@ def test_un_objeto_a_distancia_conocida_da_la_separacion():
     b = alta.estado.perfil.separacion_m
     assert alta.estado.escala == "distancia" and b == pytest.approx(2.0 * 12.0 / fx, rel=0.08)
     assert any("centímetros" in f for f in frases)
+
+
+def test_alineacion_en_vivo_alinea_al_arrancar_y_se_realinea_si_se_golpea():
+    from visionx.app.alineacion_viva import FuenteAlineada
+    from visionx.shared.contracts import StereoFrame
+
+    class Fuente:
+        geometry = None
+
+        def __init__(self):
+            self.k, self.dy = 0, 2.0
+
+        def read(self):
+            self.k += 1
+            izq, der = _par(100 + self.k, dy=self.dy)
+            return StereoFrame(
+                "s",
+                self.k,
+                izq,
+                der,
+                received_ns=self.k,
+                rectified=True,
+                calibration_id="c",
+                geometry_id="g",
+            )
+
+        def close(self):
+            pass
+
+    def alinear(pares, geometria):  # «clásico»: mide el desfase y lo deshace
+        dy = float(np.median(medir_filas(*pares[0]).dy))
+        h, w = pares[0][0].shape[:2]
+        mx, my = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+        return (mx, my + dy), ("pitch",)
+
+    t = itertools.count(0.0, 1.0)
+    f = Fuente()
+    viva = FuenteAlineada(f, pares=3, cada_s=2.0, seguidas=2, en_hilo=False,
+                          reloj=lambda: next(t), alinear=alinear)  # fmt: skip
+    for _ in range(3):
+        viva.read()
+    assert viva.estado == "alineada" and viva.ultimo_desfase_px < 0.75
+    for _ in range(4):  # en uso: mide y no pasa nada
+        viva.read()
+    assert viva.realineaciones == 0
+    f.dy = 5.0  # golpe: el ojo derecho se corrió 3 px más
+    for _ in range(6):
+        viva.read()
+    assert viva.realineaciones == 1 and viva.estado in ("realineando", "alineada")
+    for _ in range(6):
+        viva.read()
+    assert viva.estado == "alineada" and viva.ultimo_desfase_px < 0.75
+    eventos = [h["evento"] for h in viva.historial]
+    assert eventos.count("alineada") == 2 and "desalineada" in eventos

@@ -2058,3 +2058,37 @@ def test_sin_verlo_recuerda_que_sigue_buscando():
     assert texts(says) == ["Sigo buscando taza."] and not done
     says, _ = h.tick(c, View(joint(15.0, 150, [])), int(15.0 * SEC))
     assert texts(says) == []  # cada 10 s, no en cada cuadro
+
+
+def test_la_duda_de_la_camara_se_suma_a_la_de_la_unet():
+    """Con una cámara dada de alta, su duda baja el nivel: la voz no dice «precisa» de más."""
+    import dataclasses
+
+    def obj(z, bajo=None, alto=None):
+        return SpatialObject("s", 0, 0, None, "cup", "d", 0.0, 0.0, z, 0.01, 1.0, 0.9, SPEAK,
+                             z_bajo_m=bajo, z_alto_m=alto)  # fmt: skip
+
+    unet = obj(2.0, 1.9, 2.1)  # medio ancho del 5 %: precisa con una cámara calibrada
+    assert measure(unet, S).certainty == "precisa"
+    s4 = dataclasses.replace(S, camara_sigma_rel=0.04)  # 6,6 % de la cámara → 8,3 % en total
+    assert measure(unet, s4).certainty == "precisa"
+    s8 = dataclasses.replace(S, camara_sigma_rel=0.08)  # 13 % → 14 %: aproximada
+    assert measure(unet, s8).approximate
+    s20 = dataclasses.replace(S, camara_sigma_rel=0.2)  # 33 %: no da un número
+    assert measure(unet, s20).reason == "no-segura"
+    assert measure(obj(2.0), s8).approximate  # sin intervalo de la U-Net, la cámara sola
+
+
+def test_la_duda_de_un_perfil_dado_de_alta():
+    from visionx.camera.perfiles import PerfilCamara
+
+    def perfil(**extra):
+        return PerfilCamara(id="x", nombre="x", formato="sbs", resolucion=(640, 360),
+                            campo_horizontal_deg=90.0, separacion_m=0.06, nivel="precisa",
+                            extra=extra)  # fmt: skip
+
+    assert perfil().sigma_rel() == 0.0  # calibrada / de fábrica
+    assert perfil(escala="distancia").sigma_rel() == pytest.approx(0.03)
+    assert perfil(escala="separacion", sigma_focal=0.01).sigma_rel() == pytest.approx(0.0141, 1e-2)
+    assert perfil(escala="separacion").sigma_rel() > 0.09  # focal sin medir con el movimiento
+    assert perfil(escala="salteada").sigma_rel() == 0.0  # sin escala no hay metros igual

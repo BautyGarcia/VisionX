@@ -294,6 +294,12 @@ def main(argv: list[str] | None = None) -> int:
         default=8,
         help="cuántos cuadros del principio del recorrido mira la red",
     )
+    ae = sub.add_parser("autoetiquetas", help="etiquetas red + movimiento para reentrenar la red")
+    ae.add_argument("raiz", help="carpeta con las variantes (gt-sintetico-elp)")
+    ae.add_argument("--variante", default="hssd-recorridos-sorteada-b")
+    ae.add_argument("--red", default=str(ROOT / "outputs" / "camara_net" / "e2-v2" / "mejor.pt"))
+    ae.add_argument("--salida", default=str(ROOT / "outputs" / "autoetiquetas" / "b.csv"))
+    ae.add_argument("--limite", type=int, default=0, help="solo los primeros N recorridos")
     ac = sub.add_parser("autocalib", help="autocalibración por movimiento contra la cámara real")
     ac.add_argument("raiz", help="carpeta con las variantes video-*")
     ac.add_argument("--salida", default=str(ROOT / "outputs" / "gtsynth" / "autocalib.json"))
@@ -367,6 +373,13 @@ def main(argv: list[str] | None = None) -> int:
         correr_todo(args.raiz, args.salida, args.variantes, cada=args.cada,
                     escenas=args.escenas, versiones=args.versiones, red=args.red_camara,
                     cuadros_red=args.cuadros_red, focal_mov=args.focal_movimiento)  # fmt: skip
+        return 0
+    if args.cmd == "autoetiquetas":
+        from visionx.gtsynth.autoetiquetas import correr as autoetiquetas
+
+        q = autoetiquetas(args.raiz, args.variante, args.red, args.salida,
+                          limite=args.limite)  # fmt: skip
+        print(json.dumps(q, ensure_ascii=False))
         return 0
     if args.cmd == "autocalib":
         from visionx.gtsynth.autocalib import correr_todo as autocalib
