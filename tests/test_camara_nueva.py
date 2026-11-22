@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import math
 
 import cv2
 import numpy as np
@@ -185,3 +186,57 @@ def test_responder_la_escala_por_voz():
     assert alta2.estado.paso is Paso.LISTO and alta2.estado.perfil.separacion_m == pytest.approx(
         0.08
     )
+
+
+def test_el_alta_mide_la_lente_con_el_movimiento_y_pide_girar_si_no_alcanza():
+    from visionx.app.autocalibracion import FocalMedida
+
+    llamadas = []
+
+    def mide(cuadros, cx, cy, f0):
+        llamadas.append((len(cuadros), f0))
+        if len(llamadas) == 1:  # la primera vez no alcanza: tiene que pedir girar más
+            return FocalMedida(None, None, 2, "poco movimiento o poca textura")
+        return FocalMedida(160.0, 0.01, 40)  # 320 px de ancho y f = 160: 90°
+
+    t = itertools.count(0.0, 1.0)
+    alta = AltaCamara(
+        cargar_perfiles(), estimador=_Red(), pares_necesarios=2, alinear=_alinear_falso,
+        reloj=lambda: next(t), autocalibrar=mide, cuadros_movimiento=4,
+    )  # fmt: skip
+    frases = alta.conectar("Cámara de prueba", "sbs", (320, 180))
+    assert "Girá la cámara" in frases[0]
+    for s in range(50, 54):
+        frases = alta.agregar_par(*_par(s, dy=2.0))
+    assert alta.estado.paso is Paso.MIRAR and "un poco más" in frases[0]
+    assert alta.estado.cuadros_mov == 0
+    for s in range(54, 58):
+        frases = alta.agregar_par(*_par(s, dy=2.0))
+    e = alta.estado
+    assert e.paso is Paso.ESCALA and len(llamadas) == 2
+    assert any("Medí la lente" in f and "90 grados" in f for f in frases)
+    assert e.perfil.campo_horizontal_deg == pytest.approx(90.0, abs=1.0)  # manda el movimiento
+    alta.separacion(0.06)
+    assert e.nivel == "precisa" and e.perfil.extra["movimiento"]["ok"]
+
+
+def test_un_objeto_a_distancia_conocida_da_la_separacion():
+    from visionx.app.camara_nueva import disparidad_central
+
+    izq, der = _par(60, dx=12.0)
+    assert disparidad_central(izq, der) == pytest.approx(12.0, abs=0.6)
+    t = itertools.count(0.0, 1.0)
+    alta = AltaCamara(
+        cargar_perfiles(), estimador=_Red(), pares_necesarios=2,
+        alinear=lambda p, g: (None, ()), reloj=lambda: next(t),
+    )  # fmt: skip
+    alta.conectar("Cámara de prueba", "sbs", (320, 180))
+    alta.agregar_par(*_par(61, dx=12.0))
+    alta.agregar_par(*_par(62, dx=12.0))
+    assert alta.estado.paso is Paso.ESCALA
+    alta.agregar_par(*_par(63, dx=12.0))  # lo que ve ahora, apuntando al objeto
+    frases = alta.responder("está a dos metros")
+    fx = 160 / math.tan(math.radians(35))  # 70° en 320 px
+    b = alta.estado.perfil.separacion_m
+    assert alta.estado.escala == "distancia" and b == pytest.approx(2.0 * 12.0 / fx, rel=0.08)
+    assert any("centímetros" in f for f in frases)

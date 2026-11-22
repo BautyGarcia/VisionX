@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 
 import cv2
 import numpy as np
@@ -366,3 +367,31 @@ def test_corrimiento_que_no_deja_pixeles_marca_la_profundidad_no_medible():
     assert ok.status is DepthStatus.VALID and ok.valid_mask.all()
     nada = con_corrimiento(base, 12.0, 30.0)  # 10 − 12 < 0 en todos los píxeles («distinta»)
     assert nada.status is DepthStatus.UNMEASURABLE and not nada.valid_mask.any() and nada.reason
+
+
+def test_autocalibracion_encuentra_la_focal_con_puntos_sinteticos():
+    """F de cuadros que giran y avanzan: el costo de Mendonça-Cipolla es mínimo en la focal real."""
+    import cv2
+
+    from visionx.app.autocalibracion import FocalMedida, _mejor_focal, combinar
+
+    rng = np.random.default_rng(0)
+    f, cx, cy = 500.0, 320.0, 240.0
+    k = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+    pts = rng.uniform([-3, -2, 2], [3, 2, 8], (300, 3))
+    fs = []
+    for j in range(8):
+        r, _ = cv2.Rodrigues(np.array([0.02 * j, 0.15 + 0.05 * j, 0.01]))
+        t = np.array([0.1, 0.0, 0.3 + 0.05 * j])
+        p1 = (k @ pts.T).T
+        p2 = (k @ (r @ pts.T + t[:, None])).T
+        p1, p2 = p1[:, :2] / p1[:, 2:], p2[:, :2] / p2[:, 2:]
+        m, _ = cv2.findFundamentalMat(p1, p2, cv2.FM_8POINT)
+        fs.append(m / np.linalg.norm(m))
+    for inicio in (0.8, 1.25):
+        assert abs(_mejor_focal(cx, cy, fs, f * inicio, 2.0) / f - 1) < 0.01
+    # Combinar: la medida (σ 1 %) pesa mucho más que la red (σ 10 %).
+    lf, s = combinar(math.log(550.0), 0.10, FocalMedida(500.0, 0.01, 8))
+    assert abs(math.exp(lf) / 500 - 1) < 0.01 and s < 0.01
+    lf, s = combinar(math.log(550.0), 0.10, FocalMedida(None, None, 0, "poco movimiento"))
+    assert lf == math.log(550.0) and s == 0.10

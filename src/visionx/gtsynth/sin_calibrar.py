@@ -122,6 +122,7 @@ def evaluar(
     versiones: list[str] | None = None,
     red: dict[str, dict] | None = None,
     cuadros_red: int = 8,
+    focal_mov: dict | None = None,
 ) -> dict:
     """Error mediano (%) de las tres versiones en los cuadros `vs[::cada]` de un recorrido."""
     from visionx.depth.crestereo_adapt.align_apply import Alineador
@@ -184,6 +185,10 @@ def evaluar(
                 ("sin calibrar + escala", g_elp, False, "escala"),
                 ("sin calibrar + clásico + escala", g_elp, True, "escala")]  # fmt: skip
     cam = camara_de_la_red(vs, red, cuadros_red) if red else None
+    if cam is not None and focal_mov:  # la focal medida con el movimiento (`gtsynth autocalib`)
+        fm = focal_mov.get((v0.variante, v0.escena))
+        if fm is not None:
+            cam = {**cam, "fx": fm * cam["ancho"] / g.width}
     if cam is not None:
         g_red, g_sep = geometria_red(g, cam, ELP_BASE_M), geometria_red(g, cam, g.baseline_m)
         out["red_focal_pct"] = round(100 * abs(g_red.fx / g.fx - 1), 2)
@@ -208,12 +213,18 @@ def correr_todo(raiz: str | Path, salida: str | Path, variantes: list[str] | Non
                 cfg: dict | None = None, cada: int = 6,
                 escenas: list[str] | None = None,
                 versiones: list[str] | None = None, red: str | Path | None = None,
-                cuadros_red: int = 8) -> list[dict]:  # fmt: skip
+                cuadros_red: int = 8, focal_mov: str | Path | None = None,
+                ) -> list[dict]:  # fmt: skip
     from visionx.shared.config import load_config
 
     cfg = cfg or load_config()
     raiz = Path(raiz)
     est_red = leer_red(red) if red else None
+    fm = None
+    if focal_mov:  # fx combinada (red + movimiento) por recorrido, en px de la imagen nominal
+        filas_fm = json.loads(Path(focal_mov).read_text(encoding="utf-8"))["filas"]
+        fm = {(f["variante"], f["escena"]): f["fx_real"] * (1 + f["comb_err_pct"] / 100)
+              for f in filas_fm}  # fmt: skip
     variantes = variantes or sorted(p.name for p in raiz.iterdir()
                                     if p.is_dir() and p.name != "video-elp")  # fmt: skip
     filas = []
@@ -224,7 +235,7 @@ def correr_todo(raiz: str | Path, salida: str | Path, variantes: list[str] | Non
                 por_escena.setdefault(v.escena, []).append(v)
         for escena in sorted(por_escena):
             vs = sorted(por_escena[escena], key=lambda v: v.meta["indice"])
-            fila = evaluar(vs, cfg, cada, versiones, est_red, cuadros_red)
+            fila = evaluar(vs, cfg, cada, versiones, est_red, cuadros_red, fm)
             filas.append(fila)
             print(json.dumps(fila, ensure_ascii=False), flush=True)
     Path(salida).parent.mkdir(parents=True, exist_ok=True)
