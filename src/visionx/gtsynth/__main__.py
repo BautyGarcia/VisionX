@@ -275,6 +275,18 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--cada", type=int, default=6, help="un cuadro de cada N")
     sc.add_argument("--escenas", nargs="+", default=None, help="solo estas escenas")
     sc.add_argument("--versiones", nargs="+", default=None, help="solo estas versiones (nombres)")
+    sc.add_argument(
+        "--red-camara",
+        default=None,
+        metavar="CARPETA",
+        help="E3: CSV de `camara_net evaluar`; agrega las versiones «red …»",
+    )
+    sc.add_argument(
+        "--cuadros-red",
+        type=int,
+        default=8,
+        help="cuántos cuadros del principio del recorrido mira la red",
+    )
     e3 = sub.add_parser("e3-simulado", help="E3 con una red de entrada simulada (focal ± σ)")
     e3.add_argument("carpeta", help="CSV por cámara de `evaluar --geometria vista`")
     e3.add_argument("--salida", default=str(ROOT / "outputs" / "gtsynth" / "e3-simulado.json"))
@@ -339,7 +351,8 @@ def main(argv: list[str] | None = None) -> int:
         from visionx.gtsynth.sin_calibrar import correr_todo
 
         correr_todo(args.raiz, args.salida, args.variantes, cada=args.cada,
-                    escenas=args.escenas, versiones=args.versiones)  # fmt: skip
+                    escenas=args.escenas, versiones=args.versiones, red=args.red_camara,
+                    cuadros_red=args.cuadros_red)  # fmt: skip
         return 0
     if args.cmd == "e3-simulado":
         from visionx.gtsynth.e3_simulado import correr
