@@ -111,22 +111,72 @@ Archivos en el Drive `VisionX-Personal/autoetiquetas/`:
   - `fx_real`: solo para el control.
 - `b.csv` / `b.json`: por recorrido, con la calidad.
 
-### Receta para la v3-auto (Bauty, en la Mac)
+### Entrenar la v3-auto (Bauty, en la Mac): comandos exactos
 
-1. **Partir de la v2** (`e2-v2/mejor.pt`), con un learning rate bajo: 1e-4 la cabeza y 3e-5 el
-   tronco. Unas 10 épocas.
-2. **Datos:**
-   - los de la v2, para que no olvide;
-   - los cuadros de `b-vistas.csv`, con la etiqueta de la geometría.
-   - En `camara_net.datos.Item`, `fx = exp(log_f) · ancho` en vez del `fx` del render.
-   - Centro = el medio de la imagen, porque el movimiento no lo mide. En la simulación es el
-     real, pero así no se usa nada que no daría una cámara real.
-   - Con eso, el zoom y la lente sorteada de siempre generan etiquetas coherentes solas.
-3. **Pérdida:**
-   - en esos cuadros, solo la de la focal (NLL de Laplace de `log_f`), porque centro y lente
-     no se midieron;
-   - en el resto, la de siempre.
-4. **Control:** lo mismo con `fx_real` como etiqueta (el techo).
-5. **Evaluar** (Tomás, en la PC): `camara_net evaluar` con las 8 escenas, 9 cámaras y val, más
-   la E3. Si la v3-auto llega cerca del control y baja de la v2 en HSSD, queda demostrado que la
-   geometría le enseña a la red sin calibrar nada.
+El código ya está en `main` (`camara_net entrenar --etiquetas/--desde/--etiqueta-real`),
+probado de punta a punta en la PC con pocas imágenes. Solo hace falta correrlo.
+
+**1. Preparar** (una vez):
+1. `git pull` de `main`.
+2. En `data/gt-sintetico-elp/`: `camara-sorteada`, `camara-sorteada-ojo`,
+   `hssd-camara-sorteada`, `hssd-recorridos-sorteada` (lo de la v2) y
+   **`hssd-recorridos-sorteada-b`** (Drive `gt-sintetico-elp/`, 37 GB).
+3. `outputs/camara_net/e2-v2/mejor.pt`, del Drive `pesos/camara-net/e2-v2/`.
+4. `outputs/autoetiquetas/b-vistas.csv` (y `b-vistas-5pct.csv`), del Drive `autoetiquetas/`.
+5. `unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN`.
+
+**2. Tres corridas** (en este orden; ~1 h cada una en la Mac, estimado por la v2):
+
+```bash
+COMUN="--variantes camara-sorteada camara-sorteada-ojo hssd-camara-sorteada --zoom 0.55 1.2 \
+  --desde outputs/camara_net/e2-v2/mejor.pt --lr 1e-4 --lr-tronco 3e-5 --calentamiento 100 --epocas 10"
+
+# a) v3-auto: la v2 + las etiquetas de la geometría (lo que queremos probar)
+uv run --extra ml python -m visionx.depth.camara_net entrenar $COMUN \
+  --etiquetas outputs/autoetiquetas/b-vistas.csv --salida outputs/camara_net/e3-auto
+
+# b) control «techo»: los mismos cuadros con la focal real
+uv run --extra ml python -m visionx.depth.camara_net entrenar $COMUN \
+  --etiquetas outputs/autoetiquetas/b-vistas.csv --etiqueta-real --salida outputs/camara_net/e3-real
+
+# c) control «más épocas»: la v2 diez épocas más, sin etiquetas nuevas
+uv run --extra ml python -m visionx.depth.camara_net entrenar $COMUN --salida outputs/camara_net/e3-sin
+```
+
+- a) contra c) dice cuánto aportan las etiquetas, más allá de entrenar más.
+- a) contra b) dice cuánto se pierde por usar la geometría en vez de la verdad.
+- Si sobra tiempo: a) con `b-vistas-5pct.csv --sigma-max 0.05` (1,7 veces más cuadros, más
+  ruidosos).
+
+**3. El factor de b en el checkpoint.** El de la v2 era 1,79: el que lleva la cobertura de val al
+90 %. Medirlo igual en cada versión y guardarlo:
+
+```python
+import torch
+ck = torch.load("outputs/camara_net/e3-auto/mejor.pt", weights_only=False)
+ck["factor_b"] = 1.79  # el medido en val para ESTA versión
+torch.save(ck, "outputs/camara_net/e3-auto/mejor.pt")
+```
+
+La pantalla «Cámara nueva» (`app/estimador_red.py`) lo lee sola. Sin `factor_b` usa 1,79 × 2.
+
+**4. Subir y avisar.**
+1. `mejor.pt`, `meta.json` y `curvas.csv` de cada corrida al Drive `pesos/camara-net/<corrida>/`.
+2. Un renglón en la BITACORA con la val de cada una.
+3. Avisar a Tomás: él evalúa las tres en la PC el mismo día, con las 8 escenas × 9 cámaras + E3,
+   y completa la tabla de versiones de arriba.
+
+### La U-Net con cámaras variadas (Bauty): dos caminos
+
+Medido el 21/11: la U-Net `v2-s0` nunca se confía de más, pero el factor que lleva su b al 90 %
+crece con `f·B` de la cámara (0,24 con 34 px·m, 0,70 con 161). Ajuste en las 9 cámaras:
+**factor ≈ 0,046 · (f·B)^0,51**, con ±0,06 de error.
+
+1. **Rápido (recomendado para la entrega):** sin reentrenar, multiplicar la b por esa función de
+   `f·B` en el estimador. Es una línea en `estimator.py`, y `f·B` sale del perfil o de la
+   «Cámara nueva». Ojo: se ajustó con las mismas 9 cámaras; para confirmarlo hay que medirlo en
+   otras (lo hace Tomás en la PC con `gtsynth evaluar --geometria vista`).
+2. **Completo:** reentrenar con `cache-crestereo` (Drive, 43 GB; disparidades de CREStereo de
+   `camara-sorteada`, `hssd-camara-sorteada` y `hssd-recorridos-sorteada`, formato en
+   `gtsynth/disparidades.py`). Hace falta un adaptador nuevo: hoy `inc-entrenar` lee su propio
+   caché de InStereo2K (`uncertainty_data.py`), no este. Es más trabajo y riesgo antes del 4/12.

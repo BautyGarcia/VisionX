@@ -24,7 +24,9 @@ def _entrenar(a: argparse.Namespace) -> None:
 
     p = Params(raiz=a.raiz, epocas=a.epocas, lote=a.lote, trabajadores=a.trabajadores,
                semilla=a.semilla, max_items=a.max_items,
-               zoom=tuple(a.zoom) if a.zoom else None,
+               zoom=tuple(a.zoom) if a.zoom else None, lr=a.lr, lr_tronco=a.lr_tronco,
+               calentamiento=a.calentamiento, etiquetas=a.etiquetas, sigma_max=a.sigma_max,
+               etiqueta_real=a.etiqueta_real, desde=a.desde,
                variantes=tuple(a.variantes))  # fmt: skip
     print(json.dumps(entrenar(p, a.salida, a.device, a.continuar), ensure_ascii=False))
 
@@ -68,6 +70,15 @@ def main(argv: list[str] | None = None) -> None:
                     help="recortes con zoom (p. ej. 0.55 1.2); por defecto sin zoom")  # fmt: skip
     en.add_argument("--variantes", nargs="+", default=["camara-sorteada", "hssd-camara-sorteada"],
                     help="variantes de una cámara por vista para entrenar (y validar)")  # fmt: skip
+    en.add_argument("--lr", type=float, default=3e-4, help="la cabeza")
+    en.add_argument("--lr-tronco", type=float, default=1e-4)
+    en.add_argument("--calentamiento", type=int, default=300, help="pasos")
+    en.add_argument("--etiquetas", default=None,
+                    help="v3-auto: CSV de `gtsynth autoetiquetas` (b-vistas.csv)")  # fmt: skip
+    en.add_argument("--sigma-max", type=float, default=0.03, help="duda máxima de la etiqueta")
+    en.add_argument("--etiqueta-real", action="store_true",
+                    help="control: la focal real en los mismos cuadros")  # fmt: skip
+    en.add_argument("--desde", default=None, help="checkpoint de partida (p. ej. la v2)")
     en.add_argument("--device", default="auto")
     en.add_argument("--continuar", action="store_true", help="seguir desde ultimo.pt")
     en.set_defaults(fn=_entrenar)
