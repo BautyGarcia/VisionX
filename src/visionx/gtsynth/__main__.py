@@ -104,16 +104,20 @@ def cmd_evaluar(args: argparse.Namespace) -> int:
         print(f"no hay vistas {carpeta}/{args.particion}", file=sys.stderr)
         return 1
     geometria = ELP_RENDER
-    if args.geometria == "vista":  # la cámara de las vistas (recorte nominal), no la ELP
+    if args.geometria != "elp":  # la cámara de las vistas (recorte nominal)
         from visionx.gtsynth.dataset import VistaNominal
 
         lista = [VistaNominal(v.carpeta) for v in lista]
         ids = {v.geometria.geometry_id for v in lista}
         if len(ids) != 1:
-            print(f"--geometria vista pide una sola cámara por variante ({len(ids)})",
+            print(f"--geometria {args.geometria} pide una sola cámara por variante ({len(ids)})",
                   file=sys.stderr)  # fmt: skip
             return 1
         geometria = lista[0].geometria
+        if args.geometria == "elp-supuesta":  # otra cámara, pero el sistema cree que es la ELP
+            from visionx.gtsynth.sin_calibrar import geometria_elp
+
+            geometria = geometria_elp(geometria)
     m = Medidor.armar(args.profundidad, cfg, geometria)
     t0 = time.time()
 
@@ -126,7 +130,10 @@ def cmd_evaluar(args: argparse.Namespace) -> int:
         from visionx.depth.crestereo_adapt.align_apply import Alineador
         from visionx.gtsynth.variantes import distorsion_nominal
 
-        alineador = Alineador(args.alinear, ELP_RENDER, distorsion_nominal(), args.red)
+        if args.geometria == "elp":
+            alineador = Alineador(args.alinear, ELP_RENDER, distorsion_nominal(), args.red)
+        else:  # renders pinhole: sin distorsión, con la geometría que cree tener el sistema
+            alineador = Alineador(args.alinear, geometria, np.zeros(5), args.red)
     filas = medir(
         m, lista, args.variante, args.max, args.min_px, progreso, alineador,
         args.vistas_por_camara, args.distancia_conocida,
@@ -212,10 +219,11 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("--cada", type=int, default=1, help="una de cada N vistas (recorridos)")
     ev.add_argument(
         "--geometria",
-        choices=["elp", "vista"],
+        choices=["elp", "vista", "elp-supuesta"],
         default="elp",
-        help="elp: el sistema cree tener la ELP (por defecto); vista: la cámara de las vistas, "
-        "recortada a su tamaño nominal (gt-video, perfiles)",
+        help="elp: renders de la ELP (por defecto); vista: la cámara de las vistas, recortada a "
+        "su tamaño nominal (gt-video, perfiles); elp-supuesta: esas vistas, pero el sistema cree "
+        "que la cámara es una ELP (E0, plug and play)",
     )
     ev.add_argument("--min-px", type=int, default=400)
     ev.add_argument(
@@ -266,6 +274,12 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--variantes", nargs="+", default=None)
     sc.add_argument("--cada", type=int, default=6, help="un cuadro de cada N")
     sc.add_argument("--escenas", nargs="+", default=None, help="solo estas escenas")
+    sc.add_argument("--versiones", nargs="+", default=None, help="solo estas versiones (nombres)")
+    e3 = sub.add_parser("e3-simulado", help="E3 con una red de entrada simulada (focal ± σ)")
+    e3.add_argument("carpeta", help="CSV por cámara de `evaluar --geometria vista`")
+    e3.add_argument("--salida", default=str(ROOT / "outputs" / "gtsynth" / "e3-simulado.json"))
+    e3.add_argument("--k", type=float, default=1.0, help="factor de la b de la U-Net")
+    e3.add_argument("--sorteos", type=int, default=500)
     mo = sub.add_parser("mosaico", help="las 6 cámaras de la expo a la vez (desde los videos)")
     mo.add_argument("carpeta", help="carpeta de `gtsynth video` (data/stand-video)")
     mo.add_argument("--e0", default=str(ROOT / "outputs" / "gtsynth" / "e0.json"))
@@ -324,7 +338,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "sin-calibrar":
         from visionx.gtsynth.sin_calibrar import correr_todo
 
-        correr_todo(args.raiz, args.salida, args.variantes, cada=args.cada, escenas=args.escenas)
+        correr_todo(args.raiz, args.salida, args.variantes, cada=args.cada,
+                    escenas=args.escenas, versiones=args.versiones)  # fmt: skip
+        return 0
+    if args.cmd == "e3-simulado":
+        from visionx.gtsynth.e3_simulado import correr
+
+        r = correr(args.carpeta, args.salida, k=args.k, sorteos=args.sorteos)
+        for s, d in r["por_sigma"].items():
+            print(f"focal ±{s}: {d['media']}")
         return 0
     if args.cmd == "visor":
         from visionx.gtsynth.visor import run

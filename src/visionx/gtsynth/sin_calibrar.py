@@ -6,6 +6,8 @@ misma «otra unidad» (hermana ×1, como en los videos), con CREStereo continuo:
     calibrada            el sistema conoce la cámara: clásico + distancia conocida (lo de hoy)
     sin calibrar         supone la geometría de la ELP (116°, 5,98 cm) y no corrige nada
     sin calibrar + clás. supone la ELP, corre el clásico desde ahí y usa la distancia conocida
+    … + escala           lo mismo, pero la distancia conocida corrige la escala (f·B) en vez de
+                         restar un corrimiento (PLUG-AND-PLAY, sección 5)
 
 Es la línea de base del plug and play: cuánto se pierde cuando no se sabe qué cámara es.
 
@@ -45,7 +47,23 @@ def geometria_elp(g):
                                baseline_m=ELP_BASE_M, doffs=0.0)  # fmt: skip
 
 
-def evaluar(vs, cfg: dict, cada: int = 6) -> dict:
+VERSIONES = ("calibrada", "sin calibrar", "sin calibrar + clásico", "sin calibrar + escala",
+             "sin calibrar + clásico + escala")  # fmt: skip
+
+
+def _escala_conocida(depth, g, z_gt: np.ndarray, mascara: np.ndarray) -> float | None:
+    """Z real / Z medida del objeto apuntado (mediana sobre sus píxeles): la escala de f·B."""
+    h, w = depth.disparity_px.shape
+    m = cv2.resize(mascara.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
+    zg = cv2.resize(np.nan_to_num(z_gt), (w, h), interpolation=cv2.INTER_NEAREST)
+    d = depth.disparity_px + depth.doffs
+    ok = m & depth.valid_mask & (zg > 0) & (d > 0)
+    if ok.sum() < 30:
+        return None
+    return float(np.median(zg[ok] * d[ok] / (g.fx * g.baseline_m)))
+
+
+def evaluar(vs, cfg: dict, cada: int = 6, versiones: list[str] | None = None) -> dict:
     """Error mediano (%) de las tres versiones en los cuadros `vs[::cada]` de un recorrido."""
     from visionx.depth.crestereo_adapt.align_apply import Alineador
     from visionx.depth.crestereo_adapt.perturb import perturb_right_camera
@@ -72,7 +90,7 @@ def evaluar(vs, cfg: dict, cada: int = 6) -> dict:
     apuntado = int(v0.meta["apuntado"]["id"])
     mascaras = {i: recorte(vs[i].instancias()) == apuntado for i in idx}
 
-    def correr(geo, clasico: bool, referencia: bool) -> tuple[float | None, float]:
+    def correr(geo, clasico: bool, referencia: str | None) -> tuple[float | None, float]:
         est = Medidor.armar("crestereo", cfg, geo).estimador
         dg = getattr(est, "geometry", geo)
         mapas = None
@@ -85,27 +103,40 @@ def evaluar(vs, cfg: dict, cada: int = 6) -> dict:
             der = her[i] if mapas is None else cv2.remap(her[i], mapas[0], mapas[1],
                                                          cv2.INTER_LINEAR)  # fmt: skip
             deps[i] = est.predict(_frame(vs[i], izq[i], der, geo, k))
-        delta = 0.0
-        if referencia:
+        delta, escala = 0.0, 1.0
+        if referencia == "corrimiento":
             ds = [_delta_conocida(deps[i], dg, zs[i], mascaras[i]) for i in idx[min(CALENTAR, 1) :]]
             delta = _delta_de_cuadros(ds, dg)
-        errs = [e for e in (_error(_z(deps[i], dg, w8, h8, delta), zs[i])[2] for i in idx)
+        elif referencia == "escala":
+            es = [_escala_conocida(deps[i], dg, zs[i], mascaras[i])
+                  for i in idx[min(CALENTAR, 1) :]]  # fmt: skip
+            es = [e for e in es if e is not None and e > 0]
+            escala = float(np.median(es)) if es else 1.0
+        errs = [e for e in (_error(escala * _z(deps[i], dg, w8, h8, delta), zs[i])[2] for i in idx)
                 if e is not None]  # fmt: skip
-        return (round(float(np.median(errs)), 2) if errs else None), round(delta, 3)
+        ajuste = round(escala, 4) if referencia == "escala" else round(delta, 3)
+        return (round(float(np.median(errs)), 2) if errs else None), ajuste
 
     out = {"escena": v0.escena, "variante": v0.variante,
            "hfov_deg": round(math.degrees(2 * math.atan(g.width / (2 * g.fx))), 1),
            "base_cm": round(100 * g.baseline_m, 1), "cuadros": len(idx)}  # fmt: skip
-    for nombre, geo, clas, ref in (("calibrada", g, True, True),
-                                   ("sin calibrar", g_elp, False, False),
-                                   ("sin calibrar + clásico", g_elp, True, True)):  # fmt: skip
-        out[f"error_{nombre}_pct"], out[f"delta_{nombre}_px"] = correr(geo, clas, ref)
+    corridas = (("calibrada", g, True, "corrimiento"), ("sin calibrar", g_elp, False, None),
+                ("sin calibrar + clásico", g_elp, True, "corrimiento"),
+                ("sin calibrar + escala", g_elp, False, "escala"),
+                ("sin calibrar + clásico + escala", g_elp, True, "escala"))  # fmt: skip
+    for nombre, geo, clas, ref in corridas:
+        if versiones and nombre not in versiones:
+            continue
+        clave = "escala" if ref == "escala" else "delta"
+        sufijo = "" if ref == "escala" else "_px"
+        out[f"error_{nombre}_pct"], out[f"{clave}_{nombre}{sufijo}"] = correr(geo, clas, ref)
     return out
 
 
 def correr_todo(raiz: str | Path, salida: str | Path, variantes: list[str] | None = None,
                 cfg: dict | None = None, cada: int = 6,
-                escenas: list[str] | None = None) -> list[dict]:  # fmt: skip
+                escenas: list[str] | None = None,
+                versiones: list[str] | None = None) -> list[dict]:  # fmt: skip
     from visionx.shared.config import load_config
 
     cfg = cfg or load_config()
@@ -120,7 +151,7 @@ def correr_todo(raiz: str | Path, salida: str | Path, variantes: list[str] | Non
                 por_escena.setdefault(v.escena, []).append(v)
         for escena in sorted(por_escena):
             vs = sorted(por_escena[escena], key=lambda v: v.meta["indice"])
-            fila = evaluar(vs, cfg, cada)
+            fila = evaluar(vs, cfg, cada, versiones)
             filas.append(fila)
             print(json.dumps(fila, ensure_ascii=False), flush=True)
     Path(salida).parent.mkdir(parents=True, exist_ok=True)

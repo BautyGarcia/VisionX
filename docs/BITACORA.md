@@ -40,6 +40,75 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-21 (noche) — T12/T13: E3 con red simulada, E0 corrigiendo la escala y la U-Net con cámara supuesta
+
+Tarea: T12, T13. Persona/agente: Tomás / Claude Code. PC de escritorio, Radeon. Código en #89.
+Crudos en `outputs/gtsynth/` (`e3-simulado*.json`, `e0-escala.json`, `inc-supuesta/`).
+
+**1. E3 con una red de entrada simulada** (`gtsynth e3-simulado`, sin GPU). Sobre la medición
+por objeto con cámara conocida (entrada anterior, 9 cámaras), un error de focal ε ~ N(0, σ) por
+unidad (500 sorteos) con la **separación conocida**:
+
+| Focal ± | Error mediano | P95 | Cobertura 90 %, solo U-Net (k = 1) | U-Net + duda de la cámara |
+|---|---:|---:|---:|---:|
+| 0 % | 0,35 % | 4,5 % | 96,2 % | 96,2 % |
+| 1 % | 0,93 % | 4,8 % | 93,5 % | 96,0 % |
+| 2 % | 1,61 % | 5,9 % | 84,5 % | 94,9 % |
+| 5 % | 3,60 % | 11,3 % | 61,9 % | 93,0 % |
+| 10 % | 7,01 % | 20,9 % | 41,6 % | 91,4 % |
+
+Con k = 0,281 (el factor de la ELP), solo U-Net: 87 / 64 / 47 / 25 / 15 %; con la duda de la
+cámara, 87–89 % en todos. Lectura: la meta de E2 (focal ≤ 2 %) deja 1,6 % de error mediano en
+distancia, con margen sobre el criterio de E3 (≤ 5 %); hasta 5 % de focal pasa la mediana. Y sin
+el término de la cámara de la sección 6, la voz diría «precisa» de más: la red de entrada tiene
+que dar su σ, no solo la estimación.
+
+**2. E0 con la distancia conocida corrigiendo la escala** (8 escenas × 9 cámaras, continuo,
+otra unidad ×1 como en E0). Error mediano promedio:
+
+| Cámara | Calibrada | Sin calibrar | + clásico + corrimiento | + escala (sin clásico) | + clásico + escala |
+|---|---:|---:|---:|---:|---:|
+| ELP | 6,3 | 39,6 | 6,1 | 44,9 | 9,4 |
+| D435 | 3,8 | 44,7 | 31,3 | 28,0 | 13,0 |
+| D455 | 7,0 | 61,9 | 60,8 | 23,7 | 8,8 |
+| ZED 2 | 2,7 | 57,0 | 56,0 | 18,2 | 4,2 |
+| ZED Mini | 3,5 | 32,7 | 21,7 | 23,5 | 7,0 |
+| OAK-D | 3,5 | 61,2 | 59,8 | 25,3 | 12,0 |
+| 60° | 6,7 | 65,2 | 61,0 | 22,8 | 14,8 |
+| 130° | 8,4 | 76,1 | 22,5 | 28,9 | 12,3 |
+| 20 cm | 5,0 | 78,1 | 77,4 | 19,8 | 7,0 |
+
+Lectura: corregir la **escala** en vez del corrimiento baja el «sin calibrar + clásico» de
+22–77 % a **4–15 %** (8 cámaras distintas). Sigue lejos de la calibrada (2,7–8,4 %): con otra
+unidad hay a la vez un error de escala y uno de alineación, y el clásico alinea mal partiendo de
+una focal equivocada (116° supuestos contra 60° reales). Un objeto arregla una cosa sola. Ese
+hueco es el de la red de entrada: darle al clásico la focal buena. En la ELP (misma cámara)
+gana el corrimiento, como se esperaba.
+
+**3. U-Net con la cámara supuesta ELP + clásico + escala por objeto** (`evaluar --geometria
+elp-supuesta --alinear clasico --distancia-conocida escala`, preciso, un recorrido = una cámara,
+el primer objeto apuntado calibra). Par **ya rectificado** (sin otra unidad): el caso de una
+cámara comercial que entrega imágenes rectificadas por su SDK (RealSense, ZED, OAK-D).
+
+| Cámara | Escala medida (f·B real / supuesto) | Error mediano | P95 | Objetos > 10 % | Cobertura 90 % (k = 1) |
+|---|---:|---:|---:|---:|---:|
+| D435 | 1,37–1,43 | 0,6 % | 3,8 % | 2 % | 97,2 % |
+| D455 | 2,58–2,77 | 0,6 % | 5,5 % | 2 % | 93,0 % |
+| ZED 2 | 2,14–2,29 | 0,6 % | 5,0 % | 2 % | 93,7 % |
+| ZED Mini | 1,32–1,41 | 0,9 % | 6,0 % | 2 % | 95,7 % |
+| OAK-D | 2,34–2,49 | 0,3 % | 6,2 % | 2 % | 94,3 % |
+| 60° | 2,76–2,92 | 0,2 % | 5,8 % | 1 % | 95,1 % |
+| 130° | 0,73–0,77 | 2,1 % | 8,0 % | 3 % | 94,7 % |
+| 20 cm | 4,37–4,76 | 0,5 % | 8,2 % | 3 % | 87,3 % |
+
+Lectura: con el par rectificado, **un objeto a distancia conocida resuelve una cámara
+desconocida** (0,2–2,1 % de mediana) y la U-Net sigue cubriendo (87–97 %; la base larga, de
+nuevo la que más se queda corta). La escala medida varía ±2–4 % entre recorridos: es la duda que
+tiene que sumar `σ_escala`. Conclusión conjunta de 2 y 3: el plug and play tiene dos capas,
+**escala** (un objeto la resuelve si las imágenes vienen rectificadas) y **alineación** (con
+otra unidad sin rectificar, el clásico necesita la focal correcta: ahí aporta la red, y además
+da la escala sin objeto cuando se conoce la separación).
+
 ## 2026-11-21 (noche) — T13: la U-Net v2-s0 en las 9 cámaras de evaluación, cámara conocida
 
 Tarea: T13 (E4 preliminar). Persona/agente: Tomás / Claude Code. PC de escritorio, CREStereo
