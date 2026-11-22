@@ -487,7 +487,7 @@ class AltaCamara:
         e.tiempos_ms["medir"] = (time.perf_counter() - t0) * 1000
         s_red = est.sigma_log_f if est.sigma_log_f else SIGMA_SIN_RED
         if m.ok:
-            m = type(m)(m.fx / q, m.sigma_log, m.pares, m.motivo)
+            m = replace(m, fx=m.fx / q)
         lf, s = combinar(math.log(f0), s_red, m)
         if s > SIGMA_LENTE_OK and self._reintentos < 1:
             self._reintentos += 1
@@ -499,6 +499,8 @@ class AltaCamara:
         e.sigma_focal = s
         campo = math.degrees(2 * math.atan(w / (2 * math.exp(lf))))
         e.perfil = replace(e.perfil, campo_horizontal_deg=float(campo))
+        if m.ok and m.k1 is not None:  # el movimiento midió también la lente
+            e.perfil = replace(e.perfil, k1=float(m.k1), k2=0.0)
         if not m.ok:
             return (f"No pude medir la lente con el movimiento; uso la estimación: unos "
                     f"{round(campo)} grados de ancho.")  # fmt: skip

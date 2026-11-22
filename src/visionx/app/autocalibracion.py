@@ -40,6 +40,7 @@ class FocalMedida:
     sigma_log: float | None  # desvío de log f (≈ error relativo)
     pares: int  # pares de cuadros usados
     motivo: str | None = None  # por qué no se pudo medir (None si se pudo)
+    k1: float | None = None  # distorsión radial medida (`lente_por_movimiento`); None = pinhole
 
     @property
     def ok(self) -> bool:
@@ -154,3 +155,153 @@ def combinar(log_f_red: float, sigma_red: float, medida: FocalMedida) -> tuple[f
     w_r, w_m = 1 / sigma_red**2, 1 / s_m**2
     lf = (w_r * log_f_red + w_m * math.log(medida.fx)) / (w_r + w_m)
     return lf, 1 / math.sqrt(w_r + w_m)
+
+
+# ---------------------------------------------------------------- con distorsión (lente)
+#
+# Con una lente gran angular las rectas se curvan y la geometría de pinhole deja de valer: la F
+# que ajusta RANSAC sobre los píxeles crudos sale sesgada y la focal también. Para medir la lente
+# se buscan a la vez la focal y k1 (modelo radial de OpenCV, k2 = 0): con cada par (f, k1) los
+# puntos emparejados se llevan a coordenadas normalizadas sin distorsión, se estima la E de cada
+# par de cuadros por mínimos cuadrados (8 puntos, lineal) y se mide cuán esencial es. La
+# respuesta es el (f, k1) que deja todas las E más esenciales.
+
+K1_RANGO = (-0.45, 0.15)
+
+
+def emparejar(
+    cuadros: Sequence[np.ndarray],
+    saltos: Sequence[int] = (3, 6, 12),
+    min_inliers: int = 60,
+    min_movimiento_px: float = 6.0,
+    ransac_px: float = 3.0,
+    max_puntos: int = 300,
+) -> tuple[list[tuple[np.ndarray, np.ndarray]], float]:
+    """Puntos emparejados (inliers de RANSAC, a la escala de trabajo) entre cuadros separados.
+
+    El umbral de RANSAC es más ancho que en `fundamentales`: con distorsión, los puntos del borde
+    no cumplen la geometría de pinhole y se descartarían justo donde la lente se nota.
+    """
+    q = min(1.0, MAX_ANCHO / cuadros[0].shape[1])
+    sift = cv2.SIFT_create(nfeatures=3000)
+    rasgos = [sift.detectAndCompute(_gris(c, q), None) for c in cuadros]
+    bf = cv2.BFMatcher(cv2.NORM_L2)
+    rng = np.random.default_rng(0)
+    pares = []
+    for s in saltos:
+        for i in range(len(cuadros) - s):
+            (k1, d1), (k2, d2) = rasgos[i], rasgos[i + s]
+            if d1 is None or d2 is None or len(k1) < min_inliers or len(k2) < min_inliers:
+                continue
+            buenos = [m for m, n in (p for p in bf.knnMatch(d1, d2, k=2) if len(p) == 2)
+                      if m.distance < 0.75 * n.distance]  # fmt: skip
+            if len(buenos) < min_inliers:
+                continue
+            p1 = np.float32([k1[m.queryIdx].pt for m in buenos])
+            p2 = np.float32([k2[m.trainIdx].pt for m in buenos])
+            if float(np.median(np.linalg.norm(p1 - p2, axis=1))) < min_movimiento_px:
+                continue
+            f, m = cv2.findFundamentalMat(p1, p2, cv2.FM_RANSAC, ransac_px, 0.999)
+            if f is None or m is None or int(m.sum()) < min_inliers:
+                continue
+            ok = m.ravel().astype(bool)
+            a, b = p1[ok].astype(np.float64), p2[ok].astype(np.float64)
+            if len(a) > max_puntos:  # que todos los pares pesen parecido
+                j = rng.choice(len(a), max_puntos, replace=False)
+                a, b = a[j], b[j]
+            pares.append((a, b))
+    return pares, q
+
+
+class _Puntos:
+    """Los puntos de todos los pares apilados, para evaluar el costo de un (f, k1) de una vez."""
+
+    def __init__(self, pares: list[tuple[np.ndarray, np.ndarray]]) -> None:
+        self.p1 = np.concatenate([a for a, _ in pares])
+        self.p2 = np.concatenate([b for _, b in pares])
+        n = np.array([len(a) for a, _ in pares])
+        self.cortes = np.concatenate([[0], np.cumsum(n)[:-1]])
+        self.pesos = n.astype(float)
+
+    def subconjunto(self, idx: np.ndarray) -> _Puntos:
+        nuevo = object.__new__(_Puntos)
+        trozos = [(int(self.cortes[i]), int(self.cortes[i] + self.pesos[i])) for i in idx]
+        nuevo.p1 = np.concatenate([self.p1[a:b] for a, b in trozos])
+        nuevo.p2 = np.concatenate([self.p2[a:b] for a, b in trozos])
+        n = np.array([b - a for a, b in trozos])
+        nuevo.cortes = np.concatenate([[0], np.cumsum(n)[:-1]])
+        nuevo.pesos = n.astype(float)
+        return nuevo
+
+
+def costo_lente(f: float, k1: float, pts: _Puntos, cx: float, cy: float) -> float:
+    """Media (pesada por puntos) de (σ1 − σ2)/σ1 de las E estimadas con (f, k1)."""
+    from visionx.depth.camara_net.lente import sin_distorsion
+
+    x1, y1 = sin_distorsion((pts.p1[:, 0] - cx) / f, (pts.p1[:, 1] - cy) / f, k1, 0.0)
+    x2, y2 = sin_distorsion((pts.p2[:, 0] - cx) / f, (pts.p2[:, 1] - cy) / f, k1, 0.0)
+    ok = np.isfinite(x1) & np.isfinite(y1) & np.isfinite(x2) & np.isfinite(y2)
+    if ok.mean() < 0.8:
+        return math.inf  # la lente se pliega en buena parte de la imagen: imposible
+    a = np.stack([x2 * x1, x2 * y1, x2, y2 * x1, y2 * y1, y2, x1, y1, np.ones_like(x1)], 1)
+    a[~ok] = 0.0  # puntos más allá del pliegue (esquinas): no cuentan
+    m = np.add.reduceat(np.einsum("ni,nj->nij", a, a).reshape(len(a), 81), pts.cortes, axis=0)
+    _, v = np.linalg.eigh(m.reshape(-1, 9, 9))
+    e = v[:, :, 0].reshape(-1, 3, 3)
+    s = np.linalg.svd(e, compute_uv=False)
+    c = (s[:, 0] - s[:, 1]) / np.maximum(s[:, 0], 1e-12)
+    return float((pts.pesos * c).sum() / pts.pesos.sum())
+
+
+def _mejor_lente(pts: _Puntos, cx: float, cy: float, f0: float, rango_f: float,
+                 rango_k1: tuple[float, float], nf: int = 41, nk: int = 13,
+                 vueltas: int = 3) -> tuple[float, float]:  # fmt: skip
+    """Grilla en (log f, k1) y refinamientos alrededor del mínimo."""
+    lf0, lr = math.log(f0), math.log(rango_f)
+    lfs = np.linspace(lf0 - lr, lf0 + lr, nf)
+    k1s = np.linspace(rango_k1[0], rango_k1[1], nk)
+    for _ in range(vueltas):
+        cs = np.array([[costo_lente(math.exp(lf), k, pts, cx, cy) for k in k1s] for lf in lfs])
+        i, j = np.unravel_index(int(np.argmin(cs)), cs.shape)
+        dlf, dk = (lfs[1] - lfs[0]), (k1s[1] - k1s[0])
+        lfs = np.linspace(lfs[i] - dlf, lfs[i] + dlf, 9)
+        k1s = np.linspace(k1s[j] - dk, k1s[j] + dk, 9)
+    return math.exp(float(lfs[4])), float(k1s[4])
+
+
+def lente_por_movimiento(
+    cuadros: Sequence[np.ndarray],
+    cx: float,
+    cy: float,
+    f_inicial: float,
+    saltos: Sequence[int] = (3, 6, 12),
+    rango: float = 2.0,
+    rango_k1: tuple[float, float] = K1_RANGO,
+    min_pares: int = 6,
+    remuestreos: int = 20,
+    semilla: int = 0,
+) -> FocalMedida:
+    """Focal y k1 (px de la imagen original) que mejor explican el movimiento entre los cuadros.
+
+    Como `focal_por_movimiento`, pero sin suponer pinhole: sirve para cámaras con lente (gran
+    angular baratas). La duda de log f sale de remuestrear los pares (×`FACTOR_SIGMA`).
+    """
+    if len(cuadros) < max(saltos) + 2:
+        return FocalMedida(None, None, 0, "muy pocos cuadros")
+    pares, q = emparejar(cuadros, saltos)
+    if len(pares) < min_pares:
+        return FocalMedida(None, None, len(pares), "poco movimiento o poca textura")
+    pts = _Puntos(pares)
+    cxq, cyq, f0q = cx * q, cy * q, f_inicial * q
+    f, k1 = _mejor_lente(pts, cxq, cyq, f0q, rango, rango_k1)
+    rng = np.random.default_rng(semilla)
+    logs = []
+    for _ in range(remuestreos):
+        sub = pts.subconjunto(rng.integers(0, len(pares), len(pares)))
+        fb, _ = _mejor_lente(sub, cxq, cyq, f, 1.1, (k1 - 0.06, k1 + 0.06), nf=9, nk=7,
+                             vueltas=2)  # fmt: skip
+        logs.append(math.log(fb))
+    sigma = FACTOR_SIGMA * float(np.std(logs)) if logs else None
+    if abs(math.log(f / f0q)) > 0.98 * math.log(rango):
+        return FocalMedida(None, sigma, len(pares), "la focal cae en el borde de la búsqueda")
+    return FocalMedida(f / q, sigma, len(pares), k1=k1)

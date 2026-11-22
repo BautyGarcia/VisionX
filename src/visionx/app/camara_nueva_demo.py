@@ -335,9 +335,13 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
     estimador = _estimador(args.red)
     autocalibrar = None
     if not args.sin_movimiento:
-        from visionx.app.autocalibracion import focal_por_movimiento
+        import functools
 
-        autocalibrar = focal_por_movimiento
+        from visionx.app.autocalibracion import lente_por_movimiento
+
+        # Focal y lente juntas (las cámaras baratas tienen distorsión); menos remuestreos que
+        # en la evaluación para que el paso tarde segundos y no un minuto.
+        autocalibrar = functools.partial(lente_por_movimiento, remuestreos=6)
     # Los recorridos simulados ya vienen espaciados: cada cuadro cuenta.
     intervalo = 0.0 if isinstance(fuente, FuenteSimulada) else 0.1
 
