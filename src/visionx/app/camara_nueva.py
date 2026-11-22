@@ -191,6 +191,8 @@ class EstadoAlta:
     nivel: str = "sin-estimar"
     mensajes: list[str] = field(default_factory=list)
     tiempos_ms: dict[str, float] = field(default_factory=dict)  # por paso, para la pantalla
+    entrada: str = ""  # lo que se tipea en la pantalla en el paso de la escala («6,3», «2m»)
+    modelo: PerfilCamara | None = None  # modelo elegido de la lista (Tab) para la separación
 
 
 class AltaCamara:
@@ -364,6 +366,68 @@ class AltaCamara:
         if self.estado.paso is not Paso.ESCALA:
             return []
         return self._terminar("salteada")
+
+    # --- teclado (pantalla) ----------------------------------------------------------------
+
+    def tipear(self, c: str) -> None:
+        """Un carácter tipeado en la pantalla: dígitos, coma/punto y «m» (metros a un objeto)."""
+        e = self.estado
+        if e.paso is not Paso.ESCALA or len(e.entrada) >= 8:
+            return
+        if (
+            c.isdigit()
+            or (c in ",." and not any(x in e.entrada for x in ",."))
+            or (c == "m" and e.entrada and "m" not in e.entrada)
+        ):
+            e.entrada += "," if c == "." else c
+            e.modelo = None
+
+    def borrar(self) -> None:
+        self.estado.entrada = self.estado.entrada[:-1]
+
+    def modelos(self) -> list[PerfilCamara]:
+        """Los modelos conocidos con su separación (los perfiles de `configs/camaras`)."""
+        vistos, out = set(), []
+        for p in self.perfiles:
+            if p.separacion_m > 0 and p.nombre not in vistos:
+                vistos.add(p.nombre)
+                out.append(p)
+        return out
+
+    def siguiente_modelo(self) -> None:
+        """Tab: el próximo modelo de la lista (vuelve a empezar al final)."""
+        e = self.estado
+        lista = self.modelos()
+        if e.paso is not Paso.ESCALA or not lista:
+            return
+        k = lista.index(e.modelo) + 1 if e.modelo in lista else 0
+        e.modelo = lista[k % len(lista)]
+        e.entrada = ""
+
+    def confirmar(self) -> list[str]:
+        """Enter: el modelo elegido, los centímetros tipeados o «N m» (un objeto a N metros)."""
+        e = self.estado
+        if e.paso is not Paso.ESCALA:
+            return []
+        if e.modelo is not None and not e.entrada:
+            m = e.modelo
+            e.modelo = None
+            self._decir(f"Separación de {m.nombre}: {_coma(100 * m.separacion_m)} centímetros.")
+            frases = self.separacion(m.separacion_m)
+            if e.perfil is not None and e.paso is Paso.LISTO:
+                e.perfil = replace(e.perfil, extra={**e.perfil.extra, "modelo": m.id})
+            return [e.mensajes[-len(frases) - 1], *frases]
+        texto, e.entrada = e.entrada, ""
+        if not texto:
+            return self._decir("Tipeá los centímetros entre lentes, «2m» para un objeto a dos "
+                               "metros, o Tab para elegir el modelo.")  # fmt: skip
+        try:
+            valor = float(texto.rstrip("m").replace(",", "."))
+        except ValueError:
+            return self._decir("No entendí lo que tipeaste.")
+        if texto.endswith("m"):
+            return self.objeto_a(valor)
+        return self.separacion(valor / 100.0)
 
     # --- internos --------------------------------------------------------------------------
 

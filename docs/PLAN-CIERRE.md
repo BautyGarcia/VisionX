@@ -28,7 +28,7 @@ tienen juntas:
 | Red + 15 s girando la cámara (autocalibración) | **0,9 % de error en la focal** (P90 3,6 %), con la duda bien puesta (cubre el 89 %) |
 | Sin la red como punto de partida | Falla en todo el gran angular de 130 °: la red es el seguro contra cámaras raras |
 | Sistema completo con la focal de la red (E3) | 8,7 % de error medio en distancia, contra 9,8 % suponiendo una ELP y 5,2 % calibrada |
-| Sistema completo con red + movimiento (E3) | *se completa hoy* |
+| **Sistema completo: red + 15 s girando + separación + objeto (E3)** | **5,4 % (mediana 3,4 %): +0,2 puntos sobre la calibrada.** Con la focal de la red sola, 13,5 % |
 | Pantalla «Cámara nueva» con todo integrado | ZED 2 simulada: midió 109 ° (real 110 °), alineó los ojos de 6,8 a 0,2 px y quedó «precisa» |
 
 ## 2. Críticas, de la más grave a la menos grave
@@ -106,6 +106,10 @@ datos de sobra; el cuello de botella es validar en real y escribir.
 > con menos de 1 % de error, alinea los dos ojos y te dice a qué distancia están las cosas, con
 > un margen honesto. Y cada cámara que se calibra así le enseña a la red a reconocer la
 > siguiente.
+
+El número que lo sostiene (simulación, 72 recorridos, 9 cámaras): con 15 s girando, la
+separación de la hoja de datos y un objeto a distancia conocida, una cámara desconocida mide con
+**+0,2 puntos** de error sobre una calibrada con tablero (5,4 % contra 5,2 % por píxel).
 
 Para que sea verdad: **A** (real) y **B** (margen honesto en la voz). «Le enseña a la red» es
 **D**. Lo demás ya está.

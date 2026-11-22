@@ -40,6 +40,144 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-22 (tarde) — T12/T13: autocalibración por movimiento, E3 real y etiquetas de la geometría
+
+Tarea: T12, T13. Persona/agente: Tomás / Claude Code. PC de escritorio. CREStereo continuo en
+la Radeon (ONNX + DirectML); red de entrada v2 de #90 en la CPU (mismos pesos, sha256
+verificado). Código en #91 y en este PR. Crudos fuera de Git:
+- `outputs/camara_net/e2-v*/eval-pc/`;
+- `outputs/gtsynth/{autocalib,e3-red,e3-mov}/`;
+- `outputs/autoetiquetas/`.
+
+**1. La red v2 con las 8 escenas de gt-video** (Bauty tenía 2), por cuadro, 6480 cuadros:
+- error de focal mediano **12,7 %** (P90 40 %); la v1 da 13,5 % (P90 41 %);
+- con todos los cuadros de un recorrido juntos: Replica 0,2–16 %, **HSSD 4–55 %**.
+
+Lectura: la red generaliza mal a las casas de HSSD de val aunque se entrenó con HSSD. Con 2
+escenas de Replica no se veía.
+
+**2. Autocalibración por movimiento** (`app/autocalibracion.py`, `gtsynth autocalib`):
+- **Método:** se emparejan puntos SIFT entre cuadros del ojo izquierdo separados 3, 6 y 12
+  cuadros (60 cuadros) y se busca la focal que deja las `E = Kᵀ F K` más esenciales
+  (Mendonça-Cipolla).
+- **Punto de partida:** la red; la búsqueda va entre ×½ y ×2.
+- **Duda:** por bootstrap sobre los pares, ×2 (medido: sin el factor cubría el 56 %).
+- **Combinación:** con la red, por la inversa de la varianza (la b de la red ×3,6: ×1,79 de val
+  y ×2 fuera de val). 72 recorridos:
+
+| Error de focal | Mediana | P90 | Cobertura 90 % |
+|---|---:|---:|---:|
+| La red sola | 9,8 % | 35 % | 75 % |
+| Movimiento, partiendo de la red | 0,8 % | 2,7 % | 94 % |
+| **Red + movimiento combinados** | **0,9 %** | **3,6 %** | **89 %** |
+| Movimiento, partiendo de 90° (sin red) | 0,6 % (63 de 72) | — | — |
+
+Lectura:
+- **La meta de E2 (focal ≤ 2 %) se cumple con red + movimiento, no con la red sola.**
+- Sin red, el movimiento falla en los 8 recorridos de 130°: arrancando de 90°, la focal real
+  queda fuera de la búsqueda. Ahí la red es el seguro.
+- Cuando la cámara se parece a 90°, la red no aporta a la focal.
+- Los peores casos (15–19 %) son recorridos que casi no se mueven al principio, y la duda lo
+  dice (±7–9 %).
+
+**3. E3 real** (`sin-calibrar --red-camara` / `--focal-movimiento`). Otra unidad ×1, clásico y
+un objeto a distancia conocida; error mediano en distancia por recorrido, promedio de las 8
+escenas (CREStereo continuo):
+
+| Cámara | Calibrada | ELP + clás. + obj. (escala) | Red + clás. + obj. (escala) | Red + mov. + clás. + obj. (escala) | Red + mov. + separación, sin objeto |
+|---|---:|---:|---:|---:|---:|
+| 60° | 6,7 | 14,8 | 10,7 | 10,7 | 21,3 |
+| 20 cm | 5,0 | 7,0 | 6,2 | 5,8 | 9,6 |
+| ELP | 6,3 | 9,4 | 10,5 | 9,2 | 17,4 |
+| 130° | 8,4 | 12,3 | 11,3 | 13,8 | 23,6 |
+| OAK-D | 3,5 | 12,0 | 6,9 | 7,6 | 14,5 |
+| D435 | 3,8 | 13,0 | 11,3 | 11,2 | 26,6 |
+| D455 | 7,0 | 8,8 | 8,8 | 9,0 | 16,5 |
+| ZED 2 | 2,7 | 4,2 | 4,6 | 4,0 | 7,1 |
+| ZED Mini | 3,5 | 7,0 | 8,0 | 7,1 | 14,3 |
+| **Media** | **5,2** | **9,8** | **8,7** | **8,7** | **16,8** |
+
+Lectura: **tener la focal casi perfecta no mejoró la distancia cuando el objeto corrige la
+escala** En esta prueba hay dos errores a la vez: la cámara es otra (focal y separación) y es
+otra unidad (los ojos corridos entre sí). Un objeto corrige una sola cosa. Con la focal medida
+y la separación conocida, la escala ya está, y el objeto se desperdicia corrigiéndola. Tendría
+que corregir el corrimiento de la otra unidad, como en la calibrada. Esa versión está en la
+sección 5.
+
+**4. Etiquetas de la geometría para la v3** (`gtsynth autoetiquetas`). 366 recorridos de
+`hssd-recorridos-sorteada-b` (casas de train, 30 cuadros, cámara sorteada, que la v2 no vio),
+sin mirar la cámara real:
+- **Aceptadas (duda ≤ 3 %):** 97 recorridos, 2910 cuadros, con **0,7 % de error mediano** (P90
+  2,6 %). En esos mismos recorridos la red sola erraba 9,7 %.
+- **Con duda ≤ 5 %:** 166 recorridos (4980 cuadros), 1,2 %.
+
+En el Drive `autoetiquetas/`, con la receta en [RED-ENTRADA](RED-ENTRADA.md).
+
+**5. E3 con separación conocida y el objeto corrigiendo el corrimiento** (la versión buena).
+Con la focal medida y la separación de la hoja de datos, la escala ya está: el objeto corrige el
+corrimiento de la unidad, igual que en la calibrada. Mismos 72 recorridos, error mediano en
+distancia por recorrido, promedio de las 8 escenas:
+
+| Cámara | Calibrada | Red sola + sep. + obj. | **Red + movimiento + sep. + obj.** |
+|---|---:|---:|---:|
+| 60° | 6,7 | 13,6 | 7,2 |
+| 20 cm | 5,0 | 13,3 | 5,4 |
+| ELP | 6,3 | 19,5 | 5,9 |
+| 130° | 8,4 | 17,1 | 6,3 |
+| OAK-D | 3,5 | 9,7 | 4,5 |
+| D435 | 3,8 | 8,8 | 4,3 |
+| D455 | 7,0 | 13,9 | 7,6 |
+| ZED 2 | 2,7 | 13,7 | 2,9 |
+| ZED Mini | 3,5 | 11,5 | 4,3 |
+| **Media** | **5,2** | **13,5** | **5,4** |
+| Mediana | 3,1 | 6,1 | 3,4 |
+
+Recorrido por recorrido, contra la calibrada:
+- diferencia mediana +0,08 puntos (media +0,18; P90 +1,7);
+- 23 de 72 iguales o mejores;
+- 5 de 72 más de 2 puntos peores.
+
+Tres de esos 5 son la casa `102343992`, donde la cámara casi no se mueve al principio: el
+movimiento no midió, quedó la red, y la duda lo avisaba (±7–9 %). En la app es cuando se pide
+«girá un poco más». Los otros dos son la casa de paredes lisas, donde la calibrada ya da 8–10 %.
+
+Lectura:
+- **Con 15 s girando, la separación de la hoja de datos y un objeto, una cámara desconocida mide
+  como una calibrada con tablero: +0,2 puntos.** Con la focal de la red sola, el mismo camino da
+  13,5 %: el movimiento es lo que hace funcionar el plug and play.
+- La métrica es por píxel (0,3–6 m, toda la imagen), en CREStereo continuo. Casi todo el 5 % es
+  error de CREStereo, que la calibrada también tiene. Por objeto y en modo preciso, la voz
+  trabaja con errores mucho menores (0,2–0,7 % con la cámara conocida, entrada del 21/11).
+
+**Integración** (#91):
+- «Cámara nueva»:
+  - pide girar la cámara;
+  - paso «Medir con el movimiento», con reintento;
+  - escala por separación o por un objeto;
+  - la red como estimador.
+- **Duda total en la voz:** la duda de la cámara se suma a la de la U-Net antes de elegir el
+  nivel.
+- **Alineación en vivo:** alinea al arrancar y vuelve a alinear si la cámara se golpea. Tapa un
+  hueco: los perfiles de «Cámara nueva» no guardaban la alineación del clásico.
+
+De punta a punta con una ZED 2 simulada en `office_2`: midió 109° (real 110°), alineó de 6,8 a
+0,2 px y quedó «precisa». `pytest`: 1402 passed.
+
+Problemas/cambios:
+- El bootstrap subestimaba la duda: ×2, medido en los mismos 72 recorridos (optimista: hay que
+  confirmarlo con otros).
+- La red se cree más segura de lo que es fuera de val (cubre 42 % con ×1,79).
+
+Límites:
+- Todo en simulación, con renders pinhole: la autocalibración todavía no busca la distorsión
+  (mejora G).
+- Una sola semilla.
+- Nada probado con la ELP real (tarea A de Bauty, [PLAN-CIERRE](PLAN-CIERRE.md)).
+
+Próximo paso:
+- (Bauty) A con la ELP; la v3-auto con las etiquetas, más el control.
+- (Tomás) Distorsión (G); evaluar la v3 el mismo día que llegue.
+
 ## 2026-11-22 — T12: E2, la red que estima la cámara: 5–14 % de focal, lejos del 2 %
 
 Tarea: T12 (E2 de [PLUG-AND-PLAY](PLUG-AND-PLAY.md)). Persona/agente: Bauty / Claude Code. Mac,

@@ -41,12 +41,18 @@ Error de focal por cuadro (mediana / P90), en %:
 
 El sistema completo, error mediano en distancia por recorrido (promedio de las 9 cámaras):
 
-| Cámara que supone el sistema | Error medio | Mediana |
-|---|---:|---:|
-| Calibrada (la ideal) | 5,2 % | 3,1 % |
-| Una ELP, sin red | 9,8 % | 8,6 % |
-| La red v2 | 8,7 % | 6,6 % |
-| La red v2 + movimiento | *corriendo* | |
+| Cámara que supone el sistema | Qué corrige el objeto | Error medio | Mediana |
+|---|---|---:|---:|
+| Calibrada (la ideal) | corrimiento | 5,2 % | 3,1 % |
+| Una ELP, sin red | escala | 9,8 % | 8,6 % |
+| La red v2 | escala | 8,7 % | 6,6 % |
+| La red v2 + movimiento | escala | 8,7 % | 6,7 % |
+| La red v2 + separación de la hoja de datos | corrimiento | 13,5 % | 6,1 % |
+| **La red v2 + movimiento + separación** | **corrimiento** | **5,4 %** | **3,4 %** |
+
+Con la focal medida y la separación conocida, la escala ya está y el objeto corrige el
+corrimiento de la unidad, como en la calibrada: **+0,2 puntos sobre la calibrada** (diferencia
+mediana por recorrido +0,08). Con la focal de la red sola el mismo camino da 13,5 %.
 
 ## Lo que se aprendió en cada paso
 
@@ -54,9 +60,12 @@ El sistema completo, error mediano en distancia por recorrido (promedio de las 9
   escena: juntar cuadros del mismo cuarto no ayuda (sesgo por escena).
 - **8 escenas en vez de 2** (22/11). La v2 anda bien en Replica y mal en las casas de HSSD de
   val (15–55 %), aunque se entrenó con HSSD. Con 2 escenas de Replica no se veía.
-- **Movimiento** (22/11). La geometría mide la focal con 0,9 % de mediana, sin entrenar nada. La
-  red sigue aportando el centro, el respaldo y la duda. Medir cuánto aporta como punto de
-  partida: autocalibración arrancando de 90° (*corriendo*).
+- **Movimiento** (22/11). La geometría mide la focal con 0,9 % de mediana, sin entrenar nada.
+  Arrancando de 90° sin la red, falla en todo el gran angular de 130°: la red es el seguro
+  contra cámaras raras, y aporta el centro y la duda.
+- **Sistema completo** (22/11). Red + movimiento + separación + objeto queda a +0,2 puntos de
+  la cámara calibrada. Clave: con la escala resuelta, el objeto tiene que corregir el
+  corrimiento, no la escala.
 
 ## Próximo paso: que la geometría entrene a la red (v3-auto)
 
