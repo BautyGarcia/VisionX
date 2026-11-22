@@ -62,8 +62,15 @@ class RedCamara(nn.Module):
         b, v = ojos.shape[:2]
         x = ojos.flatten(0, 1)
         x = torch.cat([x, _coordenadas(x)], 1)
-        f = self.zonas(self.reducir(self.tronco(x))).flatten(1)
-        return f.view(b, v, -1).mean(1)
+        f = self.reducir(self.tronco(x))
+        h, w = f.shape[-2:]
+        if f.device.type == "mps" and (h % 3 or w % 4):
+            # MPS no sabe hacer el promedio adaptativo con zonas desparejas (p. ej. 1280×800 da
+            # 13×20 rasgos); en la CPU el resultado es el mismo.
+            f = self.zonas(f.cpu()).to(f.device)
+        else:
+            f = self.zonas(f)
+        return f.flatten(1).view(b, v, -1).mean(1)
 
     def forward(self, ojos: torch.Tensor, aspecto: torch.Tensor) -> dict[str, torch.Tensor]:
         """Media (en unidades de etiqueta) y log b (en unidades de `ESCALA`) de cada parámetro."""
