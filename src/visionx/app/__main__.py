@@ -265,6 +265,11 @@ def cmd_ejecutar(args: argparse.Namespace) -> int:
     detector = build_detector(args, cfg, synthetic)
     depth, spatial, depth_geometry = build_depth(args, cfg, geometry, synthetic)
     precise = build_precision(args, cfg, geometry, on_event)
+    # «Calibrá, está a 2 metros»: corrimiento con un objeto; escala y corrimiento con dos
+    # distancias. Con perfiles de «Cámara nueva» se guarda y la próxima vez arranca corregida.
+    from visionx.app.distancia_viva import envolver
+
+    depth, precise = envolver(depth, precise, getattr(args, "perfil_camara", None))
 
     last_audio: list[str] = ["-"]
 

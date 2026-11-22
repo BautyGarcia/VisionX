@@ -77,3 +77,40 @@ def test_without_the_method_the_app_says_so():
     )  # fmt: skip
     ctl.handle_text("Calibrá a 2 metros.")
     assert "no se calibra" in sink.events[0].text_or_sound
+
+
+def test_dos_distancias_corrigen_escala_y_corrimiento_en_la_app():
+    """«Calibrá, está a 2 metros» y después a 4: queda exacta a cualquier distancia."""
+    import numpy as np
+
+    from visionx.app.distancia_viva import CorreccionDistancia, ProfundidadCorregida
+    from visionx.shared.contracts import DepthResult, DepthStatus
+
+    class Est:
+        geometry = SimpleNamespace(fx=100.0, baseline_m=0.1)  # f·B = 10
+
+        def predict(self, frame):  # cámara con f·B 4 % corrido y la unidad 0,5 px corrida
+            d = np.full((60, 90), 1.04 * 10.0 / frame.z + 0.5, np.float32)
+            return DepthResult(session_id="s", frame_id=frame.frame_id, model_id="m",
+                               geometry_id="g", disparity_px=d, valid_mask=np.ones(d.shape, bool),
+                               status=DepthStatus.VALID, inference_ms=1.0,
+                               depth_m=(10.0 / d).astype(np.float32))  # fmt: skip
+
+    guardadas = []
+    prof = ProfundidadCorregida(Est(), CorreccionDistancia(), guardadas.append)
+
+    def z_medida(z, fid):
+        return float(np.median(prof.predict(SimpleNamespace(frame_id=fid, z=z)).depth_m))
+
+    assert abs(z_medida(2.0, 1) - 2.0) > 0.05  # sin calibrar, errada
+    assert prof.calibrar_distancia(SimpleNamespace(frame_id=1), None, 2.0)
+    assert prof.correccion.modo == "corrimiento" and "un paso" in prof.sugerencia
+    assert abs(z_medida(2.0, 2) - 2.0) < 1e-3  # a esa distancia ya está
+    assert abs(z_medida(4.0, 3) - 4.0) > 0.02  # a otra, todavía no
+    assert prof.calibrar_distancia(SimpleNamespace(frame_id=3), None, 4.0)
+    assert prof.correccion.modo == "ambas" and len(guardadas) == 2
+    for k, z in enumerate((0.8, 1.5, 3.0, 5.0)):
+        assert abs(z_medida(z, 10 + k) - z) < 1e-3 * z
+    assert not prof.calibrar_distancia(SimpleNamespace(frame_id=999), None, 2.0)  # sin cuadro
+    otra = CorreccionDistancia.de_dict(prof.correccion.a_dict())
+    assert otra.modo == "ambas" and abs(otra.escala - 1.04) < 1e-3

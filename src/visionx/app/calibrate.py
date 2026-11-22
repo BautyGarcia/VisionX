@@ -78,6 +78,8 @@ def build_calibrator(
         name = spoken(target.label)
         if not ok:
             return [f"No pude calibrar con {name}. Probá con otro objeto."]
-        return [f"Listo, calibré con {name} a {meters(z_m, s, approx=False)}."]
+        frases = [f"Listo, calibré con {name} a {meters(z_m, s, approx=False)}."]
+        sugerencia = getattr(depth, "sugerencia", None)
+        return frases + ([sugerencia] if isinstance(sugerencia, str) else [])
 
     return calibrate

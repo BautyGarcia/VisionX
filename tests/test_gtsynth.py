@@ -395,3 +395,28 @@ def test_autocalibracion_encuentra_la_focal_con_puntos_sinteticos():
     assert abs(math.exp(lf) / 500 - 1) < 0.01 and s < 0.01
     lf, s = combinar(math.log(550.0), 0.10, FocalMedida(None, None, 0, "poco movimiento"))
     assert lf == math.log(550.0) and s == 0.10
+
+
+def test_dos_distancias_corrigen_escala_y_corrimiento():
+    from visionx.gtsynth.evaluar import ajustar_ambas
+
+    reales = [10.0, 15.0, 20.0, 30.0]  # el mismo objeto a 4 distancias (disparidad real)
+    medidas = [1.04 * r + 0.8 for r in reales]  # f·B 4 % corrido y la unidad 0,8 px corrida
+    escala, corr = ajustar_ambas(medidas, reales)
+    assert escala == pytest.approx(1.04) and corr == pytest.approx(0.8)
+    assert ajustar_ambas([10.4, 10.5], [10.0, 10.1]) is None  # casi la misma distancia
+    assert ajustar_ambas([10.4], [10.0]) is None
+
+
+def test_el_previo_de_la_escala_aguanta_un_objeto_ruidoso():
+    from visionx.gtsynth.evaluar import ajustar_ambas
+
+    reales = [10.0, 12.0, 14.0, 16.0]
+    ruido = [0.9, -0.8, 0.7, -0.9]  # medidas malas (pared lisa): sin previo, la escala se va
+    medidas = [r + 0.5 + e for r, e in zip(reales, ruido, strict=True)]
+    libre = ajustar_ambas(medidas, reales)
+    con_previo = ajustar_ambas(medidas, reales, sigma_d=0.3, sigma_escala=0.02)
+    assert abs(libre[0] - 1) > 0.1 and abs(con_previo[0] - 1) < 0.05
+    buenas = [1.04 * r + 0.5 for r in [10.0, 15.0, 20.0, 30.0]]  # medidas buenas: corrige las dos
+    esc, corr = ajustar_ambas(buenas, [10.0, 15.0, 20.0, 30.0], sigma_d=0.05, sigma_escala=0.02)
+    assert esc == pytest.approx(1.04, abs=0.005) and corr == pytest.approx(0.5, abs=0.1)

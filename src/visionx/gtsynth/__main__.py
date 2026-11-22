@@ -104,6 +104,8 @@ def cmd_evaluar(args: argparse.Namespace) -> int:
     if not lista:
         print(f"no hay vistas {carpeta}/{args.particion}", file=sys.stderr)
         return 1
+    if args.geometria == "estimada":
+        return _evaluar_estimada(args, cfg, carpeta, lista)
     geometria = ELP_RENDER
     if args.geometria != "elp":  # la cámara de las vistas (recorte nominal)
         from visionx.gtsynth.dataset import VistaNominal
@@ -139,6 +141,75 @@ def cmd_evaluar(args: argparse.Namespace) -> int:
         m, lista, args.variante, args.max, args.min_px, progreso, alineador,
         args.vistas_por_camara, args.distancia_conocida,
     )  # fmt: skip
+    if not filas:
+        print("no se midió ningún objeto", file=sys.stderr)
+        return 1
+    path = Path(args.csv)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(filas[0]))
+        writer.writeheader()
+        writer.writerows(filas)
+    r = resumen(filas)
+    path.with_suffix(".json").write_text(json.dumps(r, ensure_ascii=False, indent=1),
+                                         encoding="utf-8")  # fmt: skip
+    print(json.dumps(r, ensure_ascii=False, indent=1))
+    print(f"{len(filas)} objetos en {path}")
+    return 0
+
+
+def _evaluar_estimada(args: argparse.Namespace, cfg: dict, carpeta: str, lista: list) -> int:
+    """Por objeto con la cámara que estima el sistema, un recorrido (escena) a la vez.
+
+    Focal de red + movimiento (`--focal-movimiento`, JSON de `gtsynth autocalib`), centro de la
+    red (`--red-camara`, CSV de `camara_net evaluar`) y la separación conocida (hoja de datos).
+    El resto igual que `--geometria vista`: alineación y distancia conocida a elección.
+    """
+    import json
+    import time
+
+    from visionx.gtsynth.dataset import VistaNominal
+    from visionx.gtsynth.evaluar import Medidor, medir, resumen
+    from visionx.gtsynth.sin_calibrar import camara_de_la_red, geometria_red, leer_red
+
+    if not (args.focal_movimiento and args.red_camara):
+        print("--geometria estimada pide --focal-movimiento y --red-camara", file=sys.stderr)
+        return 1
+    filas_fm = json.loads(Path(args.focal_movimiento).read_text(encoding="utf-8"))["filas"]
+    fm = {(f["variante"], f["escena"]): f["fx_real"] * (1 + f["comb_err_pct"] / 100)
+          for f in filas_fm}  # fmt: skip
+    red = leer_red(args.red_camara)
+    todas: dict[str, list] = {}
+    for v in vistas(args.raiz, carpeta, args.particion):
+        todas.setdefault(v.escena, []).append(v)
+    por_escena: dict[str, list] = {}
+    for v in lista:
+        por_escena.setdefault(v.escena, []).append(VistaNominal(v.carpeta))
+    filas: list[dict] = []
+    t0 = time.time()
+    for escena in sorted(por_escena):
+        vs = sorted(todas[escena], key=lambda v: v.meta["indice"])
+        cam = camara_de_la_red(vs, red)
+        g = por_escena[escena][0].geometria
+        if cam is None or (args.variante, escena) not in fm:
+            print(f"  {escena}: sin estimación de la red o del movimiento; se saltea")
+            continue
+        cam = {**cam, "fx": fm[(args.variante, escena)] * cam["ancho"] / g.width}
+        g_est = geometria_red(g, cam, g.baseline_m)
+        m = Medidor.armar(args.profundidad, cfg, g_est)
+        alineador = None
+        if args.alinear != "ninguna":
+            from visionx.depth.crestereo_adapt.align_apply import Alineador
+
+            alineador = Alineador(args.alinear, g_est, np.zeros(5), args.red)
+        nuevas = medir(m, por_escena[escena], args.variante, args.max, args.min_px, None,
+                       alineador, args.vistas_por_camara, args.distancia_conocida)  # fmt: skip
+        for f in nuevas:
+            f["fx_estimada"] = round(g_est.fx, 2)
+            f["fx_real"] = round(g.fx, 2)
+        filas += nuevas
+        print(f"  {escena}: {len(nuevas)} objetos, focal {100 * (g_est.fx / g.fx - 1):+.2f} % "
+              f"({time.time() - t0:.0f} s)", flush=True)  # fmt: skip
     if not filas:
         print("no se midió ningún objeto", file=sys.stderr)
         return 1
@@ -220,12 +291,15 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("--cada", type=int, default=1, help="una de cada N vistas (recorridos)")
     ev.add_argument(
         "--geometria",
-        choices=["elp", "vista", "elp-supuesta"],
+        choices=["elp", "vista", "elp-supuesta", "estimada"],
         default="elp",
         help="elp: renders de la ELP (por defecto); vista: la cámara de las vistas, recortada a "
         "su tamaño nominal (gt-video, perfiles); elp-supuesta: esas vistas, pero el sistema cree "
-        "que la cámara es una ELP (E0, plug and play)",
+        "que la cámara es una ELP (E0, plug and play); estimada: la que estima el sistema con "
+        "red + movimiento y la separación conocida, por recorrido",
     )
+    ev.add_argument("--focal-movimiento", default=None, help="JSON de `gtsynth autocalib`")
+    ev.add_argument("--red-camara", default=None, help="CSV de `camara_net evaluar`")
     ev.add_argument("--min-px", type=int, default=400)
     ev.add_argument(
         "--alinear",
@@ -245,9 +319,10 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         const="corrimiento",
         default=None,
-        choices=["corrimiento", "escala"],
+        choices=["corrimiento", "escala", "ambas"],
         help="el objeto apuntado de la primera vista de cada cámara corrige un corrimiento de "
-        "columnas (por defecto, misma cámara) o la escala f·B (cámara distinta o estimada)",
+        "columnas (por defecto, misma cámara), la escala f·B (cámara distinta o estimada) o "
+        "ambas (el mismo objeto a varias distancias, al principio del recorrido)",
     )
     ca = sub.add_parser("camaras", help="precalcular la demo de cámaras distintas del stand")
     ca.add_argument("raiz")
