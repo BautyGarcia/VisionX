@@ -438,3 +438,47 @@ def test_front_percentile_is_the_same_in_depth_and_in_disparity():
     p20_z = np.percentile(z, 20, method="lower")
     from_d = G.fx * G.baseline_m / np.percentile(d, 80, method="higher")
     assert math.isclose(p20_z, from_d, rel_tol=1e-12)
+
+
+def test_b_factor_fills_the_90_percent_interval_around_the_front():
+    z = np.full((H, W), 3.0, np.float32)
+    z[100:200, 300:340] = 2.0
+    b = np.full((H, W), 0.5, np.float32)
+    obj, diag = locate1(
+        z, rect(100, 200, 300, 340), LocatorParams(min_valid_px=0, b_factor=0.4), b=b
+    )
+    fb = G.fx * G.baseline_m
+    d = fb / obj.z_m  # disparidad efectiva del frente
+    t = math.log(10.0) * 0.5 * 0.4
+    assert obj.z_bajo_m == pytest.approx(fb / (d + t))
+    assert obj.z_alto_m == pytest.approx(fb / (d - t))
+    assert obj.z_bajo_m < obj.z_m < obj.z_alto_m
+    assert diag.b_median_px == pytest.approx(0.5)  # el diagnóstico sigue sin el factor
+
+
+def test_without_b_factor_or_without_b_there_is_no_interval():
+    z = np.full((H, W), 3.0, np.float32)
+    z[100:200, 300:340] = 1.0
+    b = np.full((H, W), 0.5, np.float32)
+    off, _ = locate1(z, rect(100, 200, 300, 340), b=b)  # b_factor 0: como antes
+    no_b, _ = locate1(z, rect(100, 200, 300, 340), LocatorParams(min_valid_px=0, b_factor=0.4))
+    assert (off.z_bajo_m, off.z_alto_m) == (None, None)
+    assert (no_b.z_bajo_m, no_b.z_alto_m) == (None, None)
+    with pytest.raises(InvalidInput):
+        LocatorParams(b_factor=-1.0)
+
+
+def test_interval_without_upper_bound_when_b_crosses_zero_disparity():
+    z = np.full((H, W), 3.0, np.float32)
+    z[100:200, 300:340] = 2.5  # d ≈ 14,4 px
+    b = np.full((H, W), 20.0, np.float32)
+    obj, _ = locate1(z, rect(100, 200, 300, 340), LocatorParams(min_valid_px=0, b_factor=1.0), b=b)
+    assert obj.z_bajo_m is not None and obj.z_bajo_m < obj.z_m
+    assert obj.z_alto_m is None
+
+
+def test_abstained_object_has_no_interval():
+    z = np.full((H, W), np.nan, np.float32)
+    b = np.full((H, W), 0.5, np.float32)
+    obj, _ = locate1(z, rect(100, 200, 300, 340), LocatorParams(min_valid_px=0, b_factor=0.4), b=b)
+    assert obj.z_m is None and (obj.z_bajo_m, obj.z_alto_m) == (None, None)

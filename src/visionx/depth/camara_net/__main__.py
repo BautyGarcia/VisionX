@@ -8,6 +8,12 @@
 - los recorridos de `data/gt-video` (las 6 cámaras de la expo y 3 genéricas), tal cual, por
   cuadro, de a 8 cuadros y con todos los cuadros juntos.
 No usa nunca la partición test.
+
+Parte real de D (video de una cámara real, etiquetado por la geometría):
+
+    uv run python -m visionx.depth.camara_net desde-grabacion recordings/<grabación> \
+        --calibracion configs/calib/elp-2026-11-11-corregida.yaml
+    uv run --extra ml python -m visionx.depth.camara_net etiquetar-real
 """
 
 from __future__ import annotations
@@ -55,6 +61,23 @@ def _evaluar(a: argparse.Namespace) -> None:
     print(f"listo: {salida / 'resumen.json'}")
 
 
+def _desde_grabacion(a: argparse.Namespace) -> None:
+    from visionx.depth.camara_net.grabacion import convertir
+
+    for g in a.grabaciones:
+        r = convertir(g, a.raiz, a.variante, a.cuadros, a.paso, a.ancho, a.calibracion,
+                      a.sin_lente)  # fmt: skip
+        print(json.dumps(r, ensure_ascii=False), flush=True)
+
+
+def _etiquetar_real(a: argparse.Namespace) -> None:
+    # Las escenas reales no están en ninguna partición de la simulación: particion=None.
+    from visionx.gtsynth.autoetiquetas import correr
+
+    q = correr(a.raiz, a.variante, a.red, a.salida, particion=None)
+    print(json.dumps(q, ensure_ascii=False, indent=1))
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="python -m visionx.depth.camara_net")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -90,6 +113,25 @@ def main(argv: list[str] | None = None) -> None:
     ev.add_argument("--trabajadores", type=int, default=6)
     ev.add_argument("--device", default="auto")
     ev.set_defaults(fn=_evaluar)
+    real = ROOT / "data" / "real"
+    dg = sub.add_parser("desde-grabacion", help="D real: grabación cruda → recorridos (vistas)")
+    dg.add_argument("grabaciones", nargs="+", help="carpetas de `camera grabar` (par crudo)")
+    dg.add_argument("--raiz", default=str(real))
+    dg.add_argument("--variante", default="elp-recorridos-real")
+    dg.add_argument("--cuadros", type=int, default=60, help="cuadros por recorrido (como la app)")
+    dg.add_argument("--paso", type=int, default=2, help="uno de cada N pares grabados")
+    dg.add_argument("--ancho", type=int, default=960)
+    dg.add_argument("--calibracion", default=None,
+                    help="calibración de tablero: solo para el control (fx_real)")  # fmt: skip
+    dg.add_argument("--sin-lente", action="store_true",
+                    help="control: sin la lente del tablero (otra --variante)")  # fmt: skip
+    dg.set_defaults(fn=_desde_grabacion)
+    er = sub.add_parser("etiquetar-real", help="D real: red + movimiento sobre esos recorridos")
+    er.add_argument("--raiz", default=str(real))
+    er.add_argument("--variante", default="elp-recorridos-real")
+    er.add_argument("--red", default=str(ROOT / "outputs" / "camara_net" / "e2-v2" / "mejor.pt"))
+    er.add_argument("--salida", default=str(ROOT / "outputs" / "autoetiquetas" / "real.csv"))
+    er.set_defaults(fn=_etiquetar_real)
     a = ap.parse_args(argv)
     a.fn(a)
 

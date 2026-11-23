@@ -89,6 +89,14 @@ class CreStereoEstimator:
         self.matcher.reset()
 
 
+def incertidumbre_de(section: dict[str, Any], mode: str) -> str:
+    """Checkpoint de la U-Net para `mode`: el de su sección si lo trae, si no el general."""
+    mode_cfg = section.get(mode) or {}
+    if "incertidumbre" in mode_cfg:
+        return str(mode_cfg["incertidumbre"] or "")
+    return str(section.get("incertidumbre") or "")
+
+
 def load_estimator(
     cfg: dict[str, Any],
     geometry: StereoGeometry,
@@ -103,7 +111,9 @@ def load_estimator(
     """Arma el estimador desde la config (`depth.crestereo`).
 
     Si `depth.crestereo.incertidumbre` apunta a un checkpoint, se carga la U-Net de
-    incertidumbre y el resultado trae b. `uncertainty` permite pasar una ya cargada.
+    incertidumbre y el resultado trae b. La sección del modo puede pisarla con su propia
+    `incertidumbre` (p. ej. solo en `preciso`, donde está validada; "" la apaga en ese modo).
+    `uncertainty` permite pasar una ya cargada.
 
     `mode` elige la sección `continuo` (cuadro a cuadro) o `preciso` (a pedido). `model` y
     `device` permiten compartir una red ya cargada entre los dos modos; `params` y
@@ -121,10 +131,11 @@ def load_estimator(
     mode_cfg = section[mode]
     params = params or CreStereoParams.from_config(mode_cfg)
     size = compute_size or tuple(int(x) for x in mode_cfg["compute"])
-    if uncertainty is None and section.get("incertidumbre"):
+    checkpoint = incertidumbre_de(section, mode)
+    if uncertainty is None and checkpoint:
         from visionx.depth.crestereo_adapt.uncertainty import UncertaintyHead
 
-        uncertainty = UncertaintyHead.load(ROOT / section["incertidumbre"], device)
+        uncertainty = UncertaintyHead.load(ROOT / checkpoint, device)
     return CreStereoEstimator(
         CreStereoMatcher(model, device, params),
         geometry,

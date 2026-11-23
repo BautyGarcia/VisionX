@@ -13,9 +13,11 @@ la [sección 2](#2-mini-dataset-con-ground-truth).
 ## 1. Conexión de la salida de la red con Sonnet
 
 **Estado (19/11, noche): implementada del lado de la app y medida** (BITACORA, «T13: la
-incertidumbre llega a la voz»). Falta que el ubicador llene `z_bajo_m` / `z_alto_m` con
-`visionx.shared.uncertainty.laplace_interval` y el factor de b ajustado en val: hasta entonces
-todo se dice como «medida precisa», igual que antes.
+incertidumbre llega a la voz»). **23/11:** el ubicador llena `z_bajo_m` / `z_alto_m` con
+`laplace_interval` cuando `spatial.b_factor` > 0 (por defecto 0: todo se dice como antes). La
+U-Net se puede prender solo en el modo preciso (`depth.crestereo.preciso.incertidumbre`).
+Factor de la ELP: 0,6, medido con la cinta del lugar 1 (cota de arriba); el lugar 2 lo comprueba
+(BITACORA 2026-11-23).
 
 ### 1.1 Principio
 
@@ -34,8 +36,8 @@ confianza de la cámara (red de entrada) ─────────────
 | Dato | Dónde | Quién | Estado |
 |---|---|---|---|
 | b de Laplace por píxel, en px de disparidad | `DepthResult.uncertainty`, `UncertaintyKind.LAPLACE_B` | Bauty | Existe (modo preciso); sin calibrar en la ELP |
-| Factor de calibración de b (para que el intervalo del 90 % cubra ~90 %) | config del estimador | Bauty, con los datos de la sección 2 | Falta |
-| Intervalo del 90 % por objeto: `z_bajo_m`, `z_alto_m` | `SpatialObject` (campos nuevos, opcionales) | Ubicador (`depth/spatial`, Bauty) | Falta |
+| Factor de calibración de b (para que el intervalo del 90 % cubra ~90 %) | `spatial.b_factor` | Bauty, con la cinta | ELP: 0,6 del lugar 1 (23/11), a comprobar en el lugar 2 |
+| Intervalo del 90 % por objeto: `z_bajo_m`, `z_alto_m` | `SpatialObject` (campos nuevos, opcionales) | Ubicador (`depth/spatial`, Bauty) | Hecho el 23/11 (`a/T13-intervalo-voz`) |
 | Confianza de la cámara / de la alineación | `DepthResult.alignment_quality` | Red de entrada (a), Bauty | Falta |
 | Estado de la cámara: `alineando`, `camara-desconocida`, `no-medible` | `DepthResult.reason` (prefijo, ver `app/camera_status.py`) | Bauty | La app ya los dice; falta emitirlos |
 | `calibrar_distancia(frame, mask, z_m)` | estimador | Bauty | La app ya lo llama si existe |

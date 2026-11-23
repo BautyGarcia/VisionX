@@ -228,3 +228,74 @@ def test_la_perdida_ignora_lo_que_no_se_midio():
     assert float(otra) == pytest.approx(float(base))
     lote2["y"][0, 0] = 0.5  # la focal sí
     assert float(perdida(out, lote2, 0.5)[0]) > float(base)
+
+
+# --- D real: grabación cruda → recorridos ----------------------------------------------
+
+
+def _grabar(carpeta, n: int, eye=(64, 36)):
+    from visionx.camera.recording import Recorder
+    from visionx.shared.contracts import StereoFrame
+
+    with Recorder(carpeta) as rec:
+        for i in range(n):
+            izq = np.full((eye[1], eye[0], 3), i, np.uint8)
+            rec.write(StereoFrame("s-real", i, izq, izq.copy(), received_ns=i * 10**8))
+
+
+def _calibracion(ruta, w=64, h=36, fx=40.0):
+    import yaml
+
+    k = [[fx, 0.0, 31.5], [0.0, fx, 17.5], [0.0, 0.0, 1.0]]
+    ruta.write_text(yaml.safe_dump({
+        "tamaño_imagen": [w, h], "baseline_m": 0.06,
+        "izquierda": {"K": k, "D": [0.0] * 5}, "derecha": {"K": k, "D": [0.0] * 5},
+    }), encoding="utf-8")  # fmt: skip
+    return ruta
+
+
+def test_desde_grabacion_corta_recorridos_y_los_lee_el_dataset(tmp_path):
+    from visionx.depth.camara_net.datos import item_de
+    from visionx.depth.camara_net.grabacion import convertir, ventanas
+    from visionx.gtsynth.dataset import VistaNominal, vistas
+
+    assert ventanas(13, cuadros=3, paso=2) == [[0, 2, 4], [6, 8, 10]]  # sin solaparse
+    _grabar(tmp_path / "rec", 13)
+    r = convertir(tmp_path / "rec", tmp_path / "real", "v", cuadros=3, paso=2, ancho=32,
+                  calibracion=_calibracion(tmp_path / "c.yaml"))  # fmt: skip
+    assert (r["recorridos"], r["vistas"]) == (2, 6)
+    vs = list(vistas(tmp_path / "real", "v"))
+    assert len(vs) == 6
+    v = vs[4]  # recorrido 1, cuadro 1 = par grabado 8
+    assert v.meta["secuencia"] == {"recorrido": 1, "cuadro": 1}
+    assert v.meta["grabacion"]["frame_id"] == 8 and v.meta["control"] is True
+    assert v.izq().shape == (18, 32, 3) and int(v.izq()[0, 0, 0]) == 8
+    # La cámara del control, llevada a 32 px de ancho: la focal y el centro se escalan a la mitad.
+    g = VistaNominal(v.carpeta).geometria
+    assert (g.width, g.fx, g.cx) == (32, pytest.approx(20.0), pytest.approx(15.5))
+    item = item_de(v)  # sin margen: el lienzo es la propia imagen
+    assert item.lienzo == item.nominal == (32, 18) and item.grupo == "v/rec/r1"
+
+
+def test_desde_grabacion_sin_calibracion_marca_que_no_hay_control(tmp_path):
+    from visionx.depth.camara_net.grabacion import convertir
+    from visionx.gtsynth.dataset import vistas
+
+    _grabar(tmp_path / "rec", 4)
+    convertir(tmp_path / "rec", tmp_path / "real", "v", cuadros=2, paso=1, ancho=32)
+    v = next(vistas(tmp_path / "real", "v"))
+    assert v.meta["control"] is False and v.geometria.fx > 0  # relleno válido, sin significado
+
+
+def test_sin_lente_con_distorsion_nula_deja_la_imagen_igual(tmp_path):
+    from visionx.depth.camara_net.grabacion import convertir
+    from visionx.gtsynth.dataset import vistas
+
+    _grabar(tmp_path / "rec", 2)
+    cal = _calibracion(tmp_path / "c.yaml")
+    convertir(tmp_path / "rec", tmp_path / "real", "v", cuadros=2, paso=1, ancho=64,
+              calibracion=cal, sin_lente=True)  # fmt: skip
+    v = list(vistas(tmp_path / "real", "v"))[1]
+    assert v.meta["sin_lente"] is True and int(v.izq()[10, 10, 0]) == 1
+    with pytest.raises(ValueError):
+        convertir(tmp_path / "rec", tmp_path / "otra", "v", cuadros=2, paso=1, sin_lente=True)
