@@ -190,9 +190,11 @@ prueba real (A, E5) → prueba con personas (E) → la geometría entrena a la r
        Girar la cámara en el lugar, sin sacarla de la línea.
      - Anotar en la planilla la distancia y el nivel que dijo (`voz_m`, `voz_nivel`).
    - **Después, sin cámara (Bauty / Claude):**
-     - `bench marcar` y `bench evaluar` con la calibración de tablero (la referencia) y con el
-       perfil de «Cámara nueva». Falta que `bench evaluar` acepte un perfil de cámara y el rango
-       de 3,5 a 4 m.
+     - `bench marcar` (una vez, con la calibración de tablero) y `bench evaluar` dos veces: con la
+       calibración de tablero (la referencia) y con el perfil de «Cámara nueva»
+       (`--camara elp-de-prueba`). Con el perfil, cada sticker se traslada solo a la imagen que
+       rectifica el perfil y el ojo derecho se alinea con el clásico, como en la app. Rangos hasta
+       4 m.
      - El factor de b de la U-Net se ajusta en un lugar y se comprueba en el otro.
    - **Sin test real reservado:** las sesiones `s3`–`s5` ya no se graban. Sobre estas escenas no
      se ajusta nada, salvo ese factor de b.

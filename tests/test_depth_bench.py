@@ -147,7 +147,7 @@ def test_resumen_cuenta_los_puntos_sin_medir_como_no_acertados() -> None:
     assert total["dentro_5pct"] == 50.0  # 2 de 4, no 2 de 3
     assert total["error_abs_mediana_pct"] == 4.0 and total["sesgo_mediana_pct"] == 1.0
     by_range = bench.summarize_by_range(rows)
-    assert by_range["2-3.5 m"]["puntos"] == 2 and by_range["0-1 m"]["dentro_5pct"] == 100.0
+    assert by_range["2-3 m"]["puntos"] == 2 and by_range["0-1 m"]["dentro_5pct"] == 100.0
     assert summarize([{"error_pct": math.nan, "referencia_m": 1.0}])["medidos"] == 0
     with_interval = summarize(
         [
@@ -163,3 +163,56 @@ def test_evaluar_rechaza_sesiones_de_test_sin_la_bandera(tmp_path, capsys) -> No
     folder = write_scene(tmp_path / "banco-s4-e02", session="s4")
     assert bench.main(["evaluar", str(folder)]) == 1
     assert "reservadas" in capsys.readouterr().err
+
+
+def _calibracion(f: float, k1: float, cx: float = 319.5):
+    from visionx.calibration.models import Intrinsics, LensModel
+    from visionx.calibration.storage import from_parameters
+
+    K = np.array([[f, 0.0, cx], [0.0, f, 239.5], [0.0, 0.0, 1.0]])
+    ojo = Intrinsics(K, np.array([k1, 0.0, 0.0, 0.0, 0.0]).reshape(-1, 1))
+    return from_parameters(LensModel.PINHOLE5, (640, 480), ojo, ojo, np.eye(3), [-0.06, 0, 0])
+
+
+def test_trasladar_puntos_con_la_misma_calibracion_no_los_mueve() -> None:
+    cal = _calibracion(600.0, -0.1)
+    puntos = (BenchPoint(1, 100.0, 80.0, 1.0, "", None), BenchPoint(2, 500.0, 400.0, 2.0, "", None))
+    movidos = bench.trasladar_puntos(puntos, cal, cal)
+    for antes, despues in zip(puntos, movidos, strict=True):
+        assert (despues.u, despues.v) == pytest.approx((antes.u, antes.v), abs=1e-3)
+        assert despues.id == antes.id and despues.tape_m == antes.tape_m
+
+
+def test_trasladar_puntos_pasa_por_la_foto_cruda() -> None:
+    """El sticker va al píxel crudo que dice el tablero y de ahí a donde lo rectifica el perfil."""
+    from visionx.calibration.models import project, undistort_points
+
+    tablero = _calibracion(600.0, -0.1)
+    perfil = _calibracion(650.0, 0.0, cx=330.0)  # otra focal, otro centro y sin lente
+    X = np.array([[0.4, -0.2, 2.0], [-0.7, 0.3, 3.5]])  # dos stickers, en metros, ojo izquierdo
+    crudos = project(tablero.model, X, np.zeros(3), np.zeros(3), tablero.left)
+    en_tablero = undistort_points(tablero.model, crudos, tablero.left, tablero.rect.R1,
+                                  tablero.rect.P1)  # fmt: skip
+    esperado = undistort_points(perfil.model, crudos, perfil.left, perfil.rect.R1, perfil.rect.P1)
+    puntos = tuple(BenchPoint(i, u, v, 1.0, "", None) for i, (u, v) in enumerate(en_tablero))
+    movidos = bench.trasladar_puntos(puntos, tablero, perfil)
+    assert np.array([[p.u, p.v] for p in movidos]) == pytest.approx(esperado, abs=0.05)
+    assert not np.allclose(esperado, en_tablero, atol=1.0)  # de verdad se movieron
+
+
+def test_trasladar_puntos_rechaza_fotos_de_otro_tamano() -> None:
+    from visionx.calibration.models import Intrinsics, LensModel
+    from visionx.calibration.storage import from_parameters
+
+    K = np.array([[300.0, 0.0, 159.5], [0.0, 300.0, 119.5], [0.0, 0.0, 1.0]])
+    ojo = Intrinsics(K, np.zeros((5, 1)))
+    chica = from_parameters(LensModel.PINHOLE5, (320, 240), ojo, ojo, np.eye(3), [-0.06, 0, 0])
+    with pytest.raises(InvalidInput, match="misma foto"):
+        bench.trasladar_puntos((BenchPoint(1, 10.0, 10.0, 1.0, "", None),), _calibracion(600, 0),
+                               chica)  # fmt: skip
+
+
+def test_evaluar_con_un_perfil_que_no_existe_falla_claro(tmp_path, capsys) -> None:
+    folder = write_scene(tmp_path / "banco-s1-e01")
+    assert bench.main(["evaluar", str(folder), "--camara", "no-existe"]) == 1
+    assert "no hay perfil" in capsys.readouterr().err

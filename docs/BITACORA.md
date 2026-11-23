@@ -68,17 +68,30 @@ Qué cambió en los documentos:
 - **INCERTIDUMBRE-Y-GT** (conjunto C), **ROADMAP** (T04) y **POSTER-INSUMOS:** actualizados.
 - **Plantilla:** dos campos nuevos por punto, `voz_m` y `voz_nivel`. `bench` los ignora; sus tests
   pasan.
+- **Código, `bench evaluar --camara <perfil>`** (23/11, mismo PR). Evalúa con el perfil de una
+  cámara en vez de la calibración de tablero.
+  - Los stickers se marcan una sola vez, con el tablero. `trasladar_puntos` lleva cada uno a la
+    foto cruda con el tablero (la verdad) y de ahí a la imagen que rectifica el perfil.
+  - Como en la app, el ojo derecho se alinea con el clásico sobre los pares de la escena
+    (`--sin-alinear` lo apaga).
+  - El cero de la cinta sale siempre del tablero. La corrección «calibrá, está a N metros» del
+    perfil no se aplica.
+  - Rangos del resumen: 0–1, 1–2, 2–3 y 3–4,5 m (antes 2–3,5).
+  - Tests: 4 nuevos (sin mover con la misma calibración, contra el camino crudo hecho a mano con
+    otra focal, centro y lente, tamaños distintos, perfil inexistente). 11 de 11 en
+    `test_depth_bench.py`. El perfil `elp` es de 1920×1080, igual que el tablero.
+  - Sin probar con una grabación real: todavía no hay escenas del banco.
 
 Límites:
 - Se pierde el test real reservado: sobre estas escenas no se ajusta nada, salvo el factor de b de
   la U-Net, que se mide en un lugar y se comprueba en el otro.
 - Con 10–15 objetos, n es chico para cobertura: alcanza para ver si la duda está muy mal, no para
   afinarla.
-- `bench evaluar` todavía no acepta el perfil de «Cámara nueva» ni puntos de 3,5 a 4 m.
 
 Próximo paso:
 - (Bauty, con la ELP) grabar la sesión durante la prueba A.
-- (Bauty / Claude, sin cámara) que `bench evaluar` acepte un perfil de cámara y el rango hasta 4 m.
+- (Bauty / Claude, sin cámara) con las primeras escenas, probar `bench evaluar --camara` de punta a
+  punta.
 
 ## 2026-11-22 (noche) — T12/T13: por objeto en modo preciso con la cámara estimada, y el objeto a dos distancias
 

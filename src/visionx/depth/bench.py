@@ -14,7 +14,19 @@ Dos archivos por escena, dentro de `recordings/banco-sN-eMM/`:
     uv run python -m visionx.depth.bench marcar recordings/banco-s1-e01
 
     # 2. evaluar métodos sobre una o más escenas
-    uv run --extra ml python -m visionx.depth.bench evaluar recordings/banco-s1-e0*
+    uv run python -m visionx.depth.bench evaluar recordings/banco-s1-e0*
+
+    # 3. lo mismo con la cámara que dio de alta «Cámara nueva», en vez del tablero
+    uv run python -m visionx.depth.bench evaluar recordings/banco-s1-e0* --camara elp-de-prueba
+
+**Con un perfil de cámara** (`--camara`, PLAN-CIERRE §6, prueba A). Los stickers se marcan una
+sola vez, sobre la imagen rectificada con la calibración de tablero (la referencia). Para
+evaluar con el perfil, cada sticker se lleva a la foto cruda con la calibración de tablero (que
+es la verdad) y de ahí a la imagen rectificada con el perfil, que es donde lo ve la app. Como en
+la app, el ojo derecho se alinea con el clásico sobre los pares de la escena (`--sin-alinear`
+lo apaga). El cero de la cinta sale siempre de la calibración de tablero: es la distancia del
+vidrio al centro óptico, no depende de cómo se estime la cámara. La corrección «calibrá, está a
+N metros» que pueda tener el perfil no se aplica: se mide la cámara tal como la dio de alta.
 
 **Sesiones de test.** `s3`, `s4` y `s5` están reservadas (decisión del 17/11): `evaluar` las
 rechaza salvo que se pase `--test-congelado`, igual que el test público. `marcar` sí se puede
@@ -30,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
 import math
 import sys
 from dataclasses import dataclass
@@ -49,7 +62,7 @@ POINTS_FILE = "puntos.yaml"
 SCENE_FORMAT = "visionx-banco-elp"
 POINTS_FORMAT = "visionx-banco-puntos"
 TEST_SESSIONS = frozenset({"s3", "s4", "s5"})
-RANGES_M = ((0.0, 1.0), (1.0, 2.0), (2.0, 3.5))
+RANGES_M = ((0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 4.5))  # la prueba A llega a 4 m
 TOLERANCE_PCT = 5.0  # métrica principal en la ELP: % de puntos con error <= 5 % (13/11)
 
 
@@ -125,6 +138,35 @@ def load_scene(folder: str | Path) -> BenchScene:
         size=(width, height),
         points=tuple(points),
     )
+
+
+def trasladar_puntos(
+    points: tuple[BenchPoint, ...], desde: Any, hacia: Any
+) -> tuple[BenchPoint, ...]:
+    """Los stickers marcados en la izquierda rectificada con `desde`, en la rectificada con `hacia`.
+
+    Ida a la foto cruda con `desde` (la calibración de tablero, la verdad): el píxel rectificado
+    es un rayo en la cámara rectificada; `R1` lo devuelve a la cámara izquierda y la lente lo
+    proyecta. Vuelta con `hacia` (el perfil): `undistort_points` hace lo mismo que la
+    rectificación de la imagen, así que el sticker cae donde lo ve el método.
+    """
+    from visionx.calibration.models import project, undistort_points
+
+    if tuple(desde.image_size) != tuple(hacia.image_size):
+        raise InvalidInput(
+            f"la calibración de referencia es de {desde.image_size} y la de la cámara de "
+            f"{hacia.image_size}: tienen que ser de la misma foto"
+        )
+    uv = np.array([[p.u, p.v] for p in points], np.float64)
+    P = desde.rect.P1
+    rays = np.column_stack(
+        [(uv[:, 0] - P[0, 2]) / P[0, 0], (uv[:, 1] - P[1, 2]) / P[1, 1], np.ones(len(uv))]
+    )
+    rays = rays @ desde.rect.R1  # filas: R1ᵀ · rayo, de la cámara rectificada a la izquierda
+    raw = project(desde.model, rays, np.zeros(3), np.zeros(3), desde.left)
+    moved = undistort_points(hacia.model, raw, hacia.left, hacia.rect.R1, hacia.rect.P1)
+    pairs = zip(points, moved, strict=True)
+    return tuple(dataclasses.replace(p, u=float(u), v=float(v)) for p, (u, v) in pairs)
 
 
 def save_points(
@@ -365,15 +407,39 @@ def _estimators(names: list[str], cfg: dict[str, Any], geometry: Any, args: Any)
     return out
 
 
+def _camera(name: str) -> tuple[Any, Any]:
+    """(perfil, calibración) de una cámara de `configs/camaras` o dada de alta en la Mac."""
+    from visionx.camera.perfiles import calibracion_de, cargar_perfiles
+
+    profiles = {p.id: p for p in cargar_perfiles()}
+    if name not in profiles:
+        raise InvalidInput(f"--camara {name!r}: no hay perfil; hay {sorted(profiles)}")
+    return profiles[name], calibracion_de(profiles[name])
+
+
+def _align_right(frames: list[Any], geometry: Any) -> tuple[list[Any], tuple[str, ...]]:
+    """El ojo derecho corregido con el clásico sobre los pares de la escena, como en la app."""
+    from visionx.depth.crestereo_adapt.align_apply import Alineador
+
+    rights, info = Alineador("clasico", geometry, np.zeros(5)).corregir(
+        [(f.left, f.right) for f in frames]
+    )
+    out = [dataclasses.replace(f, right=r) for f, r in zip(frames, rights, strict=True)]
+    return out, tuple(info.aplica)
+
+
 def _evaluate(args: argparse.Namespace) -> int:
     from visionx.calibration import StereoCalibration
 
     cfg = load_config(args.config)
-    cal = StereoCalibration.load(ROOT / cfg["camera"]["calibration"])
+    reference = StereoCalibration.load(ROOT / cfg["camera"]["calibration"])
+    profile, cal = (None, reference) if not args.camara else _camera(args.camara)
+    # Una cámara dada de alta (sin calibración propia) se alinea, como en la app.
+    align = profile is not None and not profile.calibracion and not args.sin_alinear
     geometry = cal.geometry()
     zero_mm = args.cero_mm
     if zero_mm is None:
-        zero_mm = float(cal.disparity_offset_source.get("cero_cinta_mm", 0.0))
+        zero_mm = float(reference.disparity_offset_source.get("cero_cinta_mm", 0.0))
     scenes = [load_scene(folder) for folder in args.carpetas]
     reserved = [s.name for s in scenes if s.is_test]
     if reserved and not args.test_congelado:
@@ -382,16 +448,24 @@ def _evaluate(args: argparse.Namespace) -> int:
         )
     estimators = _estimators(args.metodos, cfg, geometry, args)
     rows: list[dict[str, Any]] = []
+    aligned: dict[str, list[str]] = {}
     for scene in scenes:
-        if scene.size != geometry.size:
+        marked_size = reference.geometry().size
+        if scene.size != marked_size:
             raise InvalidInput(
-                f"{scene.name}: puntos marcados a {scene.size}, calibración a {geometry.size}"
+                f"{scene.name}: puntos marcados a {scene.size}, calibración a {marked_size}"
             )
+        points = scene.points
+        if cal is not reference:
+            points = trasladar_puntos(points, reference, cal)
         frames = _rectified_frames(scene.folder, cal, args.pares)
+        if align:
+            frames, applied = _align_right(frames, geometry)
+            aligned[scene.name] = list(applied)
         for name, est in estimators.items():
             for frame in frames:
                 result = est.predict(frame)
-                for point in scene.points:
+                for point in points:
                     row = measure_point(
                         result, point, geometry.size, zero_mm / 1000.0, args.ventana
                     )
@@ -413,8 +487,19 @@ def _evaluate(args: argparse.Namespace) -> int:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
+    camera = None
+    if profile is not None:
+        camera = {
+            "perfil": profile.id,
+            "nivel": profile.nivel,
+            "calibration_id": cal.calibration_id,
+            "focal_px": round(float(geometry.fx), 2),
+            "separacion_m": profile.separacion_m,
+            "alineacion": aligned if align else "no",
+        }
     report: dict[str, Any] = {
         "calibracion": cfg["camera"]["calibration"],
+        "camara": camera,
         "cero_cinta_mm": zero_mm,
         "escenas": [s.name for s in scenes],
         "pares_por_escena": args.pares,
@@ -457,6 +542,11 @@ def main(argv: list[str] | None = None) -> int:
     ev.add_argument("--pares", type=int, default=5, help="cuadros de cada escena que se evalúan")
     ev.add_argument("--ventana", type=int, default=9, help="lado de la ventana, px de captura")
     ev.add_argument("--cero-mm", type=float, default=None)
+    ev.add_argument("--camara", default=None,
+                    help="perfil de cámara (p. ej. el de «Cámara nueva») en vez de la calibración "
+                         "del config; los puntos se marcan igual con la del config")  # fmt: skip
+    ev.add_argument("--sin-alinear", action="store_true",
+                    help="con --camara, no alinear el ojo derecho con el clásico")  # fmt: skip
     ev.add_argument(
         "--test-congelado",
         action="store_true",
