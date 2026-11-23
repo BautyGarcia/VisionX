@@ -17,7 +17,7 @@ Dos archivos por escena, dentro de `recordings/banco-sN-eMM/`:
     uv run python -m visionx.depth.bench evaluar recordings/banco-s1-e0*
 
     # 3. lo mismo con la cámara que dio de alta «Cámara nueva», en vez del tablero
-    uv run python -m visionx.depth.bench evaluar recordings/banco-s1-e0* --camara elp-de-prueba
+    uv run python -m visionx.depth.bench evaluar recordings/banco-s1-e0* --camara camara-desconocida
 
 **Con un perfil de cámara** (`--camara`, PLAN-CIERRE §6, prueba A). Los stickers se marcan una
 sola vez, sobre la imagen rectificada con la calibración de tablero (la referencia). Para
