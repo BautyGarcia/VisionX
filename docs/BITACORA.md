@@ -40,6 +40,86 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-23 — T12/D: la v3-auto ya estaba entrenada (registro retrospectivo de las corridas del 22/11)
+
+Tarea: T12 (D de PLAN-CIERRE). Persona/agente: Bauty / Claude Code. Rama `a/T04-cinta-en-a`
+(solo documentación).
+
+**Retrospectiva.** El 23/11, al preguntar qué frenaba D, aparecieron en la Mac las cuatro
+corridas de la guía de [RED-ENTRADA](RED-ENTRADA.md#entrenar-la-v3-auto-bauty-en-la-mac-comandos-exactos)
+ya terminadas el 22/11 entre las 18:14 y las 22:59, con evaluación y `factor_b` guardados. No
+estaban registradas en ningún documento. Esta entrada se arma solo con los archivos de
+`outputs/camara_net/e3-*/` (`meta.json`, `curvas.csv`, `log.txt`, `eval8/`). No se volvió a correr
+nada; el 23/11 solo se recalcularon las métricas desde los CSV de `eval8/`.
+
+Contexto de la medición:
+- **Equipo:** Mac M2 Max, MPS.
+- **Código:** `camara_net entrenar` de `main` (PR #93, `ff7e11d`).
+- **Parámetros comunes:** 10 épocas desde `e2-v2/mejor.pt`, lr 1e-4, lr del tronco 3e-5,
+  calentamiento 100, zoom 0,55–1,2, lote 12, semilla 0.
+- **Variantes:** `camara-sorteada`, `camara-sorteada-ojo` y `hssd-camara-sorteada`, más
+  `hssd-recorridos-sorteada` (6 cuadros por recorrido).
+- **Tiempo:** ~5–7 min por época, ~1 h por corrida.
+
+Corridas:
+
+| Corrida | Etiquetas que suma | n de entrenamiento | Mejor época |
+|---|---|---:|---:|
+| `e3-sin` | ninguna (control «más épocas») | 7998 | 9 |
+| `e3-auto` | `b-vistas.csv`: focal de la geometría, duda ≤ 3 % | 10 908 | 9 |
+| `e3-auto5` | `b-vistas-5pct.csv`, `--sigma-max 0.05` | 12 978 | 9 |
+| `e3-real` | `b-vistas.csv` con `--etiqueta-real` (techo) | 10 908 | 4 |
+
+Evidencia/resultados:
+- **Protocolo fijo de RED-ENTRADA:** gt-video, 9 cámaras × 8 escenas = 6480 cuadros, mediana y
+  P90 sobre todos los cuadros. La v2 reproduce los 12,7 / 40 ya publicados, así que el cálculo es
+  el mismo.
+- **Factor de b:** el guardado en cada checkpoint lleva la cobertura de val-lente a 0,90 (el mismo
+  método de la v2).
+
+| Versión | Val pinhole | gt-video | Replica (4) | HSSD (4) | Gran angular 130° | Cob. 90 % sin factor / con factor | `factor_b` |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| v2 (`e2-v2`) | 9,0 / 28 | 12,7 / 40 | 8,1 / 23 | 20,2 / 58 | 19,3 | 0,57 / 0,82 | 1,79 |
+| `e3-sin` | 9,4 / 28 | 12,6 / 40 | 8,1 / 24 | 20,0 / 55 | 19,0 | 0,53 / 0,82 | 1,948 |
+| **`e3-auto`** | 9,2 / 27 | **11,9 / 37** | 8,0 / 22 | **17,6 / 54** | 18,1 | 0,61 / 0,85 | 1,742 |
+| `e3-auto5` | 9,0 / 25 | 11,7 / 38 | 7,4 / 21 | 18,7 / 53 | 16,7 | 0,62 / 0,83 | 1,621 |
+| `e3-real` (techo) | 9,1 / 27 | 12,3 / 37 | 7,8 / 22 | 18,5 / 53 | 15,1 | 0,67 / 0,86 | 1,575 |
+
+Error de la focal por cuadro en %, mediana / P90. La columna «gran angular» es la mediana.
+
+Lecturas:
+- **Entrenar más no ayuda:** `e3-sin` queda igual que la v2 (12,6 contra 12,7).
+- **Las etiquetas de la geometría ayudan poco:**
+  - −0,8 a −1,0 punto en la mediana de gt-video y −2 a −3 en el P90;
+  - casi todo en las casas de HSSD, que eran el punto débil de la v2 (20,2 → 17,6).
+  - Replica casi no cambia.
+- **Llegan al techo.** Con la etiqueta verdadera no sale mejor (12,3): la diferencia entre
+  `e3-auto`, `e3-auto5` y `e3-real` está dentro del ruido de una semilla. Las etiquetas de la
+  geometría valen tanto como la verdad para reentrenar. Es el argumento de D: la red mejora sin
+  que nadie calibre.
+- **La gran angular de 130° mejora más con el techo** (19,3 → 15,1) que con las etiquetas de la
+  geometría (18,1 / 16,7).
+- **La duda queda mejor puesta:** hace falta un factor de b más chico (1,74 contra 1,79), y en
+  gt-video la cobertura con factor sube de 0,82 a 0,85.
+- **La meta de E2 sigue lejos:** 2 % de mediana contra ~12 %. Para la app no cambia lo
+  importante, porque la focal la mide el movimiento (0,9 %). La red sigue siendo el punto de
+  partida y el seguro.
+
+Límites:
+- Una sola semilla; la mejora (~1 punto) es del orden de la variación entre corridas.
+- Sin E3 (sistema completo, en la Radeon de Tomás).
+- Los pesos ya estaban en el Drive (`VisionX-Personal/pesos/camara-net/e3-*/`): el 23/11 se
+  comprobó que `mejor.pt` y `eval-resumen.json` son idénticos a los locales (md5).
+- La app sigue usando `e2-v2` por defecto (`app/estimador_red.py`). Si se cambia a una v3, el
+  factor que usa la app es `factor_b` × 2 (`FUERA_DE_VAL`).
+- Son etiquetas de renders: la parte con video real de D todavía no existe.
+
+Próximo paso:
+- (Bauty) avisar a Tomás que las cuatro corridas están en el Drive (LEEME actualizado el 23/11).
+- (Tomás) E3 con `e3-auto` y `e3-real` en la Radeon; decidir si la app pasa a `e3-auto`.
+- (Bauty) video girando la ELP en 5–10 lugares (PLAN-CIERRE, 25/11): es lo que falta para la
+  parte real de D.
+
 ## 2026-11-23 — T04/A: primera escena con cinta (`banco-s1-e01`), alta 1 y voz con la ELP real
 
 Tarea: T04 y prueba A (PLAN-CIERRE §6). Persona/agente: Bauty (cámara, cinta) / Claude Code
