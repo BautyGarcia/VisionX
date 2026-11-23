@@ -40,6 +40,46 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-22 (noche) — T04/T15: el banco ELP se reemplaza por la medición con cinta de la prueba A
+
+Tarea: T04, T15 (y A de PLAN-CIERRE). Persona/agente: Bauty / Claude Code. Rama `a/T04-cinta-en-a`.
+Solo documentación, sin mediciones.
+
+Decisión (Bauty): **el banco ELP del 13/11 y el 17/11 no se graba más tal como estaba.**
+- **Antes:** 40 escenas en 5 sesiones, `s3`–`s5` de test.
+- **Ahora:** se hace la medición con cinta del paso 4 de la prueba A (PLAN-CIERRE, sección 6), pero
+  grabando los pares. Es una sola sesión `s1`, en dos lugares, con 10–15 objetos de la app con
+  sticker entre 0,5 y 4 m.
+
+Motivo:
+- PLAN-CIERRE ya no nombra al banco, y la A pide casi la misma medición.
+- Grabando los pares, una sola sesión sirve para tres cosas:
+  - el primer número real del plug and play (A);
+  - ajustar la duda de la U-Net en la ELP, que sigue descalibrada (1–3 px contra 0,1 px reales,
+    19/11);
+  - ver qué dice la voz con la duda total (B).
+- Faltan dos semanas para congelar: 5 sesiones de ~2 h no entran junto con A, el video para la v3
+  y la prueba con personas.
+
+Qué cambió en los documentos:
+- **PLAN-CIERRE:** el protocolo corto va en la sección 6, paso 4.
+- **TECNICO:** aviso arriba del banco. La forma de medir sigue valiendo: sticker, cinta axial desde
+  la línea del piso, 13 mm, 40 min de calentamiento.
+- **INCERTIDUMBRE-Y-GT** (conjunto C), **ROADMAP** (T04) y **POSTER-INSUMOS:** actualizados.
+- **Plantilla:** dos campos nuevos por punto, `voz_m` y `voz_nivel`. `bench` los ignora; sus tests
+  pasan.
+
+Límites:
+- Se pierde el test real reservado: sobre estas escenas no se ajusta nada, salvo el factor de b de
+  la U-Net, que se mide en un lugar y se comprueba en el otro.
+- Con 10–15 objetos, n es chico para cobertura: alcanza para ver si la duda está muy mal, no para
+  afinarla.
+- `bench evaluar` todavía no acepta el perfil de «Cámara nueva» ni puntos de 3,5 a 4 m.
+
+Próximo paso:
+- (Bauty, con la ELP) grabar la sesión durante la prueba A.
+- (Bauty / Claude, sin cámara) que `bench evaluar` acepte un perfil de cámara y el rango hasta 4 m.
+
 ## 2026-11-22 (noche) — T12/T13: por objeto en modo preciso con la cámara estimada, y el objeto a dos distancias
 
 Tarea: T12, T13. Persona/agente: Tomás / Claude Code. PC de escritorio, CREStereo preciso en la

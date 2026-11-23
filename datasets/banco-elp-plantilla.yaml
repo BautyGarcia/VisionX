@@ -1,9 +1,10 @@
 # Planilla de una escena del banco ELP (T04). Copiar a recordings/banco-sN-eMM/escena.yaml y
-# completar a mano en el momento. Protocolo: docs/TECNICO.md, "Protocolo de grabación del banco ELP".
+# completar a mano en el momento. Protocolo: docs/PLAN-CIERRE.md, sección 6, paso 4 (desde el 22/11,
+# la medición con cinta de la prueba A); la forma de medir, en docs/TECNICO.md.
 formato: visionx-banco-elp
 version: 1
 escena: banco-s1-e01          # mismo nombre que la carpeta de la grabación
-sesion: s1                    # s1, s2 = desarrollo; s3, s4, s5 = test (fijado el 17/11)
+sesion: s1                    # s1 = la medición con cinta de la prueba A (22/11); s3–s5 ya no se graban
 fecha: "2026-11-__"
 lugar: ""                     # p. ej. "living, pared norte"
 iluminacion: ""               # día por ventana / lámparas / contraluz / mixta
@@ -24,6 +25,8 @@ puntos:
     clase_app: null           # clase de la app si el sticker está sobre un objeto, o null
     cinta_m: 0.000            # profundidad axial leída, en metros, SIN sumar los 13 mm
     repeticiones_m: []        # solo en el punto que se mide tres veces por sesión
+    voz_m: null               # distancia que dijo la voz al apuntar al sticker (prueba A), o null
+    voz_nivel: ""             # cómo lo dijo: «a 2 metros», «a unos 2 metros», «no puedo medir bien»
     nota: ""
   - id: 2
     sobre: ""
@@ -31,5 +34,7 @@ puntos:
     clase_app: null
     cinta_m: 0.000
     repeticiones_m: []
+    voz_m: null
+    voz_nivel: ""
     nota: ""
 desvios: ""                   # cualquier cosa que no salió según el protocolo

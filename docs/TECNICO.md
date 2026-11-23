@@ -1935,6 +1935,16 @@ replica el canal y se informa como limitación.
   mediano ≤ 0,25 px. Un error de lectura afecta a todas las muestras y salta acá aunque cada
   una, sola, quede como no concluyente.
 
+> **Reemplazado el 22/11** por la medición con cinta de la prueba A ([PLAN-CIERRE](PLAN-CIERRE.md),
+> sección 6, paso 4):
+> - una sesión, en dos lugares;
+> - 10–15 objetos de la app, con sticker y cinta;
+> - pares grabados con el mismo comando y la misma planilla;
+> - sin sesiones de test.
+>
+> Lo de abajo queda como referencia: la forma de medir (sticker, cinta axial, línea del piso, 13
+> mm), el calentamiento y la grabación siguen valiendo.
+
 **Banco ELP (decidido 13/11).** 40 escenas en 5 sesiones de 8, en lugares, días o iluminación
 distintos. Se divide **por sesión**: 2 sesiones de desarrollo (≈16 escenas: umbrales, política y
 abstención) y 3 de test (≈24 escenas). El test se graba, se registra su hash y no se miran

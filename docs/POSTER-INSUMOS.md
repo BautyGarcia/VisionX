@@ -111,7 +111,7 @@ ELP estéreo USB (2×1920×1080, 60 fps)
 | Cámara distinta + **un objeto a distancia conocida** | 68,8 % → **1,2–3,7 %** | 11-19 (noche, robustez) |
 | Inclinación de la cámara estimada del piso (GT) | ~1° de error cuando se ve el piso | 11-19 (noche, altura) |
 | Red de entrada (a) en hermanas / distinta | **Pendiente** (Bauty entrenando) | — |
-| Banco ELP s1 (cinta, por objeto) | **Pendiente** (Bauty) | — |
+| Medición con cinta de la prueba A (reemplaza al banco ELP; cinta, por objeto) | **Pendiente** (Bauty) | — |
 
 ### Interacción
 
@@ -138,7 +138,7 @@ ELP estéreo USB (2×1920×1080, 60 fps)
 | Clips ELP de desarrollo | Modos, demos, latencia (`dev-1114-*`) | 12 clips | 11-14 |
 | `cinta-s7` | Corrección de disparidad y cinta | 5 distancias × 3 pares | 11-13 |
 | **GT sintético (Replica)** | Distancia por objeto con verdad exacta; cámaras hermanas y distinta | 1440 vistas, 15 088 objetos | 11-19 (noche) |
-| Banco ELP (s1–s2) | La prueba real por objeto | **Pendiente** | — |
+| Cinta de la prueba A (`s1`, dos lugares, 10–15 objetos) | La prueba real por objeto | **Pendiente** | — |
 
 ## 7. Lo que no funcionó (y por qué cuenta)
 
