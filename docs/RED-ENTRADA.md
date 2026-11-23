@@ -37,6 +37,9 @@ Error de focal por cuadro (mediana / P90), en %:
 | Constante | siempre la cámara media del entrenamiento | 31–33 | — | — |
 | v1 (Bauty, 21/11) | ResNet-18, 2 ojos, Laplace + reproyección | 9,9 / 27 | 13,5 / 41 | bien / 11–63 |
 | v2 (Bauty, 21/11) | + zoom y `camara-sorteada-ojo` | 9,0 / 28 | 12,7 / 40 | 0,2–16 / 4–55 |
+| v3-auto (Bauty, 22/11) | v2 + 10 épocas con las etiquetas de la geometría (duda ≤ 3 %) | 9,2 / 27 | 11,9 / 37 | por cuadro: Replica 8,0 / 22, HSSD 17,6 / 54 |
+| v3 control: real | lo mismo con la focal verdadera | 9,1 / 27 | 12,3 / 37 | por cuadro: Replica 7,8 / 22, HSSD 18,5 / 53 |
+| v3 control: sin | v2 + 10 épocas sin etiquetas nuevas | 9,4 / 28 | 12,6 / 40 | por cuadro: Replica 8,1 / 25, HSSD 20,0 / 55 |
 | **v2 + movimiento** (22/11) | la geometría mide la focal mientras la persona gira (60 cuadros) | — | **0,9 / 3,5** | — |
 
 El sistema completo, error mediano en distancia por recorrido (promedio de las 9 cámaras):
