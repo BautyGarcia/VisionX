@@ -73,24 +73,23 @@ baratas tienen distorsión de barril. Sin modelarla, la focal sale mal:
 2. En cámaras **sin** lente, el método conjunto (1,8 %) era peor que el pinhole (0,6 %).
    - Arreglo: si la k1 medida es más débil que −0,03, se usa la focal pinhole y k1 = 0.
 
-**Resultado** (error de focal; la primera corrida con los 10 recorridos que fallaban
-repetidos con los arreglos):
+**Resultado** (error de focal; corrida completa con el código final, `lente-v2.json`):
 
 | Recorridos | n | Pinhole (antes) | Con lente (ahora) |
 |---|---|---|---|
-| Todos | 71 | 7,1 % (P90 20,8) | **1,1 %** (P90 4,5) |
-| Lente fuerte (k1 ≤ −0,1) | 11 | 23,5 % | **1,4 %** |
-| Lente leve (k1 = −0,05) | 32 | 8,2 % | **1,5 %** |
+| Todos | 71 | 7,1 % (P90 20,8) | **1,2 %** (P90 4,5) |
+| Lente fuerte (k1 ≤ −0,1) | 11 | 23,5 % | **1,2 %** |
+| Lente leve (k1 = −0,05) | 32 | 8,2 % | **1,4 %** |
 | Sin lente | 28 | 0,64 % | 0,64 % |
 
-- La k1 medida erra 0,006 de mediana.
+- La k1 medida erra 0,001 de mediana (0,006 en la primera corrida).
+- Tarda ~95 s por recorrido en la CPU con la búsqueda completa.
 - Quedan 7 de 71 por encima de 5 %. Los dos peores:
-  - la cámara de 60° en frl_apartment_3: 35 %, k1 pegada al borde +0,02;
-  - la OAK-D en 102343992: 60 %, poco movimiento útil; la duda informada sí es grande, 12 %.
-- **Cobertura de la duda: 72 %** (la meta es 90 %). La duda informada es optimista. Un
+  - la cámara de 60° en frl_apartment_3: 35 %, no vio la lente (k1 real −0,12) y usó la
+    focal pinhole; duda 7,7 %;
+  - la OAK-D en 102343992: 60 %, poco movimiento útil; la duda informada sí es grande, 22 %.
+- **Cobertura de la duda: 73 %** (la meta es 90 %). La duda informada es optimista. Un
   recorrido malo puede pasar como bueno, y la app debería ser más prudente.
-- Hay una corrida completa con el código final en curso (`lente-v2.json`). Los números de
-  arriba se reemplazan cuando termine.
 
 **En la app.** «Cámara nueva» ya usa `lente_por_movimiento`.
 - Al terminar el giro dice «Listo el giro. Estoy midiendo la lente: tarda unos segundos.» y

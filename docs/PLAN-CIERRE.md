@@ -43,7 +43,7 @@ tienen juntas:
   - la diferencia es el resto de la focal (~1 %): a 2 m son ±2 cm.
   - BITACORA 22/11 (noche).
 - **Todavía no:** «funciona con cámaras reales». Falta la prueba A con la ELP. La autocalibración
-  ya mide la lente (G, simulación: focal 1,1 % de mediana con lentes de hasta k1 −0,3), pero
+  ya mide la lente (G, simulación: focal 1,2 % de mediana con lentes de hasta k1 −0,3), pero
   falta probarla con una lente real.
 - **No:** «sin hacer nada». Hacen falta los mini-setups: girar, la separación o un objeto.
 
@@ -62,7 +62,7 @@ tienen juntas:
    «precisa» sin serlo.
 5. **La autocalibración no manejaba distorsión.** Resuelto en simulación el 22/11 (G,
    BITACORA): focal y k1 juntas. Falta la prueba con la ELP, y la duda es optimista (cobertura
-   72 %).
+   73 %).
 6. **Documentos viejos.** El ROADMAP es del 18/11, dice que no hay código y que la entrega es el
    10/12.
 7. **El informe y el póster no empezaron.**
