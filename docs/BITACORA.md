@@ -70,6 +70,7 @@ Evidencia: error de focal por cuadro (mediana / P90) con el protocolo fijo de RE
 | **e3-auto** | 9,2 / 27 | **11,9 / 37** | 8,0 / 22 | **17,6 / 54** | 0,61 | 1,74 |
 | e3-real | 9,1 / 27 | 12,3 / 37 | 7,8 / 22 | 18,5 / 53 | 0,67 | 1,58 |
 | e3-sin | 9,4 / 28 | 12,6 / 40 | 8,1 / 25 | 20,0 / 55 | 0,53 | 1,95 |
+| e3-auto5 | 9,0 / 25 | 11,7 / 38 | 7,4 / 21 | 18,7 / 53 | 0,62 | 1,62 |
 
 Val es sin lente, como en RED-ENTRADA. La cobertura es sin `factor_b`.
 
@@ -82,6 +83,10 @@ Lectura:
    las cuatro quedan en 9,0–9,4 % (ruido entre épocas: ±0,4), así que val no sirve para elegir
    entre ellas.
 4. La duda mejora apenas (cobertura 0,57 → 0,61) y `factor_b` queda parecido (1,74).
+5. **Más etiquetas, más ruidosas, no suman.** `e3-auto5` (duda ≤ 5 %: 166 recorridos, 4980
+   cuadros, etiquetas de 1,2 % de error mediano) queda como `e3-auto` en el total (11,7
+   contra 11,9): un poco mejor en Replica (7,4) y un poco peor en HSSD (18,7). Con una
+   semilla, esas diferencias entran en el ruido. Se queda `e3-auto` como v3.
 
 Límites:
 - Una semilla por corrida: los ~2,5 puntos de HSSD pueden tener una parte de ruido.
@@ -90,8 +95,7 @@ Límites:
   en la PC con `gtsynth autocalib` / `sin-calibrar`.
 
 Próximo paso:
-- (Bauty, ya corriendo) `e3-auto5`: las etiquetas con duda ≤ 5 % (166 recorridos, 4980
-  cuadros), mismo protocolo.
+- (Bauty, hecho) `e3-auto5`: medido arriba, en el Drive `pesos/camara-net/e3-auto5/`.
 - (Tomás) E3 y autocalibración con `e3-auto` en la PC.
 - (Bauty) Video real girando la ELP para etiquetar con el movimiento.
 
