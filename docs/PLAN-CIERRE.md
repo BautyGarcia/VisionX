@@ -43,7 +43,8 @@ tienen juntas:
   - la diferencia es el resto de la focal (~1 %): a 2 m son ±2 cm.
   - BITACORA 22/11 (noche).
 - **Todavía no:** «funciona con cámaras reales». Falta la prueba A con la ELP. La autocalibración
-  aún no busca la distorsión (G), y las cámaras baratas la tienen.
+  ya mide la lente (G, simulación: focal 1,2 % de mediana con lentes de hasta k1 −0,3), pero
+  falta probarla con una lente real.
 - **No:** «sin hacer nada». Hacen falta los mini-setups: girar, la separación o un objeto.
 
 ## 2. Críticas, de la más grave a la menos grave
@@ -59,8 +60,9 @@ tienen juntas:
    ELP. No suma la duda de la cámara ni la de la escala (PLUG-AND-PLAY, sección 6). Con una
    cámara desconocida, la simulación mostró que la cobertura cae de 96 % a 47–84 %: la voz diría
    «precisa» sin serlo.
-5. **La autocalibración no maneja distorsión.** Los renders son pinhole; las cámaras baratas
-   tienen lente.
+5. **La autocalibración no manejaba distorsión.** Resuelto en simulación el 22/11 (G,
+   BITACORA): focal y k1 juntas. Falta la prueba con la ELP, y la duda es optimista (cobertura
+   73 %).
 6. **Documentos viejos.** El ROADMAP es del 18/11, dice que no hay código y que la entrega es el
    10/12.
 7. **El informe y el póster no empezaron.**
@@ -107,7 +109,8 @@ datos de sobra; el cuello de botella es validar en real y escribir.
 1. **B y C**: hechas y probadas en simulación el 22/11 (guía para la ELP en la sección 6).
 2. **D:** etiquetas de la geometría (`gtsynth autoetiquetas`) y **evaluar cada checkpoint** que
    entrene Bauty con el mismo protocolo (8 escenas × 9 cámaras + E3 en la Radeon), el mismo día.
-3. **G: distorsión** en la autocalibración (con Codex y una especificación cerrada).
+3. **G: distorsión** en la autocalibración: hecha en simulación el 22/11 (BITACORA). Falta
+   ajustar la duda y el modo rápido.
 4. **Martes 25/11 en la facultad:** pedir la otra ELP y ver si hay RealSense para la expo.
 5. **Organizar E:** tareas, planilla y consentimiento.
 6. **Poner al día ROADMAP y TECNICO.**
@@ -255,8 +258,9 @@ Correr todo desde la rama `a/T13-intervalo-voz` o desde `main` cuando esté inte
   ~8 s, 5 por lugar.
 - Después (Claude, sin cámara): `camara_net desde-grabacion recordings/d-real-* --calibracion
   configs/calib/elp-2026-11-11-corregida.yaml` y `camara_net etiquetar-real`. La calibración se usa
-  solo como control. **Ojo:** en video real la focal medida por el movimiento sale +6 % por la
-  lente (BITACORA 23/11): hasta que esté G, las etiquetas reales tienen ese sesgo.
+  solo como control. **Ojo:** en video real la focal pinhole sale +6 % por la lente y con G
+  (`lente_por_movimiento`) −0,6 % (BITACORA 23/11, noche): las etiquetas reales tienen que salir
+  con G, y `autoetiquetas` todavía usa la pinhole.
 
 ## 7. Calendario
 

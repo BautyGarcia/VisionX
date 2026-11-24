@@ -86,7 +86,8 @@ def convertir(
 
     `sin_lente` (solo control, necesita `calibracion`): saca la distorsión de cada ojo con la
     calibración de tablero, con la misma `K`. Sirve para separar cuánto error de la etiqueta es
-    la lente (que la autocalibración todavía no busca, G de PLAN-CIERRE) y cuánto lo demás.
+    la lente (`autoetiquetas` usa `focal_por_movimiento`, que supone pinhole) y cuánto lo
+    demás.
     """
     grabacion = Path(grabacion)
     manifiesto, entradas, _ = load_recording(grabacion)
