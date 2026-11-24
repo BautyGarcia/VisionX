@@ -40,6 +40,108 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-23 (noche) — T12/T13: autocalibración en video real de la ELP, D con video real y la duda de la U-Net hasta la voz
+
+Tarea: T12 (D, G), T13. Persona/agente: Bauty / Claude Code. Rama `a/T13-intervalo-voz`, apilada
+sobre `a/T04-cinta-en-a`. Sin cámara: grabaciones viejas y la del lugar 1.
+
+**1. La autocalibración por movimiento, por primera vez en video real.**
+- **Datos:** 9 clips de desarrollo de la ELP con la cámara en la mano (`dev-1114-buscar-a/b/c`,
+  `iguales`, `acercarse-1/2/3`, `lectura-b`, `distancias`; nunca usados para ajustar nada).
+- **Tramos:** de 60 cuadros, uno cada 2 pares grabados (~8 s), como en la app. 41 tramos.
+- **Control:** la `K` del ojo izquierdo de la calibración de tablero
+  (`elp-2026-11-11-corregida`, fx 602 a 1920 px).
+- **Herramienta nueva, en `camara_net`:**
+  - `desde-grabacion` pasa una grabación cruda al formato de vistas de `gt-sintetico-elp`, a 960 px;
+  - `etiquetar-real` corre `gtsynth autoetiquetas` sobre esas vistas (partición `None`), sin tocar
+    `gtsynth`;
+  - `--sin-lente` es el control con la distorsión sacada con la calibración de tablero.
+
+| Qué | Imagen cruda (como una cámara desconocida) | Sin lente (control) |
+|---|---|---|
+| Movimiento solo, tramos medidos | 31/41 | 31/41 |
+| Movimiento solo, error mediano de la focal | **+6,1 %** (siempre de más) | **+0,6 %** (\|mediana\| 0,8 %) |
+| Red v2 sola | +25,9 % (\|P90\| 51 %; el intervalo del 90 % cubre 37 %) | +23,7 % (cubre 46 %) |
+| Red v2 + movimiento | +8,6 %; con duda ≤ 3 %, 24 tramos: +5,9 % (+2,0 a +16,9) | +1,1 %; con duda ≤ 3 %, 28 tramos: +0,9 % (−2,0 a +5,2) |
+| Cobertura del 90 % de red + movimiento | **0,12** | 0,71 |
+
+Salidas: `outputs/autoetiquetas/real.csv`, `real-sin-lente.csv` y `real-e3auto.csv` (fuera de Git).
+Una cuenta previa con un script suelto, partiendo de 640 px en vez de la red, dio lo mismo: +5,6 % crudo
+y +0,2 % sin lente.
+
+Lecturas:
+- **El método funciona en video real:** sin la lente da +0,6 %, tan bien como en simulación
+  (0,9 %).
+- **Todo el error que queda es la lente.** Con la imagen cruda la focal sale +6 % y la duda dice
+  1–3 %: se confía de más (cubre el 12 %; sin lente, 71 %). Es el mismo +6 % del alta 1 de hoy (campo 112,6°,
+  fx ≈ 640 contra 602). Es lo que ataca G (#95, integrado el 24/11): ver el punto 4.
+- **La red de entrada sola falla en la ELP real:** +26 %, contra 12,7 % en gt-video, y su duda
+  cubre el 37 %. Brecha de dominio (renders contra una cámara real con lente). Es justo lo que
+  tendría que arreglar la parte real de D.
+- **Dónde mide el movimiento:** los 21 tramos de `buscar-*` (cámara girando) sí; `lectura-b` y
+  `distancias` (cámara casi quieta) ninguno. Confirma qué hay que pedir al grabar.
+
+**2. La v3-auto no mejora en video real.** El mismo `etiquetar-real` con `e3-auto`: la red sola
+da +27,9 % (v2: +25,9 %) y red + movimiento +9,0 % (v2: +8,6 %). La mejora de la v3 (12,7 → 11,9 %
+en gt-video, BITACORA 22/11 noche Mac) no llega a la cámara real. Para la parte real de D hace
+falta video real, etiquetado con la lente (punto 4): con la focal pinhole la red aprendería el +6 %.
+
+**3. La duda de la U-Net llega a la voz** (era el pendiente de Bauty en INCERTIDUMBRE-Y-GT 1.2).
+- **Hallazgo:** hasta hoy la app no la usaba nunca.
+  - `depth.crestereo.incertidumbre` estaba vacío por defecto;
+  - aunque se cargara, el ubicador no llenaba `z_bajo_m` / `z_alto_m`.
+  - La voz del lugar 1 eligió el nivel solo con la duda de la cámara.
+- **Código:**
+  - `spatial.b_factor` en el ubicador: el intervalo del 90 % alrededor del frente con
+    `laplace_interval` y b del objeto = mediana de b en la capa × factor. Por defecto 0: sin
+    intervalo, como antes.
+  - `depth.crestereo.<modo>.incertidumbre` pisa el checkpoint general, para prender la U-Net solo
+    en el modo preciso, que es donde está validada.
+  - La corrección de «calibrá» ya escalaba b, así que el intervalo sigue coherente después de
+    calibrar.
+- **Tests:** 4 del intervalo, 1 del checkpoint por modo y 3 del conversor de grabaciones. Suite
+  completa: 1420 pasan, 1 salteado; ruff limpio.
+- **Factor de la ELP:** `bench evaluar --incertidumbre outputs/crestereo_inc/v2-s0/mejor.pt` sobre
+  el lugar 1 (35 lecturas: 7 stickers × 5 pares; `outputs/banco/s1/tablero-unet/`).
+  - Con la b tal cual, el intervalo cubre el 100 %.
+  - `escala_b_sugerida` 0,60 en total; por rango, 1,74 (0–1 m, la taza con 3 px de error),
+    0,47 (1–2 m), 0,30 (2–3 m) y 0,40 (3–4,5 m).
+  - Es una cota de arriba: el error de la referencia (marcas de cinta de ±5 cm) entra como error
+    de la red.
+- `configs/local-cinta.yaml` (local) queda con la U-Net en el preciso y `b_factor` 0,6 para el
+  lugar 2, que lo comprueba (la regla: ajustar en un lugar, comprobar en el otro).
+- **Cuenta rápida para la ELP en el preciso** (f·B ≈ 24 px·m a 1280, b ≈ 1,3 px): con 0,6, el medio
+  ancho es ~5 % a 0,5 m («precisa»), ~11 % a 1,5 m y ~20 % a 3 m («a unos»). Sin medir en vivo.
+
+**4. G en la ELP real** (agregado el 24/11, después de integrar #95). `lente_por_movimiento`
+(focal y k1 juntas, modo completo, partiendo de la red v2) sobre los mismos 41 tramos crudos, contra
+el tablero (script suelto sobre `outputs/autoetiquetas/real.csv`; 44 min en CPU):
+- **Medidos 32/41. Focal: −0,6 % de mediana** (|mediana| 2,6 %), contra +6,1 % del pinhole. Con duda
+  ≤ 3 %: 25 tramos, −0,8 %. **El sesgo de la lente desaparece.**
+- k1 medida: −0,034 a −0,068 en 26 tramos (mediana −0,041), y 0 en 5 (se usó la focal pinhole).
+- Por clip: `buscar-a/b/c` entre −5 y +6 % (los 21 tramos); `iguales` +3 a +13 %; `acercarse`
+  tiene dos tramos muy malos (−26 % y +50 %): ahí la cámara avanza más de lo que gira.
+- La duda cubre el 62 % (la meta es 90 %): se confía de más, como en simulación (73 %).
+- Lectura: con G, la autocalibración de una ELP desconocida queda a ~1 % del tablero en mediana.
+  Es el primer número real del aporte central, todavía sin el sistema completo.
+
+**5. Guía de la próxima sesión con cámara** en PLAN-CIERRE §6 («Segunda sesión con la ELP»): el
+lugar 2 corregido y el video girando para D (5–10 lugares, 40 s, `--cada 4`), en una sola sesión.
+
+Límites:
+- Una sola cámara real, y los clips son de un mismo día y una misma casa.
+- El control «sin lente» usa la calibración de tablero de la misma ELP.
+- El factor de b viene de 7 stickers con referencia dudosa.
+- El intervalo nunca se probó en vivo.
+
+Próximo paso:
+- (Tomás) `gtsynth autoetiquetas` usa `focal_por_movimiento` (pinhole): pasarlo a
+  `lente_por_movimiento` para etiquetar el video real de D. Ajustar la duda de G (cubre 62 % en
+  real, 73 % en simulación) y ver los tramos de `acercarse`, donde falla.
+- (Bauty) la sesión con cámara de PLAN-CIERRE §6: lugar 2 y video girando.
+- (Bauty / Claude) con el lugar 2: comprobar `b_factor` y, con el video, `etiquetar-real`.
+
+
 ## 2026-11-23 — T04/A: primera escena con cinta (`banco-s1-e01`), alta 1 y voz con la ELP real
 
 Tarea: T04 y prueba A (PLAN-CIERRE §6). Persona/agente: Bauty (cámara, cinta) / Claude Code

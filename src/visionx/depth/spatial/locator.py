@@ -35,9 +35,11 @@ profundidad. Pasos por objeto:
    - SPEAK_METERS en otro caso. El rango que se anuncia lo decide el modo (`depth.range_m`).
 
 `locate_detailed` devuelve además un `ObjectDiagnostics` por objeto (píxeles, erosión, capa,
-fuente estéreo/monocular, mediana de b si el DepthResult trae b de Laplace). Esa b es solo un
-dato de diagnóstico: los píxeles vecinos están correlacionados y promediar b no da la
-incertidumbre del objeto (TECNICO, T13). No cambia la política ni el contrato.
+fuente estéreo/monocular, mediana de b si el DepthResult trae b de Laplace). La mediana de b
+por sí sola no es la incertidumbre del objeto: los píxeles vecinos están correlacionados
+(TECNICO, T13). Por eso el intervalo del 90 % (`z_bajo_m`, `z_alto_m`) se llena solo con
+`b_factor` > 0, un factor medido contra distancias reales para que cubra ~90 % por objeto
+(INCERTIDUMBRE-Y-GT, 1.2). No cambia la política: el nivel que se dice lo decide el modo.
 
 Los valores por defecto (`configs/default.yaml`, sección `spatial`) salen de clips de
 desarrollo de una sola sesión; los definitivos se fijan con el banco ELP (T04/T13).
@@ -67,6 +69,7 @@ from visionx.shared.contracts import (
 )
 from visionx.shared.errors import InvalidInput
 from visionx.shared.geometry import StereoGeometry
+from visionx.shared.uncertainty import laplace_interval
 
 SOURCE_STEREO, SOURCE_MONO = 1, 2  # mismos valores que el mapa `source` de depth.hybrid
 
@@ -90,6 +93,9 @@ class LocatorParams:
     border_px: float = 2.0
     reframe_bottom: bool = False
     bottom_band_px: int = 2
+    # Intervalo del 90 % por objeto con la b de Laplace de la U-Net (INCERTIDUMBRE-Y-GT, 1.2):
+    # b_obj = mediana de b en la capa × b_factor. 0 = no se llena (todo se dice como antes).
+    b_factor: float = 0.0
 
     def __post_init__(self) -> None:
         v.finite("min_valid", self.min_valid, 0.0, 1.0)
@@ -110,6 +116,7 @@ class LocatorParams:
         if not isinstance(self.reframe_bottom, bool):
             raise InvalidInput("reframe_bottom tiene que ser true o false")
         v.non_negative_int("bottom_band_px", self.bottom_band_px)
+        v.finite("b_factor", self.b_factor, low=0.0)
 
     @classmethod
     def from_config(cls, section: dict[str, Any] | None) -> LocatorParams:
@@ -150,7 +157,7 @@ class ObjectDiagnostics:
     box_angle_h_deg: float  # ángulos desde el centro de la caja, para comparar
     box_angle_v_deg: float
     stereo_fraction: float | None  # de la capa: fracción con fuente estéreo (si hay mapa)
-    b_median_px: float | None  # mediana de b de Laplace en la capa: SOLO diagnóstico
+    b_median_px: float | None  # mediana de b de Laplace en la capa (sin el factor)
 
     @property
     def coverage(self) -> float:
@@ -259,6 +266,7 @@ class ObjectLocator:
         policy, reason = self._policy(depth, mask, surface, cut)
         z = surface.z_m if policy is not DistancePolicy.ABSTAIN else None
         spread = surface.spread_m if z is not None else None
+        z_bajo, z_alto = self._interval(z, surface, depth)
         track = det.track_ids[i] if det.track_ids is not None else None
         obj = SpatialObject(
             session_id=frame.session_id,
@@ -271,6 +279,8 @@ class ObjectLocator:
             angle_v_deg=vert,
             z_m=z,
             z_spread_m=spread,
+            z_bajo_m=z_bajo,
+            z_alto_m=z_alto,
             valid_fraction=surface.valid_fraction,
             detector_score=float(det.scores[i]),
             policy=policy,
@@ -294,6 +304,22 @@ class ObjectLocator:
             b_median_px=surface.b_median_px,
         )
         return obj, diag
+
+    def _interval(
+        self, z: float | None, s: _Surface, depth: DepthResult
+    ) -> tuple[float | None, float | None]:
+        """(z_bajo, z_alto) del 90 % del frente, o (None, None) si no hay con qué calcularlo.
+
+        Alrededor de la misma disparidad que da z_m (el frente), así z_m queda adentro. Si la
+        profundidad viene corregida por «calibrá», la corrección ya está en `depth`.
+        """
+        k = self.params.b_factor
+        if z is None or k <= 0 or s.b_median_px is None or s.d_front_px is None:
+            return None, None
+        if not math.isfinite(s.b_median_px) or s.b_median_px < 0:
+            return None, None
+        g = self.depth_geometry
+        return laplace_interval(s.d_front_px, s.b_median_px, g.fx * g.baseline_m, depth.doffs, k)
 
     def _measure(self, mask: np.ndarray, depth: DepthResult, source: np.ndarray | None) -> _Surface:
         """Interior, capa cercana, frente, dispersión y centroide de un objeto."""

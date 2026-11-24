@@ -257,3 +257,16 @@ def test_estimador_con_incertidumbre_devuelve_b_de_laplace() -> None:
     check_depth_geometry(result, geom)
     sin_b = CreStereoEstimator(CreStereoMatcher(FakeNet(), "cpu", CreStereoParams()), geom)
     assert sin_b.predict(frame(geom)).uncertainty is None
+
+
+def test_la_seccion_del_modo_pisa_el_checkpoint_de_incertidumbre() -> None:
+    from visionx.depth.crestereo_adapt.estimator import incertidumbre_de
+
+    general = {"incertidumbre": "u.pt", "continuo": {}, "preciso": {}}
+    assert incertidumbre_de(general, "continuo") == "u.pt"
+    solo_preciso = {"incertidumbre": "", "continuo": {}, "preciso": {"incertidumbre": "u.pt"}}
+    assert incertidumbre_de(solo_preciso, "preciso") == "u.pt"
+    assert incertidumbre_de(solo_preciso, "continuo") == ""
+    apagada = {"incertidumbre": "u.pt", "continuo": {"incertidumbre": ""}, "preciso": {}}
+    assert incertidumbre_de(apagada, "continuo") == ""
+    assert incertidumbre_de({"continuo": {}}, "continuo") == ""

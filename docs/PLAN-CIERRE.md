@@ -220,6 +220,48 @@ prueba real (A, E5) → prueba con personas (E) → la geometría entrena a la r
 7. Todo a la BITACORA con tabla. Si la focal sale muy distinta de la del tablero, sospechar de
    la distorsión (G).
 
+### Segunda sesión con la ELP: lugar 2 + video girando para D (agregado el 23/11)
+
+Una sola sesión para las dos cosas que necesitan la cámara: la cámara queda caliente para las dos.
+Correr todo desde la rama `a/T13-intervalo-voz` o desde `main` cuando esté integrada:
+`configs/local-cinta.yaml` ahora trae `spatial.b_factor`, que el código anterior no conoce.
+
+**1. Lugar 2 (`banco-s1-e02`), corregido con lo que pasó en el lugar 1 (BITACORA 23/11):**
+- Calentamiento: 40 min de `camera ver` con la ELP donde va a grabar.
+- Mismos objetos de la app, más 1–2 si hay (una caja con una cara plana grande).
+- **Medir cada sticker al milímetro con plomada, sin marcas puestas antes.** Un sticker, 3 veces.
+- Repartir: 1 sticker cerca de 0,5 m, 2 entre 1 y 2 m, 3 entre 2 y 3 m, 2 entre 3 y 4 m.
+- Ningún sticker pegado al borde de otro objeto en la imagen. Sobre tela oscura, sticker grande.
+- Elegir antes los dos objetos para «calibrá» (~1,5 y ~3 m): cerca del centro, cada uno solo en
+  su columna de la imagen.
+- Grabar como el lugar 1; alta con **otro nombre**, para no pisar el perfil del lugar 1:
+  `--dispositivo "Camara desconocida 2"`.
+- Voz: la app con `--camara camara-desconocida-2` y `configs/local-cinta.yaml`. Ahora el modo
+  preciso suma la duda de la U-Net (factor 0,6 del lugar 1), así que «precisa» o «a unos» depende
+  también de la distancia. Primero sin calibrar, después «calibrá» con los dos objetos, después
+  los controles.
+- Después (Claude, sin cámara): `bench marcar` y `bench evaluar --incertidumbre
+  outputs/crestereo_inc/v2-s0/mejor.pt`. La cobertura del intervalo del 90 % comprueba el factor.
+
+**2. Video girando para la parte real de D (5–10 lugares, ~40 s cada uno):**
+- No hace falta calentamiento ni cinta: la etiqueta es la focal, que no deriva con la temperatura.
+- Ambientes distintos: cuartos, cocina, pasillo, patio o balcón. Mucha textura y buena luz.
+- Cámara en la mano a la altura del pecho. Girar **despacio** a los costados (±45°) y arriba y
+  abajo (±20°), dar un par de pasos. No apuntar a una pared lisa ni mover rápido (se desenfoca).
+  Es lo que tenían los clips `dev-1114-buscar-*`: el movimiento midió los 21 tramos. En los
+  de lectura y distancias, con la cámara casi quieta, no midió ninguno.
+- Un lugar por grabación:
+
+      uv run python -m visionx.camera grabar recordings/d-real-<lugar> --segundos 40 --cada 4 --config configs/local.yaml --nota "D real: <lugar>, luz"
+
+  `--cada 4` guarda 15 pares/s. `desde-grabacion` toma uno de cada 2: tramos de 60 cuadros en
+  ~8 s, 5 por lugar.
+- Después (Claude, sin cámara): `camara_net desde-grabacion recordings/d-real-* --calibracion
+  configs/calib/elp-2026-11-11-corregida.yaml` y `camara_net etiquetar-real`. La calibración se usa
+  solo como control. **Ojo:** en video real la focal pinhole sale +6 % por la lente y con G
+  (`lente_por_movimiento`) −0,6 % (BITACORA 23/11, noche): las etiquetas reales tienen que salir
+  con G, y `autoetiquetas` todavía usa la pinhole.
+
 ## 7. Calendario
 
 | Fecha | Bauty | Tomás |

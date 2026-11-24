@@ -111,7 +111,9 @@ depth:
     weights_sha256: 2271ab615015a73edd4759b0f7b25a4d82ffb654270b92d3811237da3d63aa6d
     device: auto              # auto | mps | cuda | cpu | directml (auto usa DirectML si hay grafos ONNX: onnx_dml.py)
     max_disp: 256             # el que usa el script de prueba del port; no cambia los pesos
-    incertidumbre: ""         # checkpoint de la U-Net de incertidumbre (mejor.pt); vacío = sin b
+    incertidumbre: ""         # checkpoint de la U-Net de incertidumbre (mejor.pt); vacío = sin b. Cada
+                              # modo puede pisarlo con su propio `incertidumbre:` (validada en preciso:
+                              # ahí la b llega a la voz con spatial.b_factor; INCERTIDUMBRE-Y-GT 1.2)
     # Dos modos. Valores PROVISORIOS hasta cerrar la tabla de latencia M9 (compuerta de T12).
     continuo:                 # cuadro a cuadro: buscar y guiar
       compute: [640, 360]     # por ojo; adentro se rellena a múltiplos de 16 y se recorta
@@ -188,6 +190,11 @@ spatial:
                             # acercarse-1 se activaría en 18 de 20 frames con la silla a <= 0,52 m
                             # (al llegar) y la frase del modo dice "girá hacia ese lado": queda apagado
   bottom_band_px: 2         # franja inferior (px de la grilla de profundidad) para esa regla
+  b_factor: 0.0             # × mediana de b de la U-Net = b del objeto, para el intervalo del 90 % que
+                            # elige «a 2 metros» / «a unos 2 metros» / sin número. 0 = sin intervalo
+                            # (como antes). Solo actúa si depth.crestereo.incertidumbre tiene checkpoint.
+                            # Se mide con `bench evaluar` (escala_b_sugerida) en un lugar y se comprueba
+                            # en otro; en simulación, cámara conocida: ~0,3 en la ELP (BITACORA 21/11)
 
 # Modos buscar y distancia (T09, src/visionx/modes/). Candidatos sin medir: M1/M7/M8 los fijan.
 # El rango que se anuncia en metros: modes.range_m (si falta, depth.range_m).
