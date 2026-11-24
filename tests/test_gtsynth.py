@@ -420,3 +420,33 @@ def test_el_previo_de_la_escala_aguanta_un_objeto_ruidoso():
     buenas = [1.04 * r + 0.5 for r in [10.0, 15.0, 20.0, 30.0]]  # medidas buenas: corrige las dos
     esc, corr = ajustar_ambas(buenas, [10.0, 15.0, 20.0, 30.0], sigma_d=0.05, sigma_escala=0.02)
     assert esc == pytest.approx(1.04, abs=0.005) and corr == pytest.approx(0.5, abs=0.1)
+
+
+def test_autocalibracion_con_lente_encuentra_focal_y_k1():
+    """Puntos que giran y avanzan, vistos con una lente k1 = −0,2: la búsqueda conjunta la halla."""
+    import cv2
+
+    from visionx.app.autocalibracion import _mejor_lente, _Puntos, costo_lente
+    from visionx.depth.camara_net.lente import distorsionar
+
+    rng = np.random.default_rng(1)
+    f, cx, cy, k1 = 400.0, 320.0, 240.0, -0.2
+    pts3 = rng.uniform([-3, -2, 4], [3, 2, 9], (400, 3))
+
+    def ver(r, t):
+        p = (r @ pts3.T + t[:, None]).T
+        xu, yu = p[:, 0] / p[:, 2], p[:, 1] / p[:, 2]
+        xd, yd = distorsionar(xu, yu, k1, 0.0)
+        return np.stack([f * xd + cx, f * yd + cy], 1), np.hypot(xu, yu)
+
+    pares = []
+    for j in range(8):
+        r0, _ = cv2.Rodrigues(np.array([0.0, 0.05 * j, 0.0]))
+        r1, _ = cv2.Rodrigues(np.array([0.02, 0.05 * j + 0.15, 0.01]))
+        (a, ra), (b, rb) = ver(r0, np.zeros(3)), ver(r1, np.array([0.1, 0.0, 0.2]))
+        dentro = (ra < 1.2) & (rb < 1.2)  # antes del pliegue del modelo (como una lente real)
+        pares.append((a[dentro], b[dentro]))
+    pts = _Puntos(pares)
+    assert costo_lente(f, k1, pts, cx, cy) < costo_lente(f, 0.0, pts, cx, cy)
+    fe, ke = _mejor_lente(pts, cx, cy, f * 1.15, 2.0, (-0.45, 0.15))
+    assert abs(fe / f - 1) < 0.02 and abs(ke - k1) < 0.02

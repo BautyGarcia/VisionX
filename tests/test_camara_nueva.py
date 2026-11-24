@@ -208,16 +208,37 @@ def test_el_alta_mide_la_lente_con_el_movimiento_y_pide_girar_si_no_alcanza():
     assert "Girá la cámara" in frases[0]
     for s in range(50, 54):
         frases = alta.agregar_par(*_par(s, dy=2.0))
+    # Primero avisa que mide (la medición frena la ventana unos segundos) y mide en el siguiente.
+    assert alta.estado.paso is Paso.MEDIR and "midiendo la lente" in frases[0] and not llamadas
+    frases = alta.agregar_par(*_par(54, dy=2.0))
     assert alta.estado.paso is Paso.MIRAR and "un poco más" in frases[0]
     assert alta.estado.cuadros_mov == 0
-    for s in range(54, 58):
+    for s in range(55, 59):
         frases = alta.agregar_par(*_par(s, dy=2.0))
+    assert alta.estado.paso is Paso.MEDIR
+    frases = alta.agregar_par(*_par(59, dy=2.0))
     e = alta.estado
     assert e.paso is Paso.ESCALA and len(llamadas) == 2
     assert any("Medí la lente" in f and "90 grados" in f for f in frases)
     assert e.perfil.campo_horizontal_deg == pytest.approx(90.0, abs=1.0)  # manda el movimiento
     alta.separacion(0.06)
     assert e.nivel == "precisa" and e.perfil.extra["movimiento"]["ok"]
+
+
+def test_la_lente_medida_queda_en_el_perfil():
+    from visionx.app.autocalibracion import FocalMedida
+
+    t = itertools.count(0.0, 1.0)
+    alta = AltaCamara(
+        cargar_perfiles(), estimador=_Red(), pares_necesarios=2, alinear=_alinear_falso,
+        reloj=lambda: next(t), cuadros_movimiento=3,
+        autocalibrar=lambda c, cx, cy, f0: FocalMedida(160.0, 0.01, 40, k1=-0.18),
+    )  # fmt: skip
+    alta.conectar("Cámara de prueba", "sbs", (320, 180))
+    for s in range(80, 84):
+        alta.agregar_par(*_par(s, dy=2.0))
+    assert alta.estado.paso is Paso.ESCALA
+    assert alta.estado.perfil.k1 == pytest.approx(-0.18) and alta.estado.perfil.k2 == 0.0
 
 
 def test_un_objeto_a_distancia_conocida_da_la_separacion():

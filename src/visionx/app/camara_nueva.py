@@ -219,6 +219,7 @@ class AltaCamara:
         self._q_secuencia = 1.0
         self._t_secuencia = -1e9
         self._reintentos = 0
+        self._medir_pendiente = False
         self._calib: Any = None
         self._maps_rect: Any = None
         self._ultimo: tuple[np.ndarray, np.ndarray] | None = None
@@ -268,6 +269,9 @@ class AltaCamara:
         e = self.estado
         if e.paso is Paso.ESCALA:
             self._ultimo = (izq, der)  # para medir un objeto a distancia conocida
+        if e.paso is Paso.MEDIR and self._medir_pendiente:  # ya se avisó: ahora sí, medir
+            self._medir_pendiente = False
+            return self._estimar_y_alinear()
         if e.paso is not Paso.MIRAR:
             return []
         t = self._reloj()
@@ -282,7 +286,7 @@ class AltaCamara:
                 self._t_secuencia = t
                 e.cuadros_mov = len(self._secuencia)
         if e.pares >= e.pares_necesarios:  # ya están los pares: falta la secuencia
-            return self._estimar_y_alinear() if e.cuadros_mov >= e.cuadros_mov_necesarios else []
+            return self._listo_el_giro() if e.cuadros_mov >= e.cuadros_mov_necesarios else []
         mini = cv2.resize(cv2.cvtColor(izq, cv2.COLOR_BGR2GRAY), (64, 36)).astype(np.float32)
         if t - self._ultimo_t < self.separacion_min_s:
             return []
@@ -295,7 +299,16 @@ class AltaCamara:
         e.pares = len(self._pares)
         if e.pares < e.pares_necesarios or e.cuadros_mov < e.cuadros_mov_necesarios:
             return []
-        return self._estimar_y_alinear()
+        return self._listo_el_giro()
+
+    def _listo_el_giro(self) -> list[str]:
+        """Con autocalibración, medir tarda: se avisa y se mide en el cuadro siguiente (así la
+        voz y la pantalla lo dicen antes de que el cálculo frene la ventana)."""
+        if self._autocalibrar is None:
+            return self._estimar_y_alinear()
+        self.estado.paso = Paso.MEDIR
+        self._medir_pendiente = True
+        return self._decir("Listo el giro. Estoy midiendo la lente: tarda unos segundos.")
 
     def separacion(self, metros: float) -> list[str]:
         """La persona dijo la separación entre lentes (o se tomó de la hoja de datos)."""
@@ -487,7 +500,7 @@ class AltaCamara:
         e.tiempos_ms["medir"] = (time.perf_counter() - t0) * 1000
         s_red = est.sigma_log_f if est.sigma_log_f else SIGMA_SIN_RED
         if m.ok:
-            m = type(m)(m.fx / q, m.sigma_log, m.pares, m.motivo)
+            m = replace(m, fx=m.fx / q)
         lf, s = combinar(math.log(f0), s_red, m)
         if s > SIGMA_LENTE_OK and self._reintentos < 1:
             self._reintentos += 1
@@ -499,6 +512,8 @@ class AltaCamara:
         e.sigma_focal = s
         campo = math.degrees(2 * math.atan(w / (2 * math.exp(lf))))
         e.perfil = replace(e.perfil, campo_horizontal_deg=float(campo))
+        if m.ok and m.k1 is not None:  # el movimiento midió también la lente
+            e.perfil = replace(e.perfil, k1=float(m.k1), k2=0.0)
         if not m.ok:
             return (f"No pude medir la lente con el movimiento; uso la estimación: unos "
                     f"{round(campo)} grados de ancho.")  # fmt: skip

@@ -375,6 +375,14 @@ def main(argv: list[str] | None = None) -> int:
     ae.add_argument("--red", default=str(ROOT / "outputs" / "camara_net" / "e2-v2" / "mejor.pt"))
     ae.add_argument("--salida", default=str(ROOT / "outputs" / "autoetiquetas" / "b.csv"))
     ae.add_argument("--limite", type=int, default=0, help="solo los primeros N recorridos")
+    al = sub.add_parser("autocalib-lente", help="autocalibración con lentes sorteadas")
+    al.add_argument("raiz", help="carpeta con las variantes video-*")
+    al.add_argument(
+        "--salida", default=str(ROOT / "outputs" / "gtsynth" / "autocalib" / "lente.json")
+    )
+    al.add_argument("--red", default=str(ROOT / "outputs" / "camara_net" / "e2-v2" / "mejor.pt"))
+    al.add_argument("--variantes", nargs="+", default=None)
+    al.add_argument("--cuadros", type=int, default=60)
     ac = sub.add_parser("autocalib", help="autocalibración por movimiento contra la cámara real")
     ac.add_argument("raiz", help="carpeta con las variantes video-*")
     ac.add_argument("--salida", default=str(ROOT / "outputs" / "gtsynth" / "autocalib.json"))
@@ -455,6 +463,12 @@ def main(argv: list[str] | None = None) -> int:
         q = autoetiquetas(args.raiz, args.variante, args.red, args.salida,
                           limite=args.limite)  # fmt: skip
         print(json.dumps(q, ensure_ascii=False))
+        return 0
+    if args.cmd == "autocalib-lente":
+        from visionx.gtsynth.autocalib_lente import correr_todo as autocalib_lente
+
+        r = autocalib_lente(args.raiz, args.salida, args.red, args.variantes, args.cuadros)
+        print(json.dumps(r["resumen"], ensure_ascii=False))
         return 0
     if args.cmd == "autocalib":
         from visionx.gtsynth.autocalib import correr_todo as autocalib
