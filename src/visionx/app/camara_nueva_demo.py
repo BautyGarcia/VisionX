@@ -250,7 +250,8 @@ def _detalle(alta: AltaCamara, paso: Paso) -> str:
 class FuenteSimulada:
     """Un recorrido de data/gt-video como cámara desconocida (ojo derecho de otra unidad)."""
 
-    def __init__(self, variante: str, escena: str = "hotel_0", raiz: Path | None = None) -> None:
+    def __init__(self, variante: str, escena: str = "hotel_0", raiz: Path | None = None,
+                 k1: float = 0.0) -> None:  # fmt: skip
         from visionx.gtsynth import vistas
         from visionx.gtsynth.video import _camara_nominal, _hermana
 
@@ -266,6 +267,16 @@ class FuenteSimulada:
         r = v0.recortar(v0.izq())
         self.resolucion = (r.shape[1], r.shape[0])
         self._k = 0
+        self._mapas = None
+        if k1:  # una lente con distorsión, simulada desde el lienzo con margen (camara_net.lente)
+            from visionx.depth.camara_net.lente import Camara, cabe, mapa_lente
+
+            c, n = v0.meta["camara"], v0.nominal
+            cam = Camara(n["ancho"], n["alto"], c["fx"], n["cx"], n["cy"], float(k1), 0.0)
+            if not cabe(cam, (c["ancho"], c["alto"]), (c["cx"], c["cy"])):
+                print(f"  aviso: k1 {k1} no entra entera en el lienzo (bordes reflejados)")
+            self._mapas = mapa_lente(cam, (cam.ancho, cam.alto), (c["cx"], c["cy"]), 1.0)
+            self.nombre = f"Cámara simulada con lente (k1 {k1:+.2f})"
 
     def leer(self) -> tuple[np.ndarray, np.ndarray]:
         from visionx.depth.crestereo_adapt.perturb import perturb_right_camera
@@ -273,6 +284,10 @@ class FuenteSimulada:
         v = self.vs[self._k % len(self.vs)]
         self._k += 1
         der = perturb_right_camera(v.der(), self._real, self._nominal, v.geometria).right
+        if self._mapas is not None:
+            mx, my = self._mapas
+            return (cv2.remap(v.izq(), mx, my, cv2.INTER_LINEAR),
+                    cv2.remap(der, mx, my, cv2.INTER_LINEAR))  # fmt: skip
         return v.recortar(v.izq()), v.recortar(der)
 
 
@@ -319,7 +334,7 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
     cfg = load_config(args.config) if args.config else load_config()
     if args.fuente.startswith("sim:"):
         fuente = FuenteSimulada(
-            args.fuente[4:], args.escena, Path(args.raiz) if args.raiz else None
+            args.fuente[4:], args.escena, Path(args.raiz) if args.raiz else None, args.lente
         )
     elif args.fuente == "usb":
         fuente = FuenteUSB(cfg, args.dispositivo)
@@ -335,9 +350,13 @@ def cmd_camara_nueva(args: argparse.Namespace) -> int:
     estimador = _estimador(args.red)
     autocalibrar = None
     if not args.sin_movimiento:
-        from visionx.app.autocalibracion import focal_por_movimiento
+        import functools
 
-        autocalibrar = focal_por_movimiento
+        from visionx.app.autocalibracion import lente_por_movimiento
+
+        # Focal y lente juntas (las cámaras baratas tienen distorsión); menos remuestreos que
+        # en la evaluación para que el paso tarde segundos y no un minuto.
+        autocalibrar = functools.partial(lente_por_movimiento, remuestreos=6, rapido=True)
     # Los recorridos simulados ya vienen espaciados: cada cuadro cuenta.
     intervalo = 0.0 if isinstance(fuente, FuenteSimulada) else 0.1
 
@@ -498,6 +517,8 @@ def register(sub) -> None:
     p.add_argument("--fuente", default="sim:video-zed-mini",
                    help="sim:<variante de data/gt-video>, usb o realsense")  # fmt: skip
     p.add_argument("--escena", default="hotel_0", help="escena del recorrido simulado")
+    p.add_argument("--lente", type=float, default=0.0,
+                   help="simulada: k1 de una lente con distorsión (p. ej. -0.2)")  # fmt: skip
     p.add_argument("--raiz", default=None, help="carpeta gt-video (por defecto data/gt-video)")
     p.add_argument("--dispositivo", default=None, help="nombre a reconocer (por defecto, el real)")
     p.add_argument("--pares", type=int, default=8, help="vistas distintas que junta")
