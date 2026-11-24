@@ -37,6 +37,10 @@ Error de focal por cuadro (mediana / P90), en %:
 | Constante | siempre la cámara media del entrenamiento | 31–33 | — | — |
 | v1 (Bauty, 21/11) | ResNet-18, 2 ojos, Laplace + reproyección | 9,9 / 27 | 13,5 / 41 | bien / 11–63 |
 | v2 (Bauty, 21/11) | + zoom y `camara-sorteada-ojo` | 9,0 / 28 | 12,7 / 40 | 0,2–16 / 4–55 |
+| v3-auto (Bauty, 22/11) | v2 + 10 épocas con las etiquetas de la geometría (duda ≤ 3 %) | 9,2 / 27 | 11,9 / 37 | por cuadro: Replica 8,0 / 22, HSSD 17,6 / 54 |
+| v3 control: real | lo mismo con la focal verdadera | 9,1 / 27 | 12,3 / 37 | por cuadro: Replica 7,8 / 22, HSSD 18,5 / 53 |
+| v3 control: sin | v2 + 10 épocas sin etiquetas nuevas | 9,4 / 28 | 12,6 / 40 | por cuadro: Replica 8,1 / 25, HSSD 20,0 / 55 |
+| v3-auto5 | como v3-auto, con las etiquetas de duda ≤ 5 % (1,7 veces más) | 9,0 / 25 | 11,7 / 38 | por cuadro: Replica 7,4 / 21, HSSD 18,7 / 53 |
 | **v2 + movimiento** (22/11) | la geometría mide la focal mientras la persona gira (60 cuadros) | — | **0,9 / 3,5** | — |
 
 El sistema completo, error mediano en distancia por recorrido (promedio de las 9 cámaras):
@@ -66,6 +70,10 @@ mediana por recorrido +0,08). Con la focal de la red sola el mismo camino da 13,
 - **Sistema completo** (22/11). Red + movimiento + separación + objeto queda a +0,2 puntos de
   la cámara calibrada. Clave: con la escala resuelta, el objeto tiene que corregir el
   corrimiento, no la escala.
+- **v3-auto** (22/11). Las etiquetas de la geometría ayudan tanto como las verdaderas, y
+  entrenar más sin ellas no ayuda: `gt-video` 12,7 → 11,9 %, HSSD 20 → 18 %. Sumar las de
+  duda ≤ 5 % no cambia nada. El techo con estos datos simulados es bajo: el salto tendría
+  que venir del video real.
 
 ## Próximo paso: que la geometría entrene a la red (v3-auto)
 
@@ -146,7 +154,7 @@ uv run --extra ml python -m visionx.depth.camara_net entrenar $COMUN --salida ou
 - a) contra c) dice cuánto aportan las etiquetas, más allá de entrenar más.
 - a) contra b) dice cuánto se pierde por usar la geometría en vez de la verdad.
 - Si sobra tiempo: a) con `b-vistas-5pct.csv --sigma-max 0.05` (1,7 veces más cuadros, más
-  ruidosos).
+  ruidosos). Hecho el 22/11 (`e3-auto5`): queda como a), no suma.
 
 **3. El factor de b en el checkpoint.** El de la v2 era 1,79: el que lleva la cobertura de val al
 90 %. Medirlo igual en cada versión y guardarlo:

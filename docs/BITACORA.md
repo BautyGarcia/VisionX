@@ -109,6 +109,66 @@ baratas tienen distorsión de barril. Sin modelarla, la focal sale mal:
 - Ajustar el modo rápido.
 - Solo se mide k1 (k2 = 0). El centro sigue saliendo de la red.
 
+## 2026-11-22 (noche, Mac) — T12: v3-auto, las etiquetas de la geometría bajan HSSD de 20 a 18 %
+
+Tarea: T12 (red de entrada, [RED-ENTRADA](RED-ENTRADA.md#entrenar-la-v3-auto-bauty-en-la-mac-comandos-exactos)).
+Persona/agente: Bauty / Claude Code. Mac, MPS. Rama `a/T12-v3-auto`. Crudos en
+`outputs/camara_net/e3-{auto,real,sin}/` (`curvas.csv`, `eval8/resumen.json` y un CSV por
+cámara; fuera de Git). Pesos en el Drive `VisionX-Personal/pesos/camara-net/e3-*/`, con
+`factor_b` guardado en el checkpoint.
+
+Objetivo: ver si las focales que mide la autocalibración por movimiento sirven como etiquetas
+para mejorar la red sin calibrar nada. Se corrieron las tres corridas de RED-ENTRADA tal cual.
+Todas parten de la v2, con 10 épocas, lr 1e-4 (cabeza) y 3e-5 (tronco), y los datos de la v2.
+- **e3-auto:** + las 2910 vistas de `hssd-recorridos-sorteada-b` con duda ≤ 3 %, con la focal de
+  la geometría como etiqueta.
+- **e3-real:** las mismas vistas con la focal verdadera (el techo).
+- **e3-sin:** sin vistas nuevas (el control de «entrenar más»).
+
+Cada una tardó ~1 h. Un solo cambio a los comandos: `uv run` sin `--extra ml`, que desinstala
+los otros extras.
+
+Evidencia: error de focal por cuadro (mediana / P90) con el protocolo fijo de RED-ENTRADA.
+- `gt-video`: 9 cámaras × 8 escenas de val, 6480 cuadros. Sin `video-elp`, que es nueva y
+  tiene 6 escenas. La v2 da lo mismo que midió Tomás en la PC (12,7 / 40).
+- Val: 840 vistas.
+
+| Versión | Val | gt-video | Replica (4) | HSSD (4) | Cobertura f en gt-video | factor_b (val) |
+|---|---:|---:|---:|---:|---:|---:|
+| v2 | 9,0 / 28 | 12,7 / 40 | 8,1 / 23 | 20,2 / 58 | 0,57 | 1,79 |
+| **e3-auto** | 9,2 / 27 | **11,9 / 37** | 8,0 / 22 | **17,6 / 54** | 0,61 | 1,74 |
+| e3-real | 9,1 / 27 | 12,3 / 37 | 7,8 / 22 | 18,5 / 53 | 0,67 | 1,58 |
+| e3-sin | 9,4 / 28 | 12,6 / 40 | 8,1 / 25 | 20,0 / 55 | 0,53 | 1,95 |
+| e3-auto5 | 9,0 / 25 | 11,7 / 38 | 7,4 / 21 | 18,7 / 53 | 0,62 | 1,62 |
+
+Val es sin lente, como en RED-ENTRADA. La cobertura es sin `factor_b`.
+
+Lectura:
+1. **Las etiquetas aportan y entrenar más no.** En HSSD, `e3-sin` queda igual que la v2 (20,0
+   contra 20,2) y `e3-auto` baja a 17,6. El P90 baja en las 10 cámaras (`video-elp` incluida).
+2. **La geometría vale como la verdad.** `e3-auto` queda igual o mejor que `e3-real`. Con
+   etiquetas de 0,7 % de error mediano, el ruido de la etiqueta no es lo que limita.
+3. **El efecto es chico.** Replica no cambia (8 %) y HSSD sigue en 18 %, lejos del 2 %. En val
+   las cuatro quedan en 9,0–9,4 % (ruido entre épocas: ±0,4), así que val no sirve para elegir
+   entre ellas.
+4. La duda mejora apenas (cobertura 0,57 → 0,61) y `factor_b` queda parecido (1,74).
+5. **Más etiquetas, más ruidosas, no suman.** `e3-auto5` (duda ≤ 5 %: 166 recorridos, 4980
+   cuadros, etiquetas de 1,2 % de error mediano) queda como `e3-auto` en el total (11,7
+   contra 11,9): un poco mejor en Replica (7,4) y un poco peor en HSSD (18,7). Con una
+   semilla, esas diferencias entran en el ruido. Se queda `e3-auto` como v3.
+
+Límites:
+- Una semilla por corrida: los ~2,5 puntos de HSSD pueden tener una parte de ruido.
+- Solo 97 recorridos etiquetados (26 % de los 366).
+- No se midió el sistema completo (E3) ni la autocalibración partiendo de la v3. Lo hace Tomás
+  en la PC con `gtsynth autocalib` / `sin-calibrar`.
+
+Próximo paso:
+- (Bauty, hecho) `e3-auto5`: medido arriba, en el Drive `pesos/camara-net/e3-auto5/`.
+- (Tomás) E3 y autocalibración con `e3-auto` en la PC.
+- (Bauty) Video real girando la ELP para etiquetar con el movimiento.
+
+
 ## 2026-11-22 (noche) — T12/T13: por objeto en modo preciso con la cámara estimada, y el objeto a dos distancias
 
 Tarea: T12, T13. Persona/agente: Tomás / Claude Code. PC de escritorio, CREStereo preciso en la
