@@ -122,7 +122,7 @@ para C se consigue, si se puede, en la facultad.
 | Conjunto | Qué es | Para qué | Quién |
 |---|---|---|---|
 | **A. GT-sintético-ELP** | Escenas de [Replica](https://github.com/facebookresearch/Replica-Dataset) (18 interiores escaneados, 88 clases, instancias) renderizadas con la **geometría de la ELP**: su calibración, 6 cm de separación, cámara a 1,2–1,4 m (pecho) | Cantidad (objetivo ≥ 1000 objetos a 0,5–4 m) con distancia y label exactos; no visto por CREStereo; **cámaras hermanas y distintas** para probar la decisión (a) | Tomás / Claude Code |
-| **C. Banco ELP** | Sesiones `s1`–`s2` con stickers y cinta (T04, `bench marcar/evaluar`); con medidor láser si se consigue en la facultad | La prueba real en nuestra cámara | Bauty (cámara) |
+| **C. Banco ELP** | Desde el 22/11, la medición con cinta de la prueba A: una sesión `s1` en dos lugares, 10–15 objetos con sticker, pares grabados (PLAN-CIERRE, sección 6, paso 4; `bench marcar/evaluar`); con medidor láser si se consigue en la facultad | La prueba real en nuestra cámara | Bauty (cámara) |
 | *Opcional: Booster* | [Booster](https://cvlab.unibo.it/booster-web/) (U. Bologna, CVPR 2022): 64 interiores reales con disparidad densa, sin labels de objeto | Solo si sobra tiempo | — |
 
 ### 2.2 GT-sintético-ELP: cómo se genera
@@ -169,5 +169,5 @@ visible del objeto (frente), más la mediana como dato extra.
    verificación y el banco de 60 casos (funciona sin intervalo; se activa cuando llegue).
 3. Bauty: intervalo en el ubicador, factor de b ajustado en val, confianza y estados de la red
    de entrada, `calibrar_distancia`.
-4. Bauty: banco ELP (C), con láser si se consigue.
+4. Bauty: medición con cinta de la prueba A (C), con láser si se consigue.
 5. Los dos: evaluación final por objeto en A y C (test congelado) para el informe.

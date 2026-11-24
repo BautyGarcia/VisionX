@@ -40,6 +40,111 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
+## 2026-11-23 — T04/A: primera escena con cinta (`banco-s1-e01`), alta 1 y voz con la ELP real
+
+Tarea: T04 y prueba A (PLAN-CIERRE §6). Persona/agente: Bauty (cámara, cinta) / Claude Code
+(comandos, evaluación). Mac M2 Max, ELP por USB, rama `a/T04-cinta-en-a` (sobre `d8de547`).
+Crudos fuera de Git: `recordings/banco-s1-e01/`, `outputs/plug-and-play/`, `outputs/banco/s1/`.
+
+**Escena.** Pieza de Bauty (lugar 1), persiana baja, luz artificial apagada, cámara nivelada con el
+celular, 93 min de calentamiento (`camera ver` desde 11:04; un corte de segundos a las 12:14,
+cuando Claude abrió la cámara desde un segundo proceso). 7 stickers: taza 0,50, mochila 1,25,
+peluche 1,50, silla 1,50, botella 2,40, pizarrón 2,45, pared del fondo 3,40 m.
+- Grabación: 10 s, 151 pares de 1920×1080 por ojo; `camera verificar` 151/151 con hash correcto.
+- **Referencia débil:** los objetos se acomodaron sobre marcas de cinta puestas antes a distancias
+  redondas. El pizarrón, medido después con plomada, dio 2,45 contra la marca de 2,40. Bauty
+  decidió no volver a medir; queda en `desvios` de la planilla. Una sola repetición, no tres.
+- El sticker del pizarrón quedó al lado de la cabecera de la silla en la imagen: su ventana mezcla
+  las dos superficies.
+
+**Alta 1 («Cámara nueva»).** Tablero: f = 602 px (116°).
+
+| | Campo | Focal | Contra el tablero |
+|---|---:|---:|---:|
+| Solo la red | 101° ± 18 % | ~790 px | +31 % |
+| Red + movimiento | 112,6° (σ 2,2 %) | ~641 px | **+6,5 %** (~3 σ) |
+
+- Alineación de los dos ojos: desfase de filas de 9,2 a 0,84 px. El perfil quedó «aproximada».
+- El primer giro falló: el contador avanza con el tiempo aunque la cámara esté quieta.
+
+**Evaluación con `bench evaluar`** (5 pares, ventana 9 px, crestereo-preciso; sgbm-b0 da parecido):
+
+| Sticker | Cinta | Tablero | Perfil sin calibrar |
+|---|---:|---:|---:|
+| taza | 0,513 | 0,546 (+6,6 %) | 0,460 |
+| mochila | 1,263 | 1,343 (+6,3 %) | 0,790 |
+| peluche | 1,513 | 1,597 (+5,6 %) | 0,884 |
+| silla | 1,513 | 1,540 (+1,8 %) | 0,909 |
+| botella | 2,413 | 2,541 (+5,3 %) | 1,109 |
+| pizarrón | 2,463 | 2,276 (−7,6 %) | 1,113 |
+| fondo | 3,413 | 3,201 (−6,2 %) | 1,258 |
+| **Mediana del error** | | **6,0 %** (25,7 % de los puntos ≤ 5 %) | **41,6 %** (0 %) |
+
+(La referencia ya suma el cero de la cinta, 12,9 mm.)
+
+Lectura:
+- **Contra el tablero, la cinta está corrida ±6 %:** los objetos salen 5–7 % más lejos y las paredes
+  6 % más cerca. El tablero midió ±5 mm entre 1 y 3 m el 13/11, y CREStereo y SGBM coinciden
+  entre sí. Lo más probable es que el error sea de la referencia (como el pizarrón). Con esta
+  cinta no se distinguen errores menores a ~6 %.
+- **Perfil sin calibrar:** 1/Z del perfil = 1/Z del tablero + 0,48 m⁻¹ casi constante (taza 0,34).
+  Es un corrimiento de disparidad de ~18 px a 1920: el giro horizontal entre los ojos, que la
+  alineación de filas no ve. A 2,4 m mide menos de la mitad.
+- **Calibración simulada sobre el banco** (ajuste exacto de 1/Z, peluche + botella), contra el
+  tablero:
+  - la escala sale 1,01 y el corrimiento −0,52 m⁻¹;
+  - los controles quedan en: mochila −2 %, taza +9 %, silla +9 %, fondo +10 % (pizarrón +12 %,
+    contaminado por la silla).
+  - El error que queda depende de dónde está el objeto en la imagen. Hipótesis: la distorsión,
+    porque el perfil tiene k1 = k2 = 0 y el tablero usa el modelo racional (tarea G).
+
+**Voz en vivo** (traza `outputs/plug-and-play/voz-s1-e01-calibrar.jsonl`; preguntas por
+`--consola` mediante un FIFO, no por micrófono):
+- **Sin calibrar,** la botella dio 1,08 m en una corrida y 1,61 m en otra, con la cámara en el
+  mismo lugar. En la segunda, el peluche pasó de 1,19 a 0,84 m al girar la cámara. La alineación
+  en vivo deja un corrimiento distinto en cada arranque y al girar.
+- La voz dijo «a más o menos 1 metro» para la botella a 2,4 m: la duda total (B) no avisó un error
+  del 55 %.
+- **«Calibrá, está a N metros»:** primero con el peluche (1,5) y después con la botella (2,4). Hubo
+  que girar la cámara para centrar cada uno: la app calibra con el objeto más centrado. Antes de
+  centrar la botella hubo que sacar la mochila, que estaba en la misma columna.
+
+  | | Cinta | Traza | Error | Voz |
+  |---|---:|---:|---:|---|
+  | taza (control) | 0,50 | 0,61 | +22 % | «a unos 0,5 metros» |
+  | mochila (control) | 1,25 | 1,23 | −2 % | «a más o menos 1 metro» |
+  | silla (control) | 1,50 | 1,42 | −5 % | «a unos 1,5 metros» |
+  | peluche (calibró) | 1,50 | 1,56 | +4 % | «a unos 1,5 metros» |
+  | botella (calibró) | 2,40 | 2,16 | −10 % | «a unos 2 metros» |
+
+- Ni la botella, con la que se calibró, llega a 2,4. Primero se sospechó que el previo de la escala
+  (σ 2,2 %) no la dejaba moverse. **El banco no lo confirma:** offline, la escala que hace falta es
+  ~1,0. Lo más probable es que el corrimiento cambiara entre las dos calibraciones, porque la
+  cámara giró y la alineación en vivo se reajustó.
+
+**Errores de la guía, corregidos hoy en PLAN-CIERRE §6:**
+- `--dispositivo "ELP de prueba"` se reconoce como la ELP calibrada (patrón «ELP»). Ahora va
+  `Camara desconocida`.
+- Faltaban `--config configs/local.yaml` (sin eso abre el iPhone) y `--detector yolo` (sin eso,
+  error con `usb`).
+- `configs/local-cinta.yaml` (local, fuera de Git) sube `depth.precisa.espera_s` a 3,0.
+- **C no se puede observar:** `FuenteAlineada` no informa nada en la terminal, la traza ni la
+  pantalla. Además, mover la ELP entera no desalinea un ojo del otro. Queda pendiente.
+
+**Límites:**
+- Una escena, 7 puntos, una referencia con ~5 cm de duda. Las voces son con el perfil ya
+  calibrado y por consola.
+- La U-Net de incertidumbre no corrió (el panel dice «se activa con la U-Net»), así que no hay
+  ajuste del factor de b.
+- No se corrieron tests. El único cambio de código es el ejemplo del docstring de `bench.py`.
+
+**Próximo paso:**
+- (Bauty, con la ELP) altas 2 y 3 en otros lugares y escena del lugar 2, midiendo cada sticker con
+  plomada al milímetro.
+- (Tomás) que la alineación en vivo escriba sus eventos en la traza; que el contador del giro de
+  «Cámara nueva» cuente solo con movimiento; mirar por qué el corrimiento cambia entre arranques.
+- (G) probar si la distorsión explica el +6,5 % de focal y el ±9 % que queda después de calibrar.
+
 ## 2026-11-22 (madrugada del 23) — T12 (G): la autocalibración por movimiento mide también la lente
 
 Tarea: T12, mejora G de PLAN-CIERRE. Persona/agente: Tomás / Claude Code. PC de escritorio
@@ -167,6 +272,59 @@ Próximo paso:
 - (Bauty, hecho) `e3-auto5`: medido arriba, en el Drive `pesos/camara-net/e3-auto5/`.
 - (Tomás) E3 y autocalibración con `e3-auto` en la PC.
 - (Bauty) Video real girando la ELP para etiquetar con el movimiento.
+
+## 2026-11-22 (noche) — T04/T15: el banco ELP se reemplaza por la medición con cinta de la prueba A
+
+Tarea: T04, T15 (y A de PLAN-CIERRE). Persona/agente: Bauty / Claude Code. Rama `a/T04-cinta-en-a`.
+Solo documentación, sin mediciones.
+
+Decisión (Bauty): **el banco ELP del 13/11 y el 17/11 no se graba más tal como estaba.**
+- **Antes:** 40 escenas en 5 sesiones, `s3`–`s5` de test.
+- **Ahora:** se hace la medición con cinta del paso 4 de la prueba A (PLAN-CIERRE, sección 6), pero
+  grabando los pares. Es una sola sesión `s1`, en dos lugares, con 10–15 objetos de la app con
+  sticker entre 0,5 y 4 m.
+
+Motivo:
+- PLAN-CIERRE ya no nombra al banco, y la A pide casi la misma medición.
+- Grabando los pares, una sola sesión sirve para tres cosas:
+  - el primer número real del plug and play (A);
+  - ajustar la duda de la U-Net en la ELP, que sigue descalibrada (1–3 px contra 0,1 px reales,
+    19/11);
+  - ver qué dice la voz con la duda total (B).
+- Faltan dos semanas para congelar: 5 sesiones de ~2 h no entran junto con A, el video para la v3
+  y la prueba con personas.
+
+Qué cambió en los documentos:
+- **PLAN-CIERRE:** el protocolo corto va en la sección 6, paso 4.
+- **TECNICO:** aviso arriba del banco. La forma de medir sigue valiendo: sticker, cinta axial desde
+  la línea del piso, 13 mm, 40 min de calentamiento.
+- **INCERTIDUMBRE-Y-GT** (conjunto C), **ROADMAP** (T04) y **POSTER-INSUMOS:** actualizados.
+- **Plantilla:** dos campos nuevos por punto, `voz_m` y `voz_nivel`. `bench` los ignora; sus tests
+  pasan.
+- **Código, `bench evaluar --camara <perfil>`** (23/11, mismo PR). Evalúa con el perfil de una
+  cámara en vez de la calibración de tablero.
+  - Los stickers se marcan una sola vez, con el tablero. `trasladar_puntos` lleva cada uno a la
+    foto cruda con el tablero (la verdad) y de ahí a la imagen que rectifica el perfil.
+  - Como en la app, el ojo derecho se alinea con el clásico sobre los pares de la escena
+    (`--sin-alinear` lo apaga).
+  - El cero de la cinta sale siempre del tablero. La corrección «calibrá, está a N metros» del
+    perfil no se aplica.
+  - Rangos del resumen: 0–1, 1–2, 2–3 y 3–4,5 m (antes 2–3,5).
+  - Tests: 4 nuevos (sin mover con la misma calibración, contra el camino crudo hecho a mano con
+    otra focal, centro y lente, tamaños distintos, perfil inexistente). 11 de 11 en
+    `test_depth_bench.py`. El perfil `elp` es de 1920×1080, igual que el tablero.
+  - Sin probar con una grabación real: todavía no hay escenas del banco.
+
+Límites:
+- Se pierde el test real reservado: sobre estas escenas no se ajusta nada, salvo el factor de b de
+  la U-Net, que se mide en un lugar y se comprueba en el otro.
+- Con 10–15 objetos, n es chico para cobertura: alcanza para ver si la duda está muy mal, no para
+  afinarla.
+
+Próximo paso:
+- (Bauty, con la ELP) grabar la sesión durante la prueba A.
+- (Bauty / Claude, sin cámara) con las primeras escenas, probar `bench evaluar --camara` de punta a
+  punta.
 
 
 ## 2026-11-22 (noche) — T12/T13: por objeto en modo preciso con la cámara estimada, y el objeto a dos distancias

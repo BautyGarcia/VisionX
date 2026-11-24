@@ -91,7 +91,8 @@ datos de sobra; el cuello de botella es validar en real y escribir.
 
 ### Bauty (todo lo que necesita la cámara o entrenar)
 
-1. **A: plug and play real con la ELP.** Guía en la sección 6.
+1. **A: plug and play real con la ELP.** Guía en la sección 6. Incluye la medición con cinta
+   grabada, que reemplaza al banco ELP (paso 4).
 2. **D: entrenar la v3** con las etiquetas de la geometría (`outputs/autoetiquetas/`, en el
    Drive), más el control con la cámara verdadera. Mezclar con los datos de siempre, partir de
    la v2. Detalle en [RED-ENTRADA](RED-ENTRADA.md).
@@ -143,25 +144,79 @@ prueba real (A, E5) → prueba con personas (E) → la geometría entrena a la r
 2. Tratar la ELP como desconocida, girarla despacio 15 s hacia los costados y decir la
    separación (6 cm):
 
-       python -m visionx.app camara-nueva --fuente usb --dispositivo "ELP de prueba" --escala 6 --captura elp-alta.png --guardar
+       uv run python -m visionx.app camara-nueva --fuente usb --dispositivo "Camara desconocida" --escala 6 --captura outputs/plug-and-play/elp-alta-1.png --guardar --config configs/local.yaml
 
-   (Sin `--dispositivo` la reconoce y no hace el alta.)
-3. Anotar el campo que midió (pantalla y `configs/camaras/locales/elp-de-prueba.yaml`, campo
+   - El nombre **no puede contener «ELP»**: el perfil `elp` se reconoce por ese texto, la carga
+     como conocida y salta a «Lista» sin girar (23/11). Sin `--dispositivo` pasa lo mismo.
+   - Sin `--config configs/local.yaml` abre la cámara 0, que con el iPhone conectado es el iPhone.
+   - El contador del giro corre con el tiempo, no con el movimiento: empezar a girar apenas lo
+     pide. Si no, dice «no alcancé a medir bien la lente» y hay que girar otra vez.
+   - Al aparecer «Lista», cerrar con `q`: recién ahí guarda el perfil.
+3. Anotar el campo que midió (pantalla y `configs/camaras/locales/camara-desconocida.yaml`, campo
    `campo_horizontal_deg` y `extra.sigma_focal`) contra la calibración de tablero de la ELP.
    Repetir 3 veces en lugares distintos.
 4. Con ese perfil, correr la app. La **alineación en vivo (C)** se activa sola con perfiles de
    «Cámara nueva»: alinea los ojos al arrancar y vigila el desfase.
 
-       python -m visionx.app ejecutar --fuente usb --camara elp-de-prueba --voz
+       uv run python -m visionx.app ejecutar --fuente usb --camara camara-desconocida --detector yolo --profundidad crestereo --profundidad-precisa crestereo-preciso --voz --config configs/local-cinta.yaml --traza outputs/plug-and-play/voz-s1-eMM.jsonl
+
+   (`local-cinta.yaml` = `local.yaml` + `depth.precisa.espera_s: 3.0`, para que el preciso no
+   venza. Sin `--detector yolo` la app usa el detector de prueba y no arranca con `usb`.)
 
    Cinta con 10–15 objetos entre 0,5 y 4 m (modo preciso), igual que M9. Anotar también qué
    nivel dice la voz: con la **duda total (B)**, una cámara dada de alta no debería decir
    «precisa» si no lo es.
+
+   **Esta medición reemplaza al banco ELP** (decisión del 22/11). En vez de 40 escenas en 5
+   sesiones con stickers, es una sola sesión que sirve para tres cosas:
+   - el número real del plug and play (A);
+   - la duda de la U-Net en la ELP;
+   - la prueba de B.
+
+   Para eso, además de anotar, se **graban los pares**. Se reutiliza del protocolo de TECNICO
+   («Protocolo de grabación del banco ELP») la planilla, la cinta y el comando de grabación.
+
+   - **Antes:**
+     - ELP transmitiendo 40 min (`camera ver`): la disparidad deriva con la temperatura.
+     - Cámara nivelada.
+     - Una línea de cinta de papel en el piso, bajo el vidrio de las lentes.
+   - **Dónde:** dos lugares distintos, con 1–2 escenas cada uno.
+   - **Qué objetos:** 10–15 en total, entre 0,5 y 4 m, de clases de la app (botella, taza, silla,
+     mochila…). Al menos 2 sobre superficies lisas o con reflejo.
+   - **Stickers:** uno chico (~1 cm) y numerado en la cara de cada objeto que mira a la cámara.
+     Ahí se mide.
+   - **Medir** cada sticker con cinta:
+     - la distancia **perpendicular** desde la línea del piso (profundidad axial, no en diagonal);
+     - en metros con milímetros, sin sumar los 13 mm;
+     - un sticker por lugar se mide tres veces.
+   - **Grabar** 10 s con la cámara quieta, por escena:
+
+         uv run python -m visionx.camera grabar recordings/banco-s1-eMM --segundos 10 --cada 4 --config configs/local.yaml --nota "s1 eMM: lugar, luz, qué hay"
+
+     Completar `datasets/banco-elp-plantilla.yaml` y guardarla como
+     `recordings/banco-s1-eMM/escena.yaml`, con `sesion: s1`. Sacar una foto del armado con el
+     teléfono.
+   - **Voz:**
+     - Con la app andando con el perfil `camara-desconocida`, apuntar a cada sticker en modo preciso.
+       Girar la cámara en el lugar, sin sacarla de la línea.
+     - Anotar en la planilla la distancia y el nivel que dijo (`voz_m`, `voz_nivel`).
+   - **Después, sin cámara (Bauty / Claude):**
+     - `bench marcar` (una vez, con la calibración de tablero) y `bench evaluar` dos veces: con la
+       calibración de tablero (la referencia) y con el perfil de «Cámara nueva»
+       (`--camara camara-desconocida`). Con el perfil, cada sticker se traslada solo a la imagen que
+       rectifica el perfil y el ojo derecho se alinea con el clásico, como en la app. Rangos hasta
+       4 m.
+     - El factor de b de la U-Net se ajusta en un lugar y se comprueba en el otro.
+   - **Sin test real reservado:** las sesiones `s3`–`s5` ya no se graban. Sobre estas escenas no
+     se ajusta nada, salvo ese factor de b.
 5. **Distancia conocida en la app:** con la app andando, apuntar a algo y decir «calibrá, está a
    N metros»; después alejarse o acercarse un paso y repetirlo con la nueva distancia. La
    primera corrige el corrimiento; la segunda, escala y corrimiento. Se guarda en el perfil.
 6. **Probar C:** con la app andando, golpear o torcer un poco la cámara y ver que vuelva a
-   alinearse sola (mensaje en la terminal; `historial` de `FuenteAlineada`).
+   alinearse sola. **Hoy no se puede observar** (23/11): `FuenteAlineada` guarda su `historial`
+   pero la app no lo muestra en la terminal, la traza ni la pantalla. Además, mover la ELP entera
+   no desalinea un ojo del otro. Pendiente (Tomás): escribir sus eventos en la traza y probarla
+   con un video desalineado (precinto del 09/11).
 7. Todo a la BITACORA con tabla. Si la focal sale muy distinta de la del tablero, sospechar de
    la distorsión (G).
 

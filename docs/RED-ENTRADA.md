@@ -121,6 +121,9 @@ Archivos en el Drive `VisionX-Personal/autoetiquetas/`:
 
 ### Entrenar la v3-auto (Bauty, en la Mac): comandos exactos
 
+> **Hecho el 22/11.** Las tres corridas, más la de 5 %, con `factor_b` guardado; resultados en la
+> tabla de versiones y en la BITACORA del 22/11 (noche, Mac). Pesos en el Drive; falta E3 de Tomás.
+
 El código ya está en `main` (`camara_net entrenar --etiquetas/--desde/--etiqueta-real`),
 probado de punta a punta en la PC con pocas imágenes. Solo hace falta correrlo.
 
