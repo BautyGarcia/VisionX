@@ -40,86 +40,6 @@ En documentación puede escribirse «sin pruebas de software ni mediciones; revi
 y diff». En una medición real, conservar CSV/JSONL/artefacto verificable; un texto sin datos
 no reemplaza la evidencia. No pegar secretos, pesos ni videos en esta bitácora.
 
-## 2026-11-23 — T12/D: la v3-auto ya estaba entrenada (registro retrospectivo de las corridas del 22/11)
-
-Tarea: T12 (D de PLAN-CIERRE). Persona/agente: Bauty / Claude Code. Rama `a/T04-cinta-en-a`
-(solo documentación).
-
-**Retrospectiva.** El 23/11, al preguntar qué frenaba D, aparecieron en la Mac las cuatro
-corridas de la guía de [RED-ENTRADA](RED-ENTRADA.md#entrenar-la-v3-auto-bauty-en-la-mac-comandos-exactos)
-ya terminadas el 22/11 entre las 18:14 y las 22:59, con evaluación y `factor_b` guardados. No
-estaban registradas en ningún documento. Esta entrada se arma solo con los archivos de
-`outputs/camara_net/e3-*/` (`meta.json`, `curvas.csv`, `log.txt`, `eval8/`). No se volvió a correr
-nada; el 23/11 solo se recalcularon las métricas desde los CSV de `eval8/`.
-
-Contexto de la medición:
-- **Equipo:** Mac M2 Max, MPS.
-- **Código:** `camara_net entrenar` de `main` (PR #93, `ff7e11d`).
-- **Parámetros comunes:** 10 épocas desde `e2-v2/mejor.pt`, lr 1e-4, lr del tronco 3e-5,
-  calentamiento 100, zoom 0,55–1,2, lote 12, semilla 0.
-- **Variantes:** `camara-sorteada`, `camara-sorteada-ojo` y `hssd-camara-sorteada`, más
-  `hssd-recorridos-sorteada` (6 cuadros por recorrido).
-- **Tiempo:** ~5–7 min por época, ~1 h por corrida.
-
-Corridas:
-
-| Corrida | Etiquetas que suma | n de entrenamiento | Mejor época |
-|---|---|---:|---:|
-| `e3-sin` | ninguna (control «más épocas») | 7998 | 9 |
-| `e3-auto` | `b-vistas.csv`: focal de la geometría, duda ≤ 3 % | 10 908 | 9 |
-| `e3-auto5` | `b-vistas-5pct.csv`, `--sigma-max 0.05` | 12 978 | 9 |
-| `e3-real` | `b-vistas.csv` con `--etiqueta-real` (techo) | 10 908 | 4 |
-
-Evidencia/resultados:
-- **Protocolo fijo de RED-ENTRADA:** gt-video, 9 cámaras × 8 escenas = 6480 cuadros, mediana y
-  P90 sobre todos los cuadros. La v2 reproduce los 12,7 / 40 ya publicados, así que el cálculo es
-  el mismo.
-- **Factor de b:** el guardado en cada checkpoint lleva la cobertura de val-lente a 0,90 (el mismo
-  método de la v2).
-
-| Versión | Val pinhole | gt-video | Replica (4) | HSSD (4) | Gran angular 130° | Cob. 90 % sin factor / con factor | `factor_b` |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| v2 (`e2-v2`) | 9,0 / 28 | 12,7 / 40 | 8,1 / 23 | 20,2 / 58 | 19,3 | 0,57 / 0,82 | 1,79 |
-| `e3-sin` | 9,4 / 28 | 12,6 / 40 | 8,1 / 24 | 20,0 / 55 | 19,0 | 0,53 / 0,82 | 1,948 |
-| **`e3-auto`** | 9,2 / 27 | **11,9 / 37** | 8,0 / 22 | **17,6 / 54** | 18,1 | 0,61 / 0,85 | 1,742 |
-| `e3-auto5` | 9,0 / 25 | 11,7 / 38 | 7,4 / 21 | 18,7 / 53 | 16,7 | 0,62 / 0,83 | 1,621 |
-| `e3-real` (techo) | 9,1 / 27 | 12,3 / 37 | 7,8 / 22 | 18,5 / 53 | 15,1 | 0,67 / 0,86 | 1,575 |
-
-Error de la focal por cuadro en %, mediana / P90. La columna «gran angular» es la mediana.
-
-Lecturas:
-- **Entrenar más no ayuda:** `e3-sin` queda igual que la v2 (12,6 contra 12,7).
-- **Las etiquetas de la geometría ayudan poco:**
-  - −0,8 a −1,0 punto en la mediana de gt-video y −2 a −3 en el P90;
-  - casi todo en las casas de HSSD, que eran el punto débil de la v2 (20,2 → 17,6).
-  - Replica casi no cambia.
-- **Llegan al techo.** Con la etiqueta verdadera no sale mejor (12,3): la diferencia entre
-  `e3-auto`, `e3-auto5` y `e3-real` está dentro del ruido de una semilla. Las etiquetas de la
-  geometría valen tanto como la verdad para reentrenar. Es el argumento de D: la red mejora sin
-  que nadie calibre.
-- **La gran angular de 130° mejora más con el techo** (19,3 → 15,1) que con las etiquetas de la
-  geometría (18,1 / 16,7).
-- **La duda queda mejor puesta:** hace falta un factor de b más chico (1,74 contra 1,79), y en
-  gt-video la cobertura con factor sube de 0,82 a 0,85.
-- **La meta de E2 sigue lejos:** 2 % de mediana contra ~12 %. Para la app no cambia lo
-  importante, porque la focal la mide el movimiento (0,9 %). La red sigue siendo el punto de
-  partida y el seguro.
-
-Límites:
-- Una sola semilla; la mejora (~1 punto) es del orden de la variación entre corridas.
-- Sin E3 (sistema completo, en la Radeon de Tomás).
-- Los pesos ya estaban en el Drive (`VisionX-Personal/pesos/camara-net/e3-*/`): el 23/11 se
-  comprobó que `mejor.pt` y `eval-resumen.json` son idénticos a los locales (md5).
-- La app sigue usando `e2-v2` por defecto (`app/estimador_red.py`). Si se cambia a una v3, el
-  factor que usa la app es `factor_b` × 2 (`FUERA_DE_VAL`).
-- Son etiquetas de renders: la parte con video real de D todavía no existe.
-
-Próximo paso:
-- (Bauty) avisar a Tomás que las cuatro corridas están en el Drive (LEEME actualizado el 23/11).
-- (Tomás) E3 con `e3-auto` y `e3-real` en la Radeon; decidir si la app pasa a `e3-auto`.
-- (Bauty) video girando la ELP en 5–10 lugares (PLAN-CIERRE, 25/11): es lo que falta para la
-  parte real de D.
-
 ## 2026-11-23 — T04/A: primera escena con cinta (`banco-s1-e01`), alta 1 y voz con la ELP real
 
 Tarea: T04 y prueba A (PLAN-CIERRE §6). Persona/agente: Bauty (cámara, cinta) / Claude Code
@@ -225,6 +145,134 @@ Lectura:
   «Cámara nueva» cuente solo con movimiento; mirar por qué el corrimiento cambia entre arranques.
 - (G) probar si la distorsión explica el +6,5 % de focal y el ±9 % que queda después de calibrar.
 
+## 2026-11-22 (madrugada del 23) — T12 (G): la autocalibración por movimiento mide también la lente
+
+Tarea: T12, mejora G de PLAN-CIERRE. Persona/agente: Tomás / Claude Code. PC de escritorio
+(CPU), red de entrada `e2-v2`. Crudos en `outputs/gtsynth/autocalib/lente*.json` (fuera de Git).
+
+**El problema.** La autocalibración por movimiento suponía una cámara pinhole. Las cámaras
+baratas tienen distorsión de barril. Sin modelarla, la focal sale mal:
+- k1 = −0,2 en la D435 de office_2: +54,7 %;
+- k1 = −0,12 a −0,2: entre 20 y 36 %.
+
+**El método.** `lente_por_movimiento` (`app/autocalibracion.py`) busca focal y k1 juntas.
+- Para cada candidato (f, k1), los puntos emparejados se llevan a coordenadas sin distorsión.
+- Para cada par de cuadros, E sale por 8 puntos lineal.
+- El costo es cuán poco «esencial» es cada E, (σ1−σ2)/σ1, igual que en la versión pinhole.
+- Se usa una grilla en (log f, k1) con refinamientos.
+- La duda sale de remuestrear pares.
+
+**La prueba.** `gtsynth autocalib-lente`:
+- las 9 cámaras × 8 escenas de `gt-video` (60 cuadros por recorrido);
+- cada recorrido visto con una lente simulada (el mismo remuestreo que usa la red para
+  entrenar), k1 entre 0 y −0,3, la más fuerte que entra en el lienzo;
+- ambos métodos parten de lo que dice la red mirando los cuadros distorsionados.
+
+**Primera corrida: dos fallas.**
+
+1. En 11 de 71 recorridos el método se inventó una lente **de cojín** (k1 positiva, hasta
+   +0,21), y la focal salió 10–69 % mal.
+   - Era un bug: el refinamiento de la grilla se salía del rango de k1.
+   - Además, el cojín casi no existe en cámaras baratas y se confunde con la focal.
+   - Arreglo: k1 entre −0,45 y +0,02, y el refinamiento no sale de ahí.
+2. En cámaras **sin** lente, el método conjunto (1,8 %) era peor que el pinhole (0,6 %).
+   - Arreglo: si la k1 medida es más débil que −0,03, se usa la focal pinhole y k1 = 0.
+
+**Resultado** (error de focal; corrida completa con el código final, `lente-v2.json`):
+
+| Recorridos | n | Pinhole (antes) | Con lente (ahora) |
+|---|---|---|---|
+| Todos | 71 | 7,1 % (P90 20,8) | **1,2 %** (P90 4,5) |
+| Lente fuerte (k1 ≤ −0,1) | 11 | 23,5 % | **1,2 %** |
+| Lente leve (k1 = −0,05) | 32 | 8,2 % | **1,4 %** |
+| Sin lente | 28 | 0,64 % | 0,64 % |
+
+- La k1 medida erra 0,001 de mediana (0,006 en la primera corrida).
+- Tarda ~95 s por recorrido en la CPU con la búsqueda completa.
+- Quedan 7 de 71 por encima de 5 %. Los dos peores:
+  - la cámara de 60° en frl_apartment_3: 35 %, no vio la lente (k1 real −0,12) y usó la
+    focal pinhole; duda 7,7 %;
+  - la OAK-D en 102343992: 60 %, poco movimiento útil; la duda informada sí es grande, 22 %.
+- **Cobertura de la duda: 73 %** (la meta es 90 %). La duda informada es optimista. Un
+  recorrido malo puede pasar como bueno, y la app debería ser más prudente.
+
+**En la app.** «Cámara nueva» ya usa `lente_por_movimiento`.
+- Al terminar el giro dice «Listo el giro. Estoy midiendo la lente: tarda unos segundos.» y
+  mide en el cuadro siguiente, para que la voz no quede trabada.
+- Guarda la k1 medida en el perfil.
+- Usa el modo `rapido`: la mitad de puntos y una grilla más gruesa, unas 3 veces menos tiempo.
+- `camara_nueva_demo --lente -0.2` simula una cámara con lente.
+- Pruebas end-to-end en simulación (antes de los dos arreglos):
+  - ZED Mini con −0,2: 102° medidos, el valor real es 102°;
+  - D435 hotel_0 con −0,15: la k1 exacta, pero la focal ~6 % corrida y la duda 6,9 %, así que
+    la app dijo «aproximadas». El modo rápido pierde precisión: falta ajustarlo.
+
+**Qué falta.**
+- Probar G en la ELP real (Bauty, PLAN-CIERRE §6). Comparar la focal y la k1 con las del
+  tablero.
+- Ajustar la cobertura de la duda.
+- Ajustar el modo rápido.
+- Solo se mide k1 (k2 = 0). El centro sigue saliendo de la red.
+
+## 2026-11-22 (noche, Mac) — T12: v3-auto, las etiquetas de la geometría bajan HSSD de 20 a 18 %
+
+Tarea: T12 (red de entrada, [RED-ENTRADA](RED-ENTRADA.md#entrenar-la-v3-auto-bauty-en-la-mac-comandos-exactos)).
+Persona/agente: Bauty / Claude Code. Mac, MPS. Rama `a/T12-v3-auto`. Crudos en
+`outputs/camara_net/e3-{auto,real,sin}/` (`curvas.csv`, `eval8/resumen.json` y un CSV por
+cámara; fuera de Git). Pesos en el Drive `VisionX-Personal/pesos/camara-net/e3-*/`, con
+`factor_b` guardado en el checkpoint.
+
+Objetivo: ver si las focales que mide la autocalibración por movimiento sirven como etiquetas
+para mejorar la red sin calibrar nada. Se corrieron las tres corridas de RED-ENTRADA tal cual.
+Todas parten de la v2, con 10 épocas, lr 1e-4 (cabeza) y 3e-5 (tronco), y los datos de la v2.
+- **e3-auto:** + las 2910 vistas de `hssd-recorridos-sorteada-b` con duda ≤ 3 %, con la focal de
+  la geometría como etiqueta.
+- **e3-real:** las mismas vistas con la focal verdadera (el techo).
+- **e3-sin:** sin vistas nuevas (el control de «entrenar más»).
+
+Cada una tardó ~1 h. Un solo cambio a los comandos: `uv run` sin `--extra ml`, que desinstala
+los otros extras.
+
+Evidencia: error de focal por cuadro (mediana / P90) con el protocolo fijo de RED-ENTRADA.
+- `gt-video`: 9 cámaras × 8 escenas de val, 6480 cuadros. Sin `video-elp`, que es nueva y
+  tiene 6 escenas. La v2 da lo mismo que midió Tomás en la PC (12,7 / 40).
+- Val: 840 vistas.
+
+| Versión | Val | gt-video | Replica (4) | HSSD (4) | Cobertura f en gt-video | factor_b (val) |
+|---|---:|---:|---:|---:|---:|---:|
+| v2 | 9,0 / 28 | 12,7 / 40 | 8,1 / 23 | 20,2 / 58 | 0,57 | 1,79 |
+| **e3-auto** | 9,2 / 27 | **11,9 / 37** | 8,0 / 22 | **17,6 / 54** | 0,61 | 1,74 |
+| e3-real | 9,1 / 27 | 12,3 / 37 | 7,8 / 22 | 18,5 / 53 | 0,67 | 1,58 |
+| e3-sin | 9,4 / 28 | 12,6 / 40 | 8,1 / 25 | 20,0 / 55 | 0,53 | 1,95 |
+| e3-auto5 | 9,0 / 25 | 11,7 / 38 | 7,4 / 21 | 18,7 / 53 | 0,62 | 1,62 |
+
+Val es sin lente, como en RED-ENTRADA. La cobertura es sin `factor_b`.
+
+Lectura:
+1. **Las etiquetas aportan y entrenar más no.** En HSSD, `e3-sin` queda igual que la v2 (20,0
+   contra 20,2) y `e3-auto` baja a 17,6. El P90 baja en las 10 cámaras (`video-elp` incluida).
+2. **La geometría vale como la verdad.** `e3-auto` queda igual o mejor que `e3-real`. Con
+   etiquetas de 0,7 % de error mediano, el ruido de la etiqueta no es lo que limita.
+3. **El efecto es chico.** Replica no cambia (8 %) y HSSD sigue en 18 %, lejos del 2 %. En val
+   las cuatro quedan en 9,0–9,4 % (ruido entre épocas: ±0,4), así que val no sirve para elegir
+   entre ellas.
+4. La duda mejora apenas (cobertura 0,57 → 0,61) y `factor_b` queda parecido (1,74).
+5. **Más etiquetas, más ruidosas, no suman.** `e3-auto5` (duda ≤ 5 %: 166 recorridos, 4980
+   cuadros, etiquetas de 1,2 % de error mediano) queda como `e3-auto` en el total (11,7
+   contra 11,9): un poco mejor en Replica (7,4) y un poco peor en HSSD (18,7). Con una
+   semilla, esas diferencias entran en el ruido. Se queda `e3-auto` como v3.
+
+Límites:
+- Una semilla por corrida: los ~2,5 puntos de HSSD pueden tener una parte de ruido.
+- Solo 97 recorridos etiquetados (26 % de los 366).
+- No se midió el sistema completo (E3) ni la autocalibración partiendo de la v3. Lo hace Tomás
+  en la PC con `gtsynth autocalib` / `sin-calibrar`.
+
+Próximo paso:
+- (Bauty, hecho) `e3-auto5`: medido arriba, en el Drive `pesos/camara-net/e3-auto5/`.
+- (Tomás) E3 y autocalibración con `e3-auto` en la PC.
+- (Bauty) Video real girando la ELP para etiquetar con el movimiento.
+
 ## 2026-11-22 (noche) — T04/T15: el banco ELP se reemplaza por la medición con cinta de la prueba A
 
 Tarea: T04, T15 (y A de PLAN-CIERRE). Persona/agente: Bauty / Claude Code. Rama `a/T04-cinta-en-a`.
@@ -277,6 +325,7 @@ Próximo paso:
 - (Bauty, con la ELP) grabar la sesión durante la prueba A.
 - (Bauty / Claude, sin cámara) con las primeras escenas, probar `bench evaluar --camara` de punta a
   punta.
+
 
 ## 2026-11-22 (noche) — T12/T13: por objeto en modo preciso con la cámara estimada, y el objeto a dos distancias
 
